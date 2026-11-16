@@ -1,0 +1,9 @@
+[project]
+name = "atd-python-ros"
+version = "0.1.0"
+description = "ROS 2 と併用する追加 Python 依存。ROS 本体は apt が管理する。"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false

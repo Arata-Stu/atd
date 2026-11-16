@@ -1,0 +1,49 @@
+# ATD 固有の依存を追加する層。isaac_ros → realsense455 → atd の順に構築する。
+# CLI が前の層のイメージを BASE_IMAGE として渡す。
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG DEBIAN_FRONTEND=noninteractive
+
+# 公式 multi-arch バイナリを固定版で導入。system Python の pip は変更しない。
+COPY --from=ghcr.io/astral-sh/uv:0.13.8 /uv /uvx /usr/local/bin/
+
+# build と起動で同じ sh を使う。起動時は最新の依存一覧を確認し、不足分だけ導入する。
+# 既知の依存はイメージにも保持し、CLI の --rm 後の新規作成でも毎回導入し直さない。
+COPY dependencies.apt /opt/atd/dependencies.apt
+COPY Dockerfile.atd /opt/atd/Dockerfile.atd
+COPY scripts/ /opt/atd/scripts/
+COPY middleware_profiles/fastdds.xml /opt/atd/middleware_profiles/fastdds.xml
+COPY python/ /opt/atd/python/
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    bash /opt/atd/scripts/install-dependencies.sh \
+    && bash /opt/atd/scripts/configure-dds.sh \
+    && test "$(uv --version | awk '{print $2}')" = 0.13.8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 公式 workspace-entrypoint が root で source する hook。CLI 本体は変更しない。
+COPY --chmod=0755 scripts/10-atd-runtime.sh /usr/local/bin/scripts/entrypoint_additions/10-atd-runtime.sh
+COPY --chmod=0755 scripts/atd-shell.sh /usr/local/bin/atd-shell
+COPY --chmod=0755 scripts/atd-python.sh /usr/local/bin/atd-python
+COPY --chmod=0755 scripts/atd-vgl.sh /usr/local/bin/atd-vgl
+COPY scripts/atd.bashrc /etc/atd/bashrc
+
+# entrypoint での export だけでは docker exec へ継承されないため、既定値も記録する。
+# ATD 専用 shell ではホストの .bashrc を読み込まず、旧 Cyclone 設定との混在を防ぐ。
+ENV ATD_RUNTIME_API=1 \
+    RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
+    FASTDDS_DEFAULT_PROFILES_FILE=/etc/atd/fastdds.xml \
+    ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT \
+    ROS_STATIC_PEERS="" \
+    RMW_FASTRTPS_USE_QOS_FROM_XML=0 \
+    CYCLONEDDS_URI="" \
+    FASTRTPS_DEFAULT_PROFILES_FILE="" \
+    ROS_DISCOVERY_SERVER="" \
+    FASTDDS_ENVIRONMENT_FILE="" \
+    ROS_LOCALHOST_ONLY="" \
+    ROS2_EASY_MODE="" \
+    SKIP_DEFAULT_XML=0 \
+    BASH_ENV=/etc/atd/dds.env.sh
+
+# 起動時にセンサ・rosbag・車両ノードや bridge は自動実行しない。

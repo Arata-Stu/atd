@@ -1,0 +1,94 @@
+# ATD 開発規約
+
+## 基本方針
+
+- 原則として日本語で回答・記述する。
+- 目的達成を優先し、必要な調査、ファイル確認、修正、検証を自律的に進める。
+- 結果に大きく影響しない不明点は合理的に補い、重要な不明点だけ確認する。
+- 事実、推測、提案、検証結果を区別する。調査では原論文、公式ドキュメント、公式リポジトリを優先する。
+- 既存構成と周辺内容を確認してから必要最小限の変更を行い、変更に応じた実行・検証を行う。
+
+## 要件の参照と扱い
+
+- プロジェクトの要件、機材、想定環境、提案、未決事項は [docs/project_requirements.md](docs/project_requirements.md) を参照する。
+- ユーザーが明示した要件と、調査に基づく提案を混同しない。提案や候補を採用済みとして扱わない。
+- 設計に影響する要件が決まった場合は、関連する文書も整合させる。
+- 現在は要件定義と Docker 開発環境の初期実装段階である。設定・スクリプトの作成、ホスト上の検証、Docker 内での動作、実機検証を区別して報告する。
+- 自動運転ソフトウェアの詳細は後工程で検討する。走行目標・アルゴリズム等の確定を、現在の環境整備や共通規約の定義を進める前提条件にしない。
+
+## ディレクトリ・ファイルの配置
+
+- 配置は [構成規約](docs/project_structure.md) を基準とする。自作 ROS package は `ros2_ws/src/atd_<module>/`、共通 Web アプリは実装時に `apps/web/`、独自 firmware は対象確定後に `firmware/<target>/` へ置く。
+- ROS package の `launch/`・`config/`・`test/` は package 内に置く。root の `config/` はホストの workspace・保存先等、root の `tests/` は setup・Docker 等の共通基盤に使う。
+- ユーザー向け `.sh` は `scripts/`、共通関数は `scripts/lib/`、ホスト準備の内部処理は `scripts/setup/`、コンテナ内処理は `docker/scripts/` に置く。
+- CLI 設定テンプレートは `docker/isaac_ros/`、生成 Dockerfile は Git 管理対象外の `.cache/docker/` に置く。ROS package の編集元は `ros2_ws/src/` とする。リポジトリの `ros2_ws` を workspace に選ぶ場合はその `src` を使い、別の workspace の場合はコンテナの `src/atd` に rw で mount する。
+- CAD 等の編集元は `hardware/`、説明文書は `docs/` に置く。bag・地図・モデル重み・engine・学習結果は設定した外部保存先で管理する。
+- データは既存の記録先・結果先を使い、`/data/record/rosbags/` と `/data/results/{maps,models,runs}/` に整理する。NVIDIA の地図・モデル・exporter の内部構成は維持し、地図とモデルを混同しない。対象環境別 engine・run の checkpoint / log は保持する資産とし、cache として自動削除しない。詳細は [保存構成](docs/project_structure.md#データの保存構成)に従う。
+- VGL モデルの準備・export は Notebook で行い、export 済みモデルと必要な設定・管理情報を SCP で Jetson へ転送する。VGL モデル準備に関して Jetson では転送済み資産からの TensorRT engine build のみを行う。入力、export 成果物、対象環境別 engine を分けて保存し、処理の実装と対象機での動作検証を区別する。
+- VGL 操作の入口は `scripts/vgl.sh` と [手順](docs/vgl_models.md) とする。Notebook のモデルからの ONNX export と、既存 ONNX bundle の package 操作を区別する。転送・build では manifest の ID・hash を検証し、既存の資産を上書きしない。実装のテストと、対象 SDK / GPU・実 SCP での検証を分けて報告する。
+- 未実装のための空ディレクトリ・空文書を先に作らない。cache・bytecode と、記録データ・ログ・編集元資料を区別する。
+
+## 実行環境と処理の配置
+
+- 基盤は Ubuntu 24.04、JetPack 7.2、ROS 2 Lyrical、Isaac ROS 5 を想定し、Docker を前提とする。
+- Isaac ROS CLI は apt 版を採用し、Docker のカスタムは YAML と追加 Dockerfile で行う。CLI 本体の改修が必要になった場合に source build を検討する。詳細は [ビルド方針](docs/isaac_ros_build_strategy.md) を参照する。
+- RealSense はローカルの `realsense455` layer を使い、librealsense SDK のみ CUDA 無効で構築する。ベースの CUDA と他の Isaac ROS GPU 処理は無効化しない。
+- イベントカメラは今後使用しない。関連 SDK・driver・ROS package・Python 依存を導入せず、将来の追加候補にも含めない。
+- 共通依存と DDS 設定は Docker の root 起動処理から `.sh` で自動適用する。依存は `docker/dependencies.apt` を基準に不足分だけ導入し、毎回の apt upgrade は行わない。
+- 同じ依存導入スクリプトを Docker build 時にも実行し、既知の依存をイメージにキャッシュする。起動時の不足確認は省略しない。
+- DDS は Fast DDS の UDPv4 / loopback 設定を使う。生成先は `/etc/atd/fastdds.xml` と `/etc/atd/dds.env.sh` とし、起動時の root スクリプトで配置する。
+- 初回準備は `scripts/setup.sh` と [セットアップ手順](docs/setup/README.md) を入口とする。Notebook（x86_64 / amd64）と Jetson（aarch64 / arm64 と BSP）を区別し、既存 Docker・CLI 設定を不用意に置換しない。
+- ROS workspace は setup の workspace 操作で対話的に指定し、既定は各ホストの `~/workspaces/atd` とする。`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存する。コンテナでは `/workspaces/isaac_ros-dev` を使い、`ISAAC_ROS_WS` は `dev.sh` が設定する。Notebook / Jetson のホストパスやビルド成果物を同一視しない。別の workspace を使う場合、その `src/atd` はリポジトリの `ros2_ws/src/` を mount する予約先とし、編集元を別々に管理しない。
+- 環境の診断は `scripts/docker.sh` から項目ごとの `OK` / `FAIL` / `SKIP` を表示し、結果を `logs/docker/<host>/` に保存して後から確認できるようにする。導入状態の診断と、Docker 起動・GPU 演算・センサ・実走行の検証を区別する。
+- 開発環境は `scripts/dev.sh` で起動し、PC / Jetson は機種情報・BSP のマーカーから自動判定する。必要な場合だけ `--host pc|jetson` で上書きする。保存先はホストごとに設定し、記録データと解析結果を毎回読書き可能で mount する。rosbag 記録や車両起動は自動実行しない。
+- 新規起動と稼働中コンテナへの再接続を区別する。再接続は `atd-shell` を使い、稼働中の依存・DDS 設定を更新しない。構成が変わった場合や旧コンテナは、処理を終了して再作成する。
+- コンテナ内の対話シェルは `atd-shell` を標準とし、ホストから共有された旧 DDS 設定を含む `.bashrc` に依存しない。
+- 初期センサ構成は RealSense D455 のみとする。IR（infra）、RGB、IMU、Depth はいずれも利用候補として残し、RealSense driver で起動する方針とする。全ストリームの常時同時起動・記録を必須と解釈しない。
+- 実走行に必要な処理と制御は Jetson Orin Nano 8GB 内で完結させる。
+- ノート PC は地図作成・編集・解析・走行情報の可視化を担当する。Foxglove Bridge 等による自己位置等の観測を想定する。ノート PC から遠隔の走行制御を与える構成にしない。
+- 地図作成は、手動走行中に Jetson で bag を記録し、SCP でノート PC へ転送して NVIDIA 公式 offline 処理で cuVSLAM / VGL 用地図を準備し、作成地図を Jetson へ SCP 転送する流れとする。HDMap の作成・編集と centerline / raceline / 必要に応じた custom line の生成も共通 Web アプリで扱う。入力・モデル・地図 schema・生成方式の詳細は後工程で検討する。
+- 車載系の ROS 2 / DDS の直接探索・データ通信は Jetson 内部に限定する。Foxglove Bridge 等を介した明示的な情報提供は許容する。必要なら `--network host` を維持し、DDS と bridge の通信設定を区別する。詳細は要件文書を参照する。
+- Joy は DualSense を Bluetooth で接続する予定とする。操作割り当て、切替条件、停止・再開条件は、決定前に固定しない。
+- ESC・ステアリングサーボの制御に PCA は使わず、独自 firmware で対応する予定とする。マイコン、通信方式、firmware の詳細は未決定である。
+
+## シェルスクリプト・TUI・ブラウザ UI の操作方針
+
+- ノート PC と Jetson の日常操作では、シェルスクリプト（`.sh`）・TUI・ブラウザ UI を積極的に用意し、ターミナルコマンドを繰り返し手入力する負担を減らす。
+- ユーザーが操作する CLI・補助スクリプトは、対話形式や TUI を優先して設計する。
+- 処理、bag、地図、設定等の候補を検索・選択する場面では、`fzf` を積極的に活用し、対話的に実行できるようにする。
+- 対話操作と、引数・環境変数による直接指定を併用できる構成にする。既存の PC / Jetson の自動判定など、確定済みの起動方針との整合を保つ。
+- 操作や可視化に役立つブラウザ UI も積極的に作成する。主な用途は地図の編集、自己位置の確認、PC / Jetson の操作・状態確認である。
+- ブラウザ UI はノート PC の Chrome で `http://127.0.0.1:<port>` を開く利用形態を基本とする。Jetson の負荷を抑えるため、Jetson 自身では通常ブラウザを開かない。
+- 共通 Web アプリは地図、Jetson との SCP 転送、bringup 中のライブ表示・ROS 2 parameter 動的調整、Joy 入力監視・軸ボタン配置調整を扱う。プロポ対応は将来検討とする。具体的な入力割り当てや設定の反映・再開条件は固定しない。機能要件と framework・実装構成案は [要件文書](docs/project_requirements.md) で区別する。
+- UI の追加でも、走行処理の Jetson 内完結と、PC から遠隔の走行制御を与えない要件を維持する。ブラウザの実行場所と、サーバー・Jetson 側バックエンドの配置は区別する。
+
+## ROS 2 パッケージと実装
+
+- 自作 ROS 2 パッケージはモジュールごとに分割し、`atd_<pkg_name>` と命名する。
+- C++ を基本とし、計算量、メモリ使用量、コピー、遅延を意識して効率よく実装する。
+- `CMakeLists.txt` と `ament_cmake_auto` を原則として用いる。
+- composable node / component container の利用を推奨する。特に画像・深度など大容量データを交換する経路は、component として利用する前提で設計・実装する。
+- component 化だけでコピー削減や性能達成を検証済みとは扱わず、必要に応じて実際のデータ経路と性能を確認する。
+- Python node も CMake と `ament_cmake_auto` を基本とし、必要に応じて `ament_cmake_python` を併用する。
+- 直接起動する Python スクリプトには適切な shebang と実行権限を設定し、CMake の `install(PROGRAMS ...)` などで配置する。`colcon build` 後の起動も確認する。import 用モジュールへの実行権限は必須ではない。
+- DDS のネットワーク設定と、topic ごとの QoS を区別する。ROS 側と XML のどちらで設定するかを明確にする。
+
+## Docker 内の Python 環境
+
+- Python の追加依存と仮想環境は uv を基盤として管理する。ROS 2 用と AI 学習用を分け、用途ごとに独立した `pyproject.toml`・`uv.lock`・venv を持つ。
+- Docker には uv `0.13.8` を固定導入する。root 起動 hook から `gosu admin` を通して ROS 2 用環境を自動同期し、venv・cache は通常ユーザー所有にする。AI 学習用環境は明示的な `sync`・`run`・`shell` で準備する。
+- ROS 2 の apt パッケージと OS の Python はシステム側で管理する。ROS 2 用 venv はコンテナの `/usr/bin/python3` と `--system-site-packages` を使い、配布済み ROS 2 Python 拡張との ABI を合わせる。
+- AI 学習用 venv には ROS 2 の system site-packages や `PYTHONPATH` を引き継がせない。ROS 2 の追加依存と学習依存を同じ venv に混在させない。
+- Notebook の VGL export は `docker/python/vgl-export/` の独立した project / lock / venv を使う。重い export 依存を ROS 用・学習用へ混在させず、Jetson の標準起動時には同期しない。
+- OS Python への `pip install`、`uv pip install --system`、`--break-system-packages` による追加依存の導入を標準手順にしない。
+- `uv.lock` を管理対象とし、venv・cache・ダウンロード済み Python は各ホスト・コンテナで作成する。Notebook と Jetson の venv をコピーして共有しない。
+- 学習 framework、CUDA wheel、学習用 Python のバージョンと Jetson での学習対応は用途が決まった段階で選定する。Notebook と Jetson の GPU 依存を同一と仮定しない。
+- uv による依存管理と、ROS 2 package の CMake / `ament_cmake_auto` による build・install を区別する。Python node の interpreter・shebang・CMake の Python 検出先を確認する。
+- 操作と制約は [Python 環境](docs/python_environments.md) を参照する。
+
+## 検証と記録
+
+- 想定環境、導入済み環境、検証済み環境を区別して記録する。
+- ホスト・コンテナのアーキテクチャやハードウェアに依存する設定を、根拠なく同一視しない。
+- ビルド・単体検証、bag 再生、実機 I/O 確認、実走行の結果を分けて報告する。
+- 停止指令の出力、ESC のニュートラル、実際の制動・停止を区別する。

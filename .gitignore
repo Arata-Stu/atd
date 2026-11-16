@@ -1,0 +1,25 @@
+/config/storage.env
+/config/workspace.env
+/config/vgl.env
+/logs/docker/
+/logs/vgl/
+/.cache/
+# checkout 自体を ROS workspace にした場合の生成物と mount 先。
+/build/
+/install/
+/log/
+/src/atd/
+/.isaac-ros-cli/
+/scripts/.isaac_ros_common-config
+/scripts/.build_image_layers.yaml
+# リポジトリ内 ros2_ws を選択した場合の生成物・CLI 設定。
+/ros2_ws/build/
+/ros2_ws/install/
+/ros2_ws/log/
+/ros2_ws/.isaac-ros-cli/
+/ros2_ws/scripts/.isaac_ros_common-config
+.atd-python/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

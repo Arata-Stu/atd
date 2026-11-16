@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- DDS discovery and payload transport stay on this host's IPv4 loopback.
+     CUDA buffer sharing and rclcpp intra-process delivery are separate paths.
+     Fast DDS 3.x references:
+     https://fast-dds.docs.eprosima.com/en/3.x/fastdds/transport/whitelist.html
+     https://fast-dds.docs.eprosima.com/en/3.x/fastdds/transport/disabling_multicast.html -->
+<dds xmlns="http://www.eprosima.com">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>atd_loopback_udp</transport_id>
+        <type>UDPv4</type>
+        <!-- Discover more than the default four local participant ports. -->
+        <maxInitialPeersRange>100</maxInitialPeersRange>
+        <interfaceWhiteList>
+          <address>127.0.0.1</address>
+        </interfaceWhiteList>
+      </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="atd_loopback" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>atd_loopback_udp</transport_id>
+        </userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+        <defaultUnicastLocatorList>
+          <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+        </defaultUnicastLocatorList>
+        <builtin>
+          <discovery_config>
+            <discoveryProtocol>SIMPLE</discoveryProtocol>
+          </discovery_config>
+          <!-- Explicit unicast locators suppress default multicast listeners. -->
+          <metatrafficUnicastLocatorList>
+            <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+          </metatrafficUnicastLocatorList>
+          <initialPeersList>
+            <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+          </initialPeersList>
+        </builtin>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

@@ -1,0 +1,11 @@
+# CLI の既定順序にない custom key を、名前順ではなくこの順序で構築する。
+image_key_order:
+  - isaac_ros.realsense455.atd
+context_overrides:
+  isaac_ros: ..
+  # .cache/docker/<revision>/Dockerfile.atd の COPY 元は通常の docker/。
+  atd: ../../../docker
+cache_to_registry_names: []
+cache_from_registry_names:
+  - nvcr.io/nvidia/isaac/ros
+remote_builder: {}

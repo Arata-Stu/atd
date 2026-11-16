@@ -1,0 +1,75 @@
+# Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+#
+# NVIDIA CORPORATION and its licensors retain all intellectual property
+# and proprietary rights in and to this software, related documentation
+# and any modifications thereto. Any use, reproduction, disclosure or
+# distribution of this software and related documentation without an express
+# license agreement from NVIDIA CORPORATION is strictly prohibited.
+#
+# Based on NVIDIA-ISAAC-ROS/isaac-ros-cli release-5.0 docker/Dockerfile.realsense.
+# ATD 用の差分: この層で CUDA Toolkit を追加導入せず、librealsense を --no_cuda で構築する。
+# CLI / Isaac ROS 本体の CUDA は無効化しない。
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ARG LIBREALSENSE_SOURCE_VERSION=v2.56.3
+ARG REALSENSE_ROS_GIT_URL=https://github.com/realsenseai/realsense-ros.git
+ARG REALSENSE_ROS_VERSION=r/4.56.3
+ARG LIBREALSENSE_BUILD_TOOL_OPTIONS=--force_rsusb
+
+# 公式 isaac_ros ベース内に apt 導入された CLI の補助ファイルを再利用する。
+# COPY はホストの build context を参照するため、ここではコンテナ内で cp する。
+# ホスト側の /etc/isaac-ros-cli や CLI のソースには変更を加えない。
+RUN mkdir -p /opt/realsense \
+    && cp /etc/isaac-ros-cli/docker/scripts/build-librealsense.sh \
+        /opt/realsense/build-librealsense.sh \
+    && cp /etc/isaac-ros-cli/docker/scripts/install-realsense-dependencies.sh \
+        /opt/realsense/install-realsense-dependencies.sh \
+    && cp /etc/isaac-ros-cli/docker/patches/realsense-ros-lyrical.patch \
+        /opt/realsense/realsense-ros-lyrical.patch
+
+RUN chmod +x /opt/realsense/install-realsense-dependencies.sh \
+    && /opt/realsense/install-realsense-dependencies.sh
+
+# --no_cuda は固定で渡す。追加オプションを変更しても CUDA 無効の方針を維持する。
+RUN chmod +x /opt/realsense/build-librealsense.sh \
+    && /opt/realsense/build-librealsense.sh \
+        -v "${LIBREALSENSE_SOURCE_VERSION}" ${LIBREALSENSE_BUILD_TOOL_OPTIONS} --no_cuda \
+    && grep -Eq '^BUILD_WITH_CUDA:BOOL=(OFF|FALSE|false|0)$' \
+        "${HOME}/librealsense/build/CMakeCache.txt"
+
+# 以下の ROS driver 構築は公式 realsense 層と同じ版・Lyrical パッチを使用する。
+RUN --mount=type=cache,sharing=locked,target=/var/cache/apt \
+    --mount=type=cache,sharing=locked,target=/var/lib/apt/lists \
+    : "${ROS_ROOT:?ROS_ROOT must be set by the ROS base layer}" \
+    && test "${ROS_DISTRO}" = "lyrical" \
+    && mkdir -p "${ROS_ROOT}/src" && cd "${ROS_ROOT}/src" \
+    && git clone --depth 1 "${REALSENSE_ROS_GIT_URL}" -b "${REALSENSE_ROS_VERSION}" \
+    && git -C realsense-ros apply /opt/realsense/realsense-ros-lyrical.patch
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    apt-get update && apt-get install -y \
+        devscripts \
+        dh-make \
+        python3-bloom
+
+RUN rosdep update \
+    && rosdep install -y --from-paths "${ROS_ROOT}/src/realsense-ros" \
+        --skip-keys librealsense2 --ignore-src
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    cd "${ROS_ROOT}/src/realsense-ros" && source "${ROS_ROOT}/setup.bash" \
+    && cd "${ROS_ROOT}/src/realsense-ros/realsense2_camera_msgs" \
+    && bloom-generate rosdebian && fakeroot debian/rules binary \
+    && cd ../ && apt-get install -y ./*.deb && rm ./*.deb \
+    && cd "${ROS_ROOT}/src/realsense-ros/realsense2_description" \
+    && bloom-generate rosdebian && fakeroot debian/rules binary \
+    && cd ../ && apt-get install -y ./*.deb && rm ./*.deb \
+    && cd "${ROS_ROOT}/src/realsense-ros/realsense2_camera" \
+    && bloom-generate rosdebian \
+    && sed -i 's/dh_shlibdeps -/dh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info -/g' debian/rules \
+    && sed -i "s/ros-${ROS_DISTRO}-librealsense2, //g" debian/control \
+    && fakeroot debian/rules binary \
+    && cd ../ && apt-get install -y ./*.deb \
+    && cd ../ && rm -Rf "${ROS_ROOT}/src/realsense-ros"

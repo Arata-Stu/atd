@@ -1,0 +1,8 @@
+# Isaac ROS CLI の workspace 設定テンプレート。既定値全体は複製しない。
+docker:
+  image:
+    additional_image_keys:
+      - realsense455
+      - atd
+  run:
+    container_name: atd_dev

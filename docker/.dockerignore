@@ -1,0 +1,4 @@
+**/.venv
+**/.atd-python
+**/__pycache__
+**/*.pyc

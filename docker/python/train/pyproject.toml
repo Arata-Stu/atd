@@ -1,0 +1,9 @@
+[project]
+name = "atd-python-train"
+version = "0.1.0"
+description = "AI 学習用の独立した Python 依存。GPU framework は用途確定後に追加する。"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false

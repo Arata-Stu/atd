@@ -39,6 +39,7 @@ RUN --mount=type=bind,from=atd_web_node,source=/usr/local,target=/mnt/atd-node,r
 COPY --chmod=0755 scripts/10-atd-runtime.sh /usr/local/bin/scripts/entrypoint_additions/10-atd-runtime.sh
 COPY --chmod=0755 scripts/atd-shell.sh /usr/local/bin/atd-shell
 COPY --chmod=0755 scripts/atd-python.sh /usr/local/bin/atd-python
+COPY --chmod=0755 scripts/atd-build.sh /usr/local/bin/atd-build
 COPY --chmod=0755 scripts/atd-vgl.sh /usr/local/bin/atd-vgl
 COPY --chmod=0755 scripts/atd-web.sh /usr/local/bin/atd-web
 COPY scripts/atd.bashrc /etc/atd/bashrc

@@ -20,7 +20,8 @@ OS Python への `pip install`、`uv pip install --system`、`--break-system-pac
 
 ## 操作と保存先
 
-コンテナは先に `./scripts/dev.sh` で起動する。Python 環境の同期・確認・実行は、ホストから [`scripts/python.sh`](../scripts/python.sh)、コンテナ内では `atd-python` を使う。引数なしでは fzf で用途・操作を選べる。ROS package の build は [`scripts/build.sh`](../scripts/build.sh) を入口とし、用途名や操作名を指定しない。
+コンテナは先に `./scripts/dev.sh` で起動する。Python 環境の同期・確認・実行は、ホストから [`scripts/python.sh`](../scripts/python.sh)、コンテナ内では `atd-python` を使う。引数なしでは fzf で用途・操作を選べる。Python 環境の操作は `sync`・`check`・`shell`・`run` に限定する。
+ROS package の build は独立した [`scripts/build.sh`](../scripts/build.sh) を入口とし、用途名や操作名を指定しない。
 
 ```bash
 ./scripts/python.sh
@@ -40,7 +41,9 @@ OS Python への `pip install`、`uv pip install --system`、`--break-system-pac
 | `run -- COMMAND ...` | 同期後、その用途の環境でコマンドを実行する |
 
 ホストの `python.sh` は `--host notebook|pc|jetson` と `--dry-run` に対応し、コンテナを自動起動しない。コンテナ内では、例えば `atd-python ros check` のように使用する。
-`build.sh` も同じホスト指定・実行予定表示に対応し、残りの引数を `colcon build` へ渡す。コンテナ内からは `/workspaces/atd/scripts/build.sh --packages-up-to atd_web_bridge` と実行できる。内部では既存の ROS 用 Python・workspace・CMake interpreter 設定を利用する。従来の `python.sh ros build` / `atd-python ros build` も互換性のため維持する。
+`build.sh` も同じホスト指定・実行予定表示に対応し、コンテナ内の専用コマンド `atd-build` を呼ぶ。コンテナ内からは `atd-build --packages-up-to atd_web_bridge` と直接実行できる。`atd-build` がビルド対象 workspace への移動、`colcon build` の引数、CMake の Python interpreter 指定を扱い、`python.sh` / `atd-python` は呼び出さない。
+両コマンドは共通の環境準備処理を利用し、ROS 用 Python の ABI 確認・uv による同期・ROS 環境の有効化・DDS 設定の維持を共有する。従来の `python.sh ros build` / `atd-python ros build` は廃止し、ビルドには `build.sh` / `atd-build` を使用する。
+専用コマンドと共通処理を導入した構成へ更新するときは、利用中の処理を終了し、`./scripts/dev.sh --build` で Docker イメージを更新・コンテナを再作成する。
 通常の `atd-shell` は ROS 2 のシステム環境を保ち、用途別環境を自動では有効化しない。`shell` を終了すれば呼び出し元の環境へ戻る。
 ROS 2 用環境は Docker 起動時に root hook から `gosu admin` を通して自動同期する。通常ユーザーの権限で同期することで、venv・cache をその後も手動操作できる所有者に保つ。起動時に学習用環境は同期せず、`train sync`・`train run`・`train shell` で必要時に準備する。
 
@@ -68,7 +71,7 @@ ROS 2 用 venv は、コンテナの `/usr/bin/python3` を明示して作成す
 
 venv の有効化だけで、すべての ROS 2 コマンドが venv の interpreter を使うとは限らない。apt コマンドの固定 shebang、CMake が検出した Python、install された node の shebang を区別して確認する。
 Python node の package build は従来どおり CMake / `ament_cmake_auto` を使い、必要に応じて `ament_cmake_python` を併用する。uv の project は ROS package の build・install の代替ではない。
-保存地図の点群取得に使う自作 `atd_mapping` も apt や Web 環境の同期だけでは build されない。初回は Notebook の Docker 内で `/workspaces/atd/scripts/build.sh --packages-up-to atd_mapping` を実行する。画像計算は NVIDIA の C++ component、ROS の監視・snapshot 採取は ROS 互換 Python の別プロセスが担当し、Web / Raceline 用 venv に `rclpy` を混在させない。
+保存地図の点群取得に使う自作 `atd_mapping` も apt や Web 環境の同期だけでは build されない。初回は Notebook の Docker 内で `atd-build --packages-up-to atd_mapping` を実行する。画像計算は NVIDIA の C++ component、ROS の監視・snapshot 採取は ROS 互換 Python の別プロセスが担当し、Web / Raceline 用 venv に `rclpy` を混在させない。
 自作 package の編集元はリポジトリの `ros2_ws/src/` とする。別の workspace を使う場合、コンテナの workspace では `src/atd/` に mount する。`build.sh` は workspace の `src` を探索対象にする。直接 `colcon build` を使う場合も `--base-paths src` を明示する。詳しくは [構成規約](project_structure.md)を参照する。
 workspace にリポジトリの `ros2_ws` を選ぶ場合は、同じソースが workspace の `src/` にそのまま見えるため、追加の source mount は使わない。Python 環境の用途名 `ros` と `train`、`docker/python/ros/` 等の依存定義の名前は変更しない。
 

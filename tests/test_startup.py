@@ -13,6 +13,8 @@ HOOK = ROOT / "docker/scripts/10-atd-runtime.sh"
 SHELL = ROOT / "docker/scripts/atd-shell.sh"
 BASHRC = ROOT / "docker/scripts/atd.bashrc"
 PYTHON_HELPER = ROOT / "docker/scripts/atd-python.sh"
+BUILD_HELPER = ROOT / "docker/scripts/atd-build.sh"
+PYTHON_ENV_LIBRARY = ROOT / "docker/scripts/lib/python-environment.sh"
 VGL_HELPER = ROOT / "docker/scripts/atd-vgl.sh"
 
 
@@ -26,6 +28,7 @@ class StartupTests(unittest.TestCase):
         self.image = self.root / "image with spaces"
         self.baked_shell = self.root / "image shell"
         self.baked_python = self.root / "image python helper"
+        self.baked_build = self.root / "image build helper"
         self.baked_vgl = self.root / 'image vgl helper'
         self.bin = self.root / "bin"
         self.bin.mkdir()
@@ -38,9 +41,15 @@ class StartupTests(unittest.TestCase):
         (self.runtime / "scripts/atd-shell.sh").write_text(SHELL.read_text())
         (self.runtime / "scripts/atd.bashrc").write_text(BASHRC.read_text())
         (self.runtime / "scripts/atd-python.sh").write_text(PYTHON_HELPER.read_text())
+        (self.runtime / "scripts/atd-build.sh").write_text(BUILD_HELPER.read_text())
+        (self.runtime / "scripts/lib").mkdir()
+        (self.runtime / "scripts/lib/python-environment.sh").write_text(PYTHON_ENV_LIBRARY.read_text())
+        (self.image / "scripts/lib").mkdir(parents=True)
+        (self.image / "scripts/lib/python-environment.sh").write_text(PYTHON_ENV_LIBRARY.read_text())
         (self.runtime / 'scripts/atd-vgl.sh').write_text(VGL_HELPER.read_text())
         self.baked_shell.write_text(SHELL.read_text())
         self.baked_python.write_text(PYTHON_HELPER.read_text())
+        self.baked_build.write_text(BUILD_HELPER.read_text())
         self.baked_vgl.write_text(VGL_HELPER.read_text())
         (self.config / "bashrc").write_text(BASHRC.read_text())
         self.log = self.root / "calls"
@@ -75,6 +84,7 @@ class StartupTests(unittest.TestCase):
             "ATD_IMAGE_DIR": str(self.image),
             "ATD_SHELL_PATH": str(self.baked_shell),
             "ATD_PYTHON_PATH": str(self.baked_python),
+            "ATD_BUILD_PATH": str(self.baked_build),
             "ATD_VGL_PATH": str(self.baked_vgl),
             "ATD_RUNTIME_REV": "fixture-v1",
             "ATD_TEST_LOG": str(self.log),
@@ -121,7 +131,8 @@ class StartupTests(unittest.TestCase):
 
     def test_image_specific_changes_require_rebuild_before_tasks(self):
         for relative in ("Dockerfile.atd", "scripts/10-atd-runtime.sh", "scripts/atd-shell.sh",
-                         "scripts/atd.bashrc", "scripts/atd-python.sh", "scripts/atd-vgl.sh"):
+                         "scripts/atd.bashrc", "scripts/atd-python.sh", "scripts/atd-build.sh",
+                         "scripts/lib/python-environment.sh", "scripts/atd-vgl.sh"):
             with self.subTest(path=relative):
                 path = self.runtime / relative
                 original = path.read_text()

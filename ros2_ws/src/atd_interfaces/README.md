@@ -6,4 +6,4 @@
 
 `OperatorEvent` は `RECORD_START` / `RECORD_STOP` の一回の要求。記録の開始・終了成功を表す通知ではない。
 
-メッセージ生成専用 package は `ament_cmake` / `rosidl_generate_interfaces` を明示的に使う。Docker 内で `/workspaces/atd/scripts/build.sh --packages-up-to atd_teleop` により生成・依存 package を build する。
+メッセージ生成専用 package は `ament_cmake` / `rosidl_generate_interfaces` を明示的に使う。Docker 内で `atd-build --packages-up-to atd_teleop` により生成・依存 package を build する。

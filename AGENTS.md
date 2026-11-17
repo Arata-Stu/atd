@@ -88,6 +88,7 @@
 - `uv.lock` を管理対象とし、venv・cache・ダウンロード済み Python は各ホスト・コンテナで作成する。Notebook と Jetson の venv をコピーして共有しない。
 - 学習 framework、CUDA wheel、学習用 Python のバージョンと Jetson での学習対応は用途が決まった段階で選定する。Notebook と Jetson の GPU 依存を同一と仮定しない。
 - uv による依存管理と、ROS 2 package の CMake / `ament_cmake_auto` による build・install を区別する。Python node の interpreter・shebang・CMake の Python 検出先を確認する。
+- ROS package の build は `scripts/build.sh` / コンテナ内の `atd-build` に実装し、`scripts/python.sh` / `atd-python` は `sync`・`check`・`shell`・`run` に限定する。環境準備は共通関数を使い、ビルド処理を Python 環境管理のコマンドへ戻さない。
 - 操作と制約は [Python 環境](docs/python_environments.md) を参照する。
 
 ## 検証と記録

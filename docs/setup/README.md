@@ -195,7 +195,8 @@ Docker 起動時には root の `.sh` が追加依存の不足分を確認し、
 ```
 
 Notebook / Jetson の選択には通常の自動判定と `--host notebook|pc|jetson` を使う。`python.sh` は起動済みコンテナへ接続する入口であり、コンテナを起動していない場合は先に `dev.sh` を実行する。
-コンテナ内では `atd-python ros ...` / `atd-python train ...` を使用する。通常の対話シェル全体を自動で venv へ切り替えず、選んだ用途のプロセスへ環境を適用する。
+コンテナ内の環境操作には `atd-python ros ...` / `atd-python train ...` を使用し、操作は sync / check / shell / run とする。ROS package のビルドは専用の `atd-build` で実行する。通常の対話シェル全体を自動で venv へ切り替えず、選んだ用途のプロセスへ環境を適用する。
+`atd-build` と共通の環境準備処理を追加した構成へ更新する場合は、利用中の処理を終了して `./scripts/dev.sh --build` で image を更新・コンテナを再作成する。旧 `atd-python ros build` は使用しない。
 
 用途ごとの `pyproject.toml`・`uv.lock` は `docker/python/ros/` と `docker/python/train/` に置く。venv は選択した workspace の `.atd-python/<architecture>/{ros,train}`、cache は `.atd-python/cache` へ作成する。workspace の bind mount に保存するためコンテナの再作成後も使えるが、別ホスト・別アーキテクチャへコピーしない。
 `sync` は lockfile の更新を許さない同期を行い、`run`・`shell` と `build.sh` は実行前に同期する。依存の更新は別の開発作業として manifest と lockfile に記録する。

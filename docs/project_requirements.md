@@ -49,6 +49,7 @@
 - 自作パッケージは `atd_<pkg_name>` と命名する。
 - C++ を基本とし、効率を重視して実装する。
 - ビルドは `CMakeLists.txt` と `ament_cmake_auto` を原則として用いる。
+- ROS package のビルドは `scripts/build.sh` / コンテナ内の `atd-build` に分離する。`scripts/python.sh` / `atd-python` は用途別 Python 環境の sync・check・shell・run を扱い、colcon のビルド処理を持たせない。
 - composable node / component container の利用を推奨する。
 - 特に大容量データを交換する処理は、composable な構成を想定して実装する。
 - Python node を作成する場合も、CMake と `ament_cmake_auto` を基本とする。
@@ -244,7 +245,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - Map / Transfer / Live / Input を統合する。地図・転送処理は独立 worker で実行し、結果先の `runs/web/` に設定・ジョブ状態・ログを保持する。
 - 地図作成は公式 `create_map_offline.py`、VGL 地図は公式 builder / `create_cuvgl_map.py` を呼ぶ。自作 `atd_mapping` が保存地図の作業コピーと元 bag を使い、VGL hint・localize 成功後の非空点群・軌跡・TF を採取する。完了時だけ snapshot を公開して編集可能にする。apt 導入、モデル資産、GPU engine、地図成果物、点群取得成功を別に扱う。
 - map identity・VGL との対応 hash・地図生成時の平面拘束設定がない旧資産は再生成を案内し、推測で補完・自動移行しない。新規地図は平面拘束を無効と明示して記録し、取得側にも同じ値を適用する。
-- Notebook の初回は Docker 内で `/workspaces/atd/scripts/build.sh --packages-up-to atd_mapping` が必要である。公式 apt や `web` / `raceline` の同期は自作 ROS package の build を代替しない。`atd-web check` で `atd_mapping` を含む導入状態を診断する。
+- Notebook の初回は Docker 内で `atd-build --packages-up-to atd_mapping` が必要である。公式 apt や `web` / `raceline` の同期は自作 ROS package の build を代替しない。`atd-web check` で `atd_mapping` を含む導入状態を診断する。
 - Centerline の region と、独立した `raceline` 環境による mincurv / mincurv_iqp を実装した。旧 paired / local への fallback は設けない。単体テスト、小規模閉路で実 QP / IQP solver を使うテスト、frontend の型検査・build はローカルで確認した。
 - Jetson 側に C++ component の `atd_joy` と、観測・設定用の `atd_web_bridge` を追加した。Notebook API は SSH から Jetson loopback HTTP へアクセスし、車載 DDS に直接参加しない。
 - `atd_interfaces` に正規化運転要求と操作イベント、`atd_teleop` に設定可能な役割割り当てを追加した。Notebook の入力画面に物理配置と役割設定を統合し、保存済みと反映済みを区別する。操作要求の出力までで、最終走行許可・基板通信・rosbag の記録実行は未実装。仕様と検証境界は [atd_teleop](../ros2_ws/src/atd_teleop/README.md)を参照する。
@@ -311,6 +312,8 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 | `../config/storage.env.example` | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
 
 ## 7. 更新履歴
+
+- 2026-11-17: ROS package のビルドを専用の `build.sh` / `atd-build` へ分離し、`python.sh` / `atd-python` は環境管理・実行だけを担当する構成にした。ビルドの旧 `ros build` 操作は廃止し、環境準備の共通処理は共有する。対象 Docker 内のビルド検証とは区別する。
 
 - 2026-11-17: 地図画面を cuVSLAM / VGL 準備、保存地図の localize と自動点群取得、HDMap 編集へ接続した。駐車を除外し、Centerline は region、Raceline は mincurv（既定）/ mincurv_iqp に限定。独立した raceline 環境、atd_mapping の初回 build、旧資産の再生成条件と実機検証境界を記録した。
 

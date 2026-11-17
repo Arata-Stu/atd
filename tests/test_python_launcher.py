@@ -48,7 +48,7 @@ elif args[:1] == ['exec']:
         print(os.environ['ATD_TEST_REVISION'] if ready == 'matching' else 'old-ready')
     else:
         assert '/usr/local/bin/atd-shell' in args
-        assert '/usr/local/bin/atd-python' in args
+        assert os.environ.get('ATD_TEST_HELPER', '/usr/local/bin/atd-python') in args
         sys.exit(int(os.environ.get('ATD_TEST_COMMAND_EXIT', '0')))
 else:
     sys.exit('Docker mutation is forbidden: ' + repr(args))
@@ -210,6 +210,12 @@ with open(os.environ['ATD_TEST_CALLS'], 'a') as stream:
                 result = self.invoke(*args)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(self.calls(), [])
+
+    def test_build_is_rejected_before_container_access(self):
+        result = self.invoke('ros', 'build', '--packages-select', 'atd_teleop')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('scripts/build.sh', result.stderr)
+        self.assertEqual(self.calls(), [])
 
 
 if __name__ == '__main__':

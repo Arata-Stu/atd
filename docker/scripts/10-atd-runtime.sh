@@ -3,7 +3,7 @@
 # 上流 entrypoint に errexit はないため、各段階の失敗を明示的に伝える。
 
 _atd_prepare_runtime() {
-    local task_runtime_dir task_config_dir task_ready_temp task_image_dir task_shell_path task_python_path task_vgl_path task_index
+    local task_runtime_dir task_config_dir task_ready_temp task_image_dir task_shell_path task_python_path task_build_path task_vgl_path task_index
     local -a task_dynamic_paths task_baked_paths
     if [[ "$(id -u)" != 0 ]]; then
         printf 'ATD runtime: コンテナの root 起動処理で実行してください。\n' >&2
@@ -20,9 +20,10 @@ _atd_prepare_runtime() {
     task_image_dir="${ATD_IMAGE_DIR:-/opt/atd}"
     task_shell_path="${ATD_SHELL_PATH:-/usr/local/bin/atd-shell}"
     task_python_path="${ATD_PYTHON_PATH:-/usr/local/bin/atd-python}"
+    task_build_path="${ATD_BUILD_PATH:-/usr/local/bin/atd-build}"
     task_vgl_path="${ATD_VGL_PATH:-/usr/local/bin/atd-vgl}"
     if [[ "$task_runtime_dir" != /* || "$task_config_dir" != /* \
-        || "$task_image_dir" != /* || "$task_shell_path" != /* || "$task_python_path" != /* || "$task_vgl_path" != /* ]]; then
+        || "$task_image_dir" != /* || "$task_shell_path" != /* || "$task_python_path" != /* || "$task_build_path" != /* || "$task_vgl_path" != /* ]]; then
         printf 'ATD runtime: runtime / DDS 設定先は絶対パスを指定してください。\n' >&2
         return 1
     fi
@@ -37,6 +38,8 @@ _atd_prepare_runtime() {
         "${task_runtime_dir}/scripts/atd-shell.sh"
         "${task_runtime_dir}/scripts/atd.bashrc"
         "${task_runtime_dir}/scripts/atd-python.sh"
+        "${task_runtime_dir}/scripts/atd-build.sh"
+        "${task_runtime_dir}/scripts/lib/python-environment.sh"
         "${task_runtime_dir}/scripts/atd-vgl.sh"
     )
     task_baked_paths=(
@@ -45,6 +48,8 @@ _atd_prepare_runtime() {
         "$task_shell_path"
         "${task_config_dir}/bashrc"
         "$task_python_path"
+        "$task_build_path"
+        "${task_image_dir}/scripts/lib/python-environment.sh"
         "$task_vgl_path"
     )
     for task_index in "${!task_dynamic_paths[@]}"; do

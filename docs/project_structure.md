@@ -80,7 +80,7 @@ package 固有の parameter、較正設定、launch はその package に置く�
 
 別のホスト workspace を選択した場合、その `src/atd` は mount point として予約し、そこへ別のソースをコピーしない。既存データがある場合は setup を停止して保護する。
 コンテナの `/workspaces/atd` はプロジェクト設定の readonly 参照用であり、ソースの編集には workspace 内の package ソースを使う。別の workspace を使う場合も、編集元の `ros2_ws/src/` と workspace の `src/` を区別する。
-標準の build 入口は `./scripts/build.sh` とし、workspace の `src` を探索対象にする。直接 `colcon build` を使う場合も `--base-paths src` を明示し、checkout と workspace が同じ場所にあるときの重複探索を避ける。
+標準の build 入口は `./scripts/build.sh`、コンテナ内は `atd-build` とし、workspace の `src` を探索対象にする。`docker/scripts/atd-build.sh` が colcon の実行と CMake の interpreter 指定を担当する。直接 `colcon build` を使う場合も `--base-paths src` を明示し、checkout と workspace が同じ場所にあるときの重複探索を避ける。
 
 ## 設定・依存・操作の入口
 
@@ -93,13 +93,13 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | 初回 setup | `scripts/setup.sh` |
 | Docker 起動・build | `scripts/dev.sh` |
 | 診断と履歴 | `scripts/docker.sh` |
-| 用途別 Python 操作 | `scripts/python.sh` |
-| ROS package の build | `scripts/build.sh` |
+| 用途別 Python 環境の管理・実行 | `scripts/python.sh` → コンテナ内の `atd-python`。sync / check / shell / run |
+| ROS package の build | `scripts/build.sh` → コンテナ内の `atd-build` |
 | VGL モデルの export・転送・build | `scripts/vgl.sh` |
 | Notebook 共通 Web UI | Docker 内の `atd-web`。ホストからの補助入口は `scripts/webui.sh` |
 | Jetson の入力・観測設定 bridge | `scripts/input.sh` |
 
-ユーザー向けの操作は `scripts/` の短い入口から提供する。コンテナ内の処理は `docker/scripts/`、ホスト準備の内部処理は `scripts/setup/`、共通関数は `scripts/lib/` に置く。入口ごとに同じ設定読込みやホスト判定を実装し直さない。
+ユーザー向けの操作は `scripts/` の短い入口から提供する。コンテナ内の処理は `docker/scripts/`、ホスト準備の内部処理は `scripts/setup/`、ホスト側の共通関数は `scripts/lib/` に置く。入口ごとに同じ設定読込みやホスト判定を実装し直さない。コンテナ内のビルド処理と Python 環境管理は独立したコマンドにし、共通の環境準備は `docker/scripts/lib/` から読み込む。
 
 新規のディレクトリ・文書・設定ファイルは、内容が分かる英語の `snake_case` を基本とする。`Dockerfile.<image_key>`、`CMakeLists.txt`、`package.xml` 等のツールが要求する名前と、既存の公開コマンド名はその規則を優先する。
 

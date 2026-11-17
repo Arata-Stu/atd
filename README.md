@@ -53,7 +53,7 @@ VGL モデルは Notebook で ONNX export し、SCP で bundle を渡して Jets
 ## 用途別 Python 環境
 
 Docker 内では uv `0.13.8` を使い、ROS 2 用 `ros`、AI 学習用 `train`、Notebook の VGL export 用 `vgl-export` を独立した project / lock / venv に分ける。
-ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用は必要時に同期する。通常の対話シェル全体は venv へ切り替えず、用途を選んだプロセスに適用する。
+ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用は必要時に同期する。通常の対話シェル全体は venv へ切り替えず、用途を選んだプロセスに適用する。Python 環境の管理・実行は `python.sh` / `atd-python`、ROS package のビルドは専用の `build.sh` / `atd-build` が担当する。
 
 起動済みコンテナに対し、別端末から操作できる。
 

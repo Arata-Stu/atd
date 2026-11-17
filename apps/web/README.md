@@ -11,7 +11,7 @@ Docker 設定を更新した場合は、利用中の処理を終了してイメ�
 # Notebook のホスト: Docker を起動・入室（初回・設定変更時は --build）
 ./scripts/dev.sh --build
 # ここから Notebook の Docker 内。初回・自作package更新時に実行
-/workspaces/atd/scripts/build.sh --packages-up-to atd_mapping
+atd-build --packages-up-to atd_mapping
 atd-web
 ```
 

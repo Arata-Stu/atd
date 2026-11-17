@@ -1,107 +1,14 @@
-"""用途別 uv 環境の同期先・Python 設定・実行境界を一時ディレクトリで確認する。"""
+"""用途別 uv 環境の同期・確認・シェル・実行の境界を検証する。"""
 
 import json
 import os
-from pathlib import Path
 import shlex
-import subprocess
-import sys
-import tempfile
 import unittest
 
-
-PROJECT = Path(__file__).resolve().parents[1]
-SCRIPT = PROJECT / 'docker/scripts/atd-python.sh'
-FAKE_UV = r'''
-import json
-import os
-from pathlib import Path
-import sys
-import venv
-
-args = sys.argv[1:]
-with open(os.environ['ATD_TEST_LOG'], 'a') as stream:
-    stream.write(json.dumps({'args': args, 'env': {key: os.environ.get(key) for key in (
-        'UV_PROJECT_ENVIRONMENT', 'UV_CACHE_DIR', 'VIRTUAL_ENV', 'PYTHONPATH', 'PYTHONHOME')}}) + '\n')
-if args[0] == 'venv':
-    output = Path(args[-1])
-    venv.EnvBuilder(with_pip=False, system_site_packages='--system-site-packages' in args).create(output)
-    if os.environ.get('ATD_TEST_FAKE_VENV_PYTHON'):
-        python = output / 'bin/python'
-        python.unlink()
-        python.write_text('#!' + sys.executable + '\n' + """
-import json
-import os
-import sys
-if sys.argv[1:2] == ['-I']:
-    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
-with open(os.environ['ATD_TEST_BUILD_LOG'], 'w') as stream:
-    json.dump({'args': sys.argv[1:], 'cwd': os.getcwd(), 'venv': os.environ.get('VIRTUAL_ENV')}, stream)
-""")
-        python.chmod(0o755)
-elif args[0] == 'sync':
-    sys.exit(int(os.environ.get('ATD_TEST_SYNC_EXIT', '0')))
-else:
-    sys.exit('unexpected uv operation')
-'''
+from python_env_fixture import PythonEnvironmentFixture
 
 
-class PythonEnvironmentTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='atd-python-test-')
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name).resolve()
-        self.workspace = self.root / 'ws'
-        self.workspace.mkdir()
-        self.projects = self.root / 'projects'
-        for profile in ('ros', 'train', 'vgl-export', 'web', 'raceline'):
-            project = self.projects / profile
-            project.mkdir(parents=True)
-            (project / 'pyproject.toml').write_text(
-                f'[project]\nname = "atd-{profile}"\nversion = "0.0.0"\nrequires-python = ">=3.9"\ndependencies = []\n')
-            (project / 'uv.lock').write_text('version = 1\n')
-        self.bin = self.root / 'bin'
-        self.bin.mkdir()
-        uv = self.bin / 'uv'
-        uv.write_text(f'#!{sys.executable}\n' + FAKE_UV)
-        uv.chmod(0o755)
-        (self.bin / 'uname').write_text('#!/bin/sh\nif [ "$1" = -s ]; then printf "%s\\n" "${ATD_TEST_SYSTEM:-Linux}"; else printf "%s\\n" "${ATD_TEST_ARCH:-x86_64}"; fi\n')
-        (self.bin / 'uname').chmod(0o755)
-        (self.bin / 'id').write_text('#!/bin/sh\nprintf "%s\\n" "${ATD_TEST_UID:-1000}"\n')
-        (self.bin / 'id').chmod(0o755)
-        self.log = self.root / 'uv-calls.jsonl'
-        self.build_log = self.root / 'build.json'
-        self.ros_lib = self.root / 'ros-python'
-        self.ros_lib.mkdir()
-        (self.ros_lib / 'atd_fake_ros_module.py').write_text('available = True\n')
-        self.setup = self.root / 'ros-setup.bash'
-        self.setup.write_text(
-            'export PYTHONPATH=' + shlex.quote(str(self.ros_lib)) + '\n'
-            'export RMW_IMPLEMENTATION=old-ros-value\n'
-            'export ROS_DISCOVERY_SERVER=old-ros-server\n')
-        self.env = {
-            'PATH': os.pathsep.join((str(self.bin), str(Path(sys.executable).parent), os.defpath)),
-            'HOME': str(self.root),
-            'ISAAC_ROS_WS': str(self.workspace),
-            'ATD_PYTHON_PROJECTS_DIR': str(self.projects),
-            'ATD_SYSTEM_PYTHON': sys.executable,
-            'ATD_ROS_SETUP': str(self.setup),
-            'ATD_TEST_LOG': str(self.log),
-            'ATD_TEST_BUILD_LOG': str(self.build_log),
-            'RMW_IMPLEMENTATION': 'rmw_fastrtps_cpp',
-        }
-
-    def invoke(self, *args, env=None):
-        return subprocess.run(['/bin/bash', str(SCRIPT), *args],
-                              env={**self.env, **(env or {})}, text=True,
-                              capture_output=True, timeout=15)
-
-    def calls(self):
-        return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
-
-    def venv(self, profile):
-        return self.workspace / '.atd-python/x86_64' / profile
-
+class PythonEnvironmentTests(PythonEnvironmentFixture, unittest.TestCase):
     def test_profiles_use_separate_venvs_cache_and_system_site_policy(self):
         for profile in ('ros', 'train'):
             result = self.invoke(profile, 'sync')
@@ -274,42 +181,21 @@ class PythonEnvironmentTests(unittest.TestCase):
         self.assertFalse((self.workspace / '.atd-python').exists())
         self.assertEqual(self.calls(), [])
 
-    def test_build_uses_ros_interpreter_and_preserves_user_cmake_arguments(self):
-        result = self.invoke('ros', 'build', '--', '--packages-select', 'atd_example',
-                             '--cmake-args', '-DCMAKE_BUILD_TYPE=Release', env={'ATD_TEST_FAKE_VENV_PYTHON': '1'})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        build = json.loads(self.build_log.read_text())
-        self.assertEqual(build['cwd'], str(self.workspace))
-        self.assertEqual(build['args'], ['/usr/bin/colcon', 'build', '--base-paths', str(self.workspace / 'src'),
-                                         '--packages-select', 'atd_example',
-                                         '--cmake-args', '-DPython3_EXECUTABLE=' + str(self.venv('ros') / 'bin/python'),
-                                         '-DCMAKE_BUILD_TYPE=Release'])
-        self.assertEqual(build['venv'], str(self.venv('ros')))
+    def test_removed_build_action_fails_before_environment_preparation(self):
+        result = self.invoke('ros', 'build', '--packages-select', 'atd_example')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('atd-build', result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((self.workspace / '.atd-python').exists())
+        self.assertFalse(self.build_log.exists())
 
-    def test_build_handles_inline_cmake_args_and_rejects_typed_python_override(self):
-        result = self.invoke('ros', 'build', '--cmake-args=-DCMAKE_BUILD_TYPE=Release',
-                             env={'ATD_TEST_FAKE_VENV_PYTHON': '1'})
+    def test_help_lists_environment_operations_without_build_action(self):
+        result = self.invoke('--help')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(self.build_log.read_text())['args'], [
-            '/usr/bin/colcon', 'build', '--base-paths', str(self.workspace / 'src'), '--cmake-args',
-            '-DPython3_EXECUTABLE=' + str(self.venv('ros') / 'bin/python'), '-DCMAKE_BUILD_TYPE=Release'])
-        self.build_log.unlink()
-        for args in (('--cmake-args', '-DPython3_EXECUTABLE:FILEPATH=/usr/bin/python3'),
-                     ('--cmake-args=-DPython3_EXECUTABLE:FILEPATH=/usr/bin/python3',)):
-            with self.subTest(args=args):
-                result = self.invoke('ros', 'build', *args)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('CMake 上書き', result.stderr)
-                self.assertFalse(self.build_log.exists())
-
-    def test_build_preserves_explicit_package_search_path(self):
-        source = self.root / 'selected-sources'
-        result = self.invoke('ros', 'build', '--base-paths', str(source),
-                             env={'ATD_TEST_FAKE_VENV_PYTHON': '1'})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        arguments = json.loads(self.build_log.read_text())['args']
-        self.assertEqual(arguments.count('--base-paths'), 1)
-        self.assertEqual(arguments[arguments.index('--base-paths') + 1], str(source))
+        self.assertNotIn('run|build', result.stdout)
+        self.assertNotIn('  build ', result.stdout)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((self.workspace / '.atd-python').exists())
 
 
 if __name__ == '__main__':

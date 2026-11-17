@@ -1,0 +1,15 @@
+# 初期値は全て未割り当て。UI から操作の役割を選び保存する。
+version: 1
+axes:
+  steering:
+    axis: ''
+    subtract_axis: ''
+    scale: 1.0
+  throttle:
+    axis: ''
+    subtract_axis: ''
+    scale: 1.0
+buttons:
+  enable: ''
+  record_start: ''
+  record_stop: ''

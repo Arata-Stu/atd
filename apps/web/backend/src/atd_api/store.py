@@ -102,6 +102,10 @@ class Store:
             current = self.load_map(key)
             if type(body.get('revision')) is not int or body['revision'] != current['revision']:
                 raise ValueError('地図の revision が変わりました。再読込してください')
+            if (current.get('source', {}).get('kind') == 'nvidia_offline'
+                    and current['source'].get('pointcloud_status') != 'ready'
+                    and any(body.get(field, current[field]) != current[field] for field in ('left', 'right', 'custom', 'closed'))):
+                raise ValueError('保存地図から点群を取得してから HDMap を編集してください')
             if body.get('frame', 'map') != 'map' or type(body.get('closed', True)) is not bool:
                 raise ValueError('座標系は map、closed は boolean で指定してください')
             changed = dict(closed=body.get('closed', current['closed']))
@@ -127,6 +131,8 @@ class Store:
             if current['revision'] != revision:
                 raise ValueError('生成中に地図が更新されました。再生成してください')
             current['lines'][kind] = line
+            if kind == 'centerline':
+                current['lines'].pop('raceline', None)
             current.update(revision=revision + 1, updated=time.time())
             atomic_json(self.folder(key) / 'hdmap/map.json', current)
             atomic_json(self.folder(key) / 'lines' / (kind + '.json'), dict(map_id=key, revision=current['revision'], **line))

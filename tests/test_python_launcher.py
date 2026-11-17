@@ -65,7 +65,7 @@ class PythonLauncherTests(unittest.TestCase):
         self.script = self.project / 'scripts/python.sh'
         shutil.copyfile(PROJECT / 'scripts/python.sh', self.script)
         shutil.copytree(PROJECT / 'scripts/lib', self.project / 'scripts/lib')
-        shutil.copytree(PROJECT / 'docker', self.project / 'docker')
+        shutil.copytree(PROJECT / 'docker', self.project / 'docker', ignore=shutil.ignore_patterns('.venv', '__pycache__'))
         (self.project / 'ros2_ws/src').mkdir(parents=True)
         (self.project / 'ros2_ws/src/README.md').write_text('ROS package source fixture\n')
         (self.project / 'scripts/detect_host.sh').write_text(
@@ -114,6 +114,16 @@ class PythonLauncherTests(unittest.TestCase):
             '/usr/local/bin/atd-shell', '/usr/local/bin/atd-python', 'train', 'run', '--', 'python',
             'script with spaces.py', argument,
         ]])
+
+    def test_raceline_profile_is_forwarded_to_notebook_with_literal_arguments(self):
+        literal = '$(touch must-not-run);*'
+        result = self.invoke('--host', 'notebook', 'raceline', 'run', '--', 'python', 'path with spaces.py', literal,
+                             env={'ATD_TEST_HOST': 'jetson'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command, = self.commands()
+        self.assertIn('atd_pc_dev', command)
+        self.assertNotIn('atd_jetson_dev', command)
+        self.assertEqual(command[-6:], ['raceline', 'run', '--', 'python', 'path with spaces.py', literal])
 
     def test_no_arguments_reaches_container_picker_without_an_empty_argument(self):
         result = self.invoke()

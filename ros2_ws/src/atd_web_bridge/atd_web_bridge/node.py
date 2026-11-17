@@ -22,7 +22,7 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 import yaml
 
-from .core import Cache, ProfileStore, prepare_parameter_value
+from .core import Cache, ProfileStore, TeleopProfileStore, prepare_parameter_value
 
 
 def stamp(header):
@@ -61,6 +61,8 @@ class BridgeNode(Node):
             'velocity_topic': '/vehicle/velocity', 'joy_topic': '/joy',
             'joy_raw_topic': '/joy/raw', 'joy_status_topic': '/joy/status',
             'joy_node': '/atd_joy_node', 'profile_path': '/data/results/runs/input/dualsense.yaml',
+            'teleop_node': '/atd_teleop_node', 'teleop_status_topic': '/teleop/status',
+            'teleop_profile_path': '/data/results/runs/input/teleop.yaml',
             'parameter_node_prefix': '/atd_', 'parameter_allowlist_json': '{}'}
         self.settings = {key: self.declare_parameter(key, value, fixed).value for key, value in defaults.items()}
         if not 1024 <= self.settings['port'] <= 65535 or not .1 <= self.settings['freshness_s'] <= 30:
@@ -71,6 +73,7 @@ class BridgeNode(Node):
             raise ValueError('parameter_allowlist_json must map nodes to parameter-name lists')
         self.cache = Cache(self.settings['freshness_s'])
         self.profiles = ProfileStore(self.settings['profile_path'])
+        self.teleop_profiles = TeleopProfileStore(self.settings['teleop_profile_path'])
         self.operation_lock = threading.RLock()
         self.identity = {'schema': 'atd.web_bridge.v1', 'instance_id': uuid.uuid4().hex,
                          'hostname': socket.gethostname(), 'node': self.get_fully_qualified_name()}
@@ -81,9 +84,13 @@ class BridgeNode(Node):
         self.subscribe(Joy, 'joy_topic', lambda m: self.joy('normalized', m))
         self.subscribe(Joy, 'joy_raw_topic', lambda m: self.joy('raw', m))
         self.subscribe(String, 'joy_status_topic', self.status)
+        self.subscribe(String, 'teleop_status_topic', self.teleop_status)
         self.joy_clients = {
             'configure': self.create_client(SetBool, self.settings['joy_node'] + '/configure'),
             'reload': self.create_client(Trigger, self.settings['joy_node'] + '/reload_profile')}
+        self.teleop_clients = {
+            'configure': self.create_client(SetBool, self.settings['teleop_node'] + '/configure'),
+            'reload': self.create_client(Trigger, self.settings['teleop_node'] + '/reload_profile')}
         self.parameter_clients = {}
 
     def subscribe(self, kind, setting, callback):
@@ -112,6 +119,44 @@ class BridgeNode(Node):
                 self.cache.put('status', value)
         except (ValueError, yaml.YAMLError):
             self.get_logger().warning('Invalid joy/status YAML')
+
+    def teleop_status(self, message):
+        try:
+            value = yaml.safe_load(message.data)
+            if isinstance(value, dict) and type(value.get('configuring')) is bool:
+                self.cache.put('teleop_status', value)
+        except (ValueError, yaml.YAMLError):
+            self.get_logger().warning('Invalid teleop/status YAML')
+
+    def configure_teleop(self, path, body):
+        state = self.cache.teleop_status()
+        status = state.get('status')
+        if not status or status['stale'] or not self.teleop_profiles.matches_path(status):
+            raise ValueError('Teleop node の新鮮な状態と profile_path の一致が必要です')
+        reloading = path.endswith('/reload')
+        if reloading:
+            self.teleop_profiles.require_configuring(state)
+            if not self.teleop_profiles.read()['saved']:
+                raise ValueError('操作割り当てを保存してから再読込してください')
+            request = Trigger.Request()
+        else:
+            if type(body.get('enabled')) is not bool:
+                raise ValueError('enabled は bool で指定してください')
+            if body['enabled'] is False and not self.teleop_profiles.read(state)['applied']:
+                raise ValueError('保存した操作割り当てを再読込してから出力を再開してください')
+            request = SetBool.Request(data=body['enabled'])
+        client = self.teleop_clients['reload' if reloading else 'configure']
+        if not client.wait_for_service(timeout_sec=.5):
+            raise ValueError('Teleop service 未接続。成功とは扱いません')
+        try:
+            result = self.wait(client.call_async(request))
+            if not result.success:
+                raise ValueError(result.message or 'Teleop node が操作を拒否しました')
+            return {'applied': True, 'message': result.message,
+                    'output_resumed': not reloading and body['enabled'] is False}
+        finally:
+            # A timeout is an unknown outcome; require a new node observation too.
+            self.cache.invalidate('teleop_status')
 
     def wait(self, future):
         event = threading.Event()
@@ -177,6 +222,9 @@ class BridgeNode(Node):
 
     def dispatch(self, path, method, body):
         with self.operation_lock:
+            if path.startswith('/teleop/') and method in ('PUT', 'POST'):
+                if type(body.get('instance_id')) is not str or body['instance_id'] != self.identity['instance_id']:
+                    raise ValueError('Jetson bridge の接続先が変更されています。状態と設定を再取得してください')
             if path == '/live/status' and method == 'GET':
                 return {'pose': self.cache.get('pose'), 'velocity': self.cache.get('velocity'),
                         'parameter_nodes': self.nodes(), 'topics': [self.settings[k] for k in ('odometry_topic', 'pose_topic', 'velocity_topic')]}
@@ -184,6 +232,14 @@ class BridgeNode(Node):
                 return self.apply_parameters(body.get('node'), body['values']) if 'values' in body else self.parameters(body.get('node'))
             if path == '/input/status' and method == 'GET':
                 return self.cache.input_status()
+            if path == '/teleop/status' and method == 'GET':
+                return self.cache.teleop_status()
+            if path == '/teleop/profile' and method == 'GET':
+                return self.teleop_profiles.read(self.cache.teleop_status())
+            if path == '/teleop/profile' and method == 'PUT':
+                return self.teleop_profiles.write(body.get('profile'), body.get('revision'), self.cache.teleop_status())
+            if path in ('/teleop/reload', '/teleop/configure') and method == 'POST':
+                return self.configure_teleop(path, body)
             if path == '/input/profile' and method == 'GET':
                 return self.profiles.read()
             if path == '/input/profile' and method == 'PUT':

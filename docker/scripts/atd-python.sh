@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-使い方: atd-python [ros|train|vgl-export|web] [sync|check|shell|run|build] [-- COMMAND/ARGS]
+使い方: atd-python [ros|train|vgl-export|web|raceline] [sync|check|shell|run|build] [-- COMMAND/ARGS]
 
 引数なし: fzf で用途・操作を選択（未導入時は番号選択）
   sync    lock に従って環境を準備。依存の更新はしない
@@ -15,7 +15,7 @@ usage() {
 
 例: atd-python train run -- python train.py
     atd-python ros build -- --packages-select atd_example
-保存先: $ISAAC_ROS_WS/.atd-python/<architecture>/{ros,train,vgl-export,web}
+保存先: $ISAAC_ROS_WS/.atd-python/<architecture>/{ros,train,vgl-export,web,raceline}
 通常のコンテナユーザーから実行する。ホストの Python 環境とは共有しない。
 EOF
 }
@@ -46,8 +46,8 @@ choose() {
 
 if [[ "${1:-}" = --help || "${1:-}" = -h ]]; then usage; exit 0; fi
 task_profile="${1:-}"
-if (($#)); then shift; else task_profile="$(choose 'Python の用途' $'ros\tROS 2 の追加 Python 依存\ntrain\tAI 学習・解析\nvgl-export\tNotebook の VGL ONNX export\nweb\tNotebook の Web API')" || exit 1; fi
-case "$task_profile" in ros|train|vgl-export|web) ;; *) fail '用途は ros、train、vgl-export、web を指定してください' ;; esac
+if (($#)); then shift; else task_profile="$(choose 'Python の用途' $'ros\tROS 2 の追加 Python 依存\ntrain\tAI 学習・解析\nvgl-export\tNotebook の VGL ONNX export\nweb\tNotebook の Web API\nraceline\tNotebook の最小曲率ライン最適化')" || exit 1; fi
+case "$task_profile" in ros|train|vgl-export|web|raceline) ;; *) fail '用途は ros、train、vgl-export、web、raceline を指定してください' ;; esac
 task_action="${1:-}"
 if (($#)); then
     shift
@@ -72,8 +72,8 @@ case "$task_arch" in x86_64|aarch64|arm64) ;; *) fail "未対応のアーキテ�
 if [[ "$task_profile" = vgl-export && ( "$task_arch" != x86_64 || "$(uname -s)" != Linux ) ]]; then
     fail 'vgl-export は Notebook の Linux / x86_64 Docker 専用です'
 fi
-if [[ "$task_profile" = web && ( "$task_arch" != x86_64 || "$(uname -s)" != Linux ) ]]; then
-    fail 'web は Notebook の Linux / x86_64 Docker 専用です'
+if [[ ( "$task_profile" = web || "$task_profile" = raceline ) && ( "$task_arch" != x86_64 || "$(uname -s)" != Linux ) ]]; then
+    fail "$task_profile は Notebook の Linux / x86_64 Docker 専用です"
 fi
 task_root="${task_workspace}/.atd-python"
 task_venv="${task_root}/${task_arch}/${task_profile}"

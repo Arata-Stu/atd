@@ -1,4 +1,4 @@
-"""Live observations and physical joystick configuration; no driving commands."""
+"""Live observations and input/role configuration; no driving commands."""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
@@ -15,6 +15,7 @@ def call(request: Request, path: str, method: str = 'GET', body: dict | None = N
         if method == 'GET' and path.endswith('/status'):
             return {'connected': False, 'device_connected': False, 'ready': False,
                     'pose': None, 'velocity': None, 'raw': None, 'normalized': None,
+                    'status': None, 'configuring': None,
                     'message': str(exc), 'availability': {'bridge': 'disconnected'}}
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -61,3 +62,30 @@ def configure(request: Request, body: dict):
     if type(body.get('enabled')) is not bool:
         raise HTTPException(status_code=422, detail='enabled は true / false で指定してください')
     return call(request, '/input/configure', 'POST', body)
+
+
+@router.get('/teleop/status')
+def teleop_status(request: Request):
+    return call(request, '/teleop/status')
+
+
+@router.get('/teleop/profile')
+def teleop_profile(request: Request):
+    return call(request, '/teleop/profile')
+
+
+@router.put('/teleop/profile')
+def save_teleop_profile(request: Request, body: dict):
+    return call(request, '/teleop/profile', 'PUT', body)
+
+
+@router.post('/teleop/reload')
+def reload_teleop_profile(request: Request, body: dict):
+    return call(request, '/teleop/reload', 'POST', body)
+
+
+@router.post('/teleop/configure')
+def configure_teleop(request: Request, body: dict):
+    if type(body.get('enabled')) is not bool:
+        raise HTTPException(status_code=422, detail='enabled は true / false で指定してください')
+    return call(request, '/teleop/configure', 'POST', body)

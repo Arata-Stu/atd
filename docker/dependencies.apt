@@ -33,6 +33,8 @@ tcpdump
 # ROS 2 / ament / component
 ros-lyrical-ament-cmake-auto
 ros-lyrical-ament-cmake-python
+ros-lyrical-rosidl-default-generators
+ros-lyrical-rosidl-default-runtime
 ros-lyrical-rclcpp
 ros-lyrical-rclcpp-components
 ros-lyrical-rclpy
@@ -44,6 +46,8 @@ ros-lyrical-ament-cmake-gtest
 ros-lyrical-ament-cmake-pytest
 ros-lyrical-launch-ros
 ros-lyrical-sensor-msgs
+ros-lyrical-sensor-msgs-py
+ros-lyrical-tf2-msgs
 ros-lyrical-geometry-msgs
 ros-lyrical-nav-msgs
 ros-lyrical-tf2-ros

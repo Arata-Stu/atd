@@ -54,7 +54,7 @@ class PythonEnvironmentTests(unittest.TestCase):
         self.workspace = self.root / 'ws'
         self.workspace.mkdir()
         self.projects = self.root / 'projects'
-        for profile in ('ros', 'train', 'vgl-export'):
+        for profile in ('ros', 'train', 'vgl-export', 'web', 'raceline'):
             project = self.projects / profile
             project.mkdir(parents=True)
             (project / 'pyproject.toml').write_text(
@@ -65,7 +65,7 @@ class PythonEnvironmentTests(unittest.TestCase):
         uv = self.bin / 'uv'
         uv.write_text(f'#!{sys.executable}\n' + FAKE_UV)
         uv.chmod(0o755)
-        (self.bin / 'uname').write_text('#!/bin/sh\nif [ "$1" = -s ]; then printf "Linux\\n"; else printf "%s\\n" "${ATD_TEST_ARCH:-x86_64}"; fi\n')
+        (self.bin / 'uname').write_text('#!/bin/sh\nif [ "$1" = -s ]; then printf "%s\\n" "${ATD_TEST_SYSTEM:-Linux}"; else printf "%s\\n" "${ATD_TEST_ARCH:-x86_64}"; fi\n')
         (self.bin / 'uname').chmod(0o755)
         (self.bin / 'id').write_text('#!/bin/sh\nprintf "%s\\n" "${ATD_TEST_UID:-1000}"\n')
         (self.bin / 'id').chmod(0o755)
@@ -182,6 +182,46 @@ class PythonEnvironmentTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Notebook', result.stderr)
         self.assertEqual(self.calls(), [])
+
+    def test_raceline_is_notebook_only_before_uv_or_environment_creation(self):
+        for architecture, system in (('aarch64', 'Linux'), ('arm64', 'Linux'), ('x86_64', 'Darwin')):
+            with self.subTest(architecture=architecture, system=system):
+                result = self.invoke('raceline', 'sync', env={'ATD_TEST_ARCH': architecture, 'ATD_TEST_SYSTEM': system})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Notebook', result.stderr)
+                self.assertEqual(self.calls(), [])
+                self.assertFalse((self.workspace / '.atd-python').exists())
+
+    def test_raceline_is_separate_from_web_ros_and_parent_python_environment(self):
+        old = self.root / 'parent ros env'
+        (old / 'bin').mkdir(parents=True)
+        inherited_path = os.pathsep.join((str(old / 'bin'), self.env['PATH']))
+        command = ('import importlib.util,json,os,sys; print(json.dumps({"prefix":sys.prefix,'
+                   '"ros":importlib.util.find_spec("atd_fake_ros_module") is not None,'
+                   '"path":os.environ.get("PYTHONPATH"),"home":os.environ.get("PYTHONHOME"),'
+                   '"startup":os.environ.get("PYTHONSTARTUP"),"venv":os.environ.get("VIRTUAL_ENV"),'
+                   '"search":os.environ["PATH"].split(":"),"bash_env":os.environ.get("BASH_ENV")}))')
+        result = self.invoke('raceline', 'run', '--', 'python', '-c', command,
+                             env={'PYTHONPATH': str(self.ros_lib), 'PYTHONHOME': '/old/python',
+                                  'PYTHONSTARTUP': '/old/startup.py', 'VIRTUAL_ENV': str(old), 'PATH': inherited_path})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout.splitlines()[-1])
+        self.assertEqual(data['prefix'], str(self.venv('raceline')))
+        self.assertEqual(data['venv'], str(self.venv('raceline')))
+        self.assertNotEqual(self.venv('raceline'), self.venv('web'))
+        self.assertNotEqual(self.venv('raceline'), self.venv('ros'))
+        self.assertFalse(data['ros'])
+        self.assertIsNone(data['path'])
+        self.assertIsNone(data['home'])
+        self.assertIsNone(data['startup'])
+        self.assertEqual(data['bash_env'], '/dev/null')
+        self.assertNotIn(str(old / 'bin'), data['search'])
+        creation = next(call for call in self.calls() if call['args'][0] == 'venv')
+        self.assertNotIn('--system-site-packages', creation['args'])
+        sync = next(call for call in self.calls() if call['args'][0] == 'sync')
+        self.assertEqual(sync['env']['UV_PROJECT_ENVIRONMENT'], str(self.venv('raceline')))
+        self.assertIn('--locked', sync['args'])
+        self.assertIn(str(self.projects / 'raceline'), sync['args'])
 
     def test_ros_setup_and_overlay_are_available_while_dds_values_are_preserved(self):
         overlay = self.workspace / 'install/setup.bash'

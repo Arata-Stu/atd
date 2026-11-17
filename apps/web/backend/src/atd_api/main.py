@@ -17,6 +17,7 @@ from .jobs import Jobs
 from .offline import DEFAULT_INPUTS, build_payload, vgl_payload
 from .store import Store, atomic_json, confined, read_json
 from . import transfers
+from . import capture as capture_service
 
 
 class Strict(BaseModel):
@@ -53,6 +54,12 @@ class Push(Strict):
 
 class VGL(Strict):
     model_dir: str
+
+
+class Capture(Strict):
+    revision: int = Field(ge=1)
+    bag: str | None = None
+    model_dir: str | None = None
 
 
 class Build(Strict):
@@ -138,7 +145,7 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     @app.post('/api/maps/build')
     def build(body: Build):
         payload = build_payload(store, body.model_dump())
-        return jobs.start('map_build', payload, ['map:' + body.id, 'ros-domain:93'], '公式 cuVSLAM 地図作成: ' + body.id)
+        return jobs.start('map_build', payload, ['map:' + body.id, 'ros-domain:93', 'offline-mapping'], '公式 cuVSLAM 地図作成: ' + body.id)
 
     @app.get('/api/maps/{key}')
     def load_map(key: str):
@@ -157,6 +164,8 @@ def create_app(record_root=None, result_root=None, static_dir=None):
             raise ValueError('未知のライン種別です')
         if document['revision'] != body.revision:
             raise ValueError('地図を保存してから生成してください')
+        if not capture_service.ready_document(document):
+            raise ValueError('保存地図から点群を取得してからラインを生成してください')
         generation_settings(body.settings)
         return jobs.start('generate', dict(id=key, **body.model_dump()), ['map:' + key], body.kind + ' 生成: ' + key)
 
@@ -170,18 +179,38 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     @app.post('/api/maps/{key}/vgl')
     def vgl(key: str, body: VGL):
         payload = vgl_payload(store, key, body.model_dump())
-        return jobs.start('vgl', payload, ['map:' + key, 'ros-domain:93'], '公式 VGL 地図準備: ' + key)
+        return jobs.start('vgl', payload, ['map:' + key, 'ros-domain:93', 'offline-mapping'], '公式 VGL 地図準備: ' + key)
+
+    @app.get('/api/maps/{key}/capture')
+    def capture_options(key: str, bag: str | None = None, model_dir: str | None = None):
+        return capture_service.preflight(store, key, bag, model_dir)
+
+    @app.post('/api/maps/{key}/capture')
+    def capture_map(key: str, body: Capture):
+        payload = capture_service.payload(store, key, body.model_dump(exclude_none=True))
+        return jobs.start('capture', payload, ['map:' + key, 'ros-domain:94', 'offline-mapping', 'record:' + payload['bag']],
+                          '保存地図から点群取得: ' + key)
 
     @app.get('/api/maps/{key}/cloud')
     def cloud(key: str):
         folder = store.folder(key)
-        path = folder / 'hdmap/cloud.json'
+        document = store.load_map(key)
+        source = document.get('source', {})
+        if not capture_service.ready_document(document):
+            return dict(points=[], frame='map', source_count=0, truncated=False, status='pending',
+                        trajectory=[], message='保存地図は作成済みです。VGL の準備後に点群を取得してください')
+        relative = source.get('capture_relative')
+        cloud_relative = relative + '/cloud.json' if relative else 'hdmap/cloud.json'
+        path = confined(folder, cloud_relative, exists=False)
         if not path.is_file():
             return dict(points=[], frame='map', source_count=0, truncated=False, status='unavailable', message='表示用点群は未取得です')
-        data = read_json(confined(folder, 'hdmap/cloud.json'))
+        data = read_json(path)
         all_points = data['points']
         stride = max(1, math.ceil(len(all_points) / 250000))
-        return dict(points=all_points[::stride], frame='map', source_count=len(all_points), truncated=stride > 1, status='ready')
+        source_count = data.get('source_count', len(all_points))
+        return dict(points=all_points[::stride], frame='map', source_count=source_count,
+                    truncated=source_count > len(all_points[::stride]), status='ready',
+                    trajectory=data.get('trajectory', []), provenance=data.get('provenance', {}))
 
     @app.post('/api/maps/{key}/cloud')
     def import_cloud(key: str, body: dict):
@@ -194,6 +223,8 @@ def create_app(record_root=None, result_root=None, static_dir=None):
         with jobs.registry(), store.lock('map-' + key):
             jobs.require_available(['map:' + key])
             document = store.load_map(key)
+            if document.get('source', {}).get('kind') == 'nvidia_offline':
+                raise ValueError('NVIDIA 保存地図の点群は「保存地図から点群取得」で準備してください')
             if body.get('revision') != document['revision']:
                 raise ValueError('地図 revision が変わりました')
             atomic_json(store.folder(key) / 'hdmap/cloud.json', dict(frame='map', points=body['points'], provenance='explicit_import'))

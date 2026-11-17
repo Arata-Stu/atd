@@ -304,6 +304,7 @@ private:
     data["connected"] = static_cast<bool>(device_);
     data["configuring"] = configuring_;
     data["generation"] = generation_;
+    data["instance_id"] = instance_id_;
     data["profile_path"] = profile_path_;
     data["profile_valid"] = profile_valid_;
     data["node"] = get_fully_qualified_name();
@@ -346,6 +347,9 @@ private:
   }
 
   std::string profile_path_, input_dir_, error_;
+  const std::string instance_id_{
+    std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) +
+    "-" + std::to_string(::getpid())};
   Profile profile_;
   // Input-output resumption is an explicit operation after every node restart.
   bool profile_valid_{false}, configuring_{false}, syncing_{false};

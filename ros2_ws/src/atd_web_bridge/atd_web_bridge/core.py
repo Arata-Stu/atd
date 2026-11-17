@@ -1,4 +1,4 @@
-"""ROS-independent cache and physical-profile persistence."""
+"""ROS-independent observation cache and input-profile persistence."""
 from __future__ import annotations
 
 import copy
@@ -10,6 +10,7 @@ import threading
 import time
 
 from atd_joy_tools import profile as profiles
+from atd_teleop_tools import profile as teleop_profiles
 
 
 class Cache:
@@ -48,6 +49,13 @@ class Cache:
                     availability={k: 'missing' if v is None else 'stale' if v['stale'] else 'fresh'
                                   for k, v in (('raw', raw), ('normalized', normalized), ('status', status))})
 
+    def teleop_status(self):
+        status = self.get('teleop_status')
+        fresh = bool(status and not status['stale'])
+        return {'status': status, 'ready': bool(fresh and status.get('ready')),
+                'configuring': status.get('configuring') if fresh else None,
+                'availability': {'status': 'missing' if status is None else 'fresh' if fresh else 'stale'}}
+
 
 def revision(profile):
     return hashlib.sha256(json.dumps(profile, sort_keys=True, allow_nan=False).encode()).hexdigest()
@@ -77,6 +85,48 @@ class ProfileStore:
                 raise ValueError('入力配置が変更されています。再取得してください')
             profiles.save(self.path, value)
             return {**self.read(), 'applied': False, 'message': '保存しました。再読込と入力出力再開は個別に実行してください'}
+
+
+class TeleopProfileStore:
+    """Persist role bindings without treating a saved file as active settings."""
+    def __init__(self, path):
+        self.path = Path(path).expanduser()
+        self.lock = threading.RLock()
+
+    def matches_path(self, status):
+        path = status.get('profile_path')
+        return isinstance(path, str) and bool(path) and Path(path).expanduser().resolve() == self.path.resolve()
+
+    def read(self, state=None):
+        with self.lock:
+            saved = self.path.exists()
+            value = teleop_profiles.load(self.path) if saved else teleop_profiles.default_profile()
+            status = (state or {}).get('status')
+            applied = False
+            if saved and status and not status.get('stale') and status.get('profile_valid') is True and self.matches_path(status):
+                try:
+                    applied = teleop_profiles.validate(status.get('profile')) == value
+                except (ValueError, TypeError):
+                    pass
+            return {'profile': value, 'revision': revision(value), 'saved': saved,
+                    'path': str(self.path), 'axes': list(teleop_profiles.AXES),
+                    'buttons': list(teleop_profiles.BUTTONS), 'applied': applied}
+
+    def require_configuring(self, state):
+        status = state.get('status')
+        if not status or status.get('stale') or status.get('configuring') is not True:
+            raise ValueError('新鮮な操作割り当ての設定モード状態が必要です。先に設定開始を実行してください')
+        if not self.matches_path(status):
+            raise ValueError('Teleop node と bridge の profile_path が一致しません')
+
+    def write(self, value, expected, state):
+        with self.lock:
+            self.require_configuring(state)
+            if expected != self.read()['revision']:
+                raise ValueError('操作割り当てが変更されています。再取得してください')
+            teleop_profiles.save(self.path, value)
+            return {**self.read(state), 'applied': False,
+                    'message': '保存しました。再読込と操作出力の再開は個別に実行してください'}
 
 
 def validate_range(value, descriptor):

@@ -46,7 +46,9 @@
 - 初期センサ構成は RealSense D455 のみとする。IR（infra）、RGB、IMU、Depth はいずれも利用候補として残し、RealSense driver で起動する方針とする。全ストリームの常時同時起動・記録を必須と解釈しない。
 - 実走行に必要な処理と制御は Jetson Orin Nano 8GB 内で完結させる。
 - ノート PC は地図作成・編集・解析・走行情報の可視化を担当する。Foxglove Bridge 等による自己位置等の観測を想定する。ノート PC から遠隔の走行制御を与える構成にしない。
-- 地図作成は、手動走行中に Jetson で bag を記録し、SCP でノート PC へ転送して NVIDIA 公式 offline 処理で cuVSLAM / VGL 用地図を準備し、作成地図を Jetson へ SCP 転送する流れとする。HDMap の作成・編集と centerline / raceline / 必要に応じた custom line の生成も共通 Web アプリで扱う。入力・モデル・地図 schema・生成方式の詳細は後工程で検討する。
+- 地図作成は、手動走行中に Jetson で記録した bag を SCP で Notebook へ転送し、同じ Web UI で NVIDIA 公式 cuVSLAM / VGL 地図準備、保存地図への localize と点群 snapshot 取得、HDMap 編集・ライン生成まで進め、作成地図を Jetson へ SCP 転送する。NVIDIA 地図は点群取得後に編集可能とし、空の手動 HDMap は点群なしでも編集できる。駐車は対象に含めない。
+- Centerline は領域・等距離線の `region` のみ（初期格子 0.02 m、点数上限 800）。Raceline は `mincurv`（既定）と `mincurv_iqp` のみとし、保存済みの region Centerline を参照する。旧 `paired` / `local` の生成・fallback を追加しない。Customline は編集点列から生成する。生成成功と実車の性能・走行検証を区別する。
+- 点群取得は地図の作業コピーと元 bag、対応する VGL 地図・Notebook 用モデルを使う。地図内容・保存画像・モデルの対応や地図生成時の平面拘束設定を検査し、必要な metadata がない旧資産は再生成を案内する。原点・identity TF・推測した設定で補完せず、既存資産を自動移行しない。ROS package の build は `scripts/build.sh` を入口とし、Notebook の初回は Docker 内で `/workspaces/atd/scripts/build.sh --packages-up-to atd_mapping` を実行する。apt 導入や Web の起動だけで自作 package を build 済みと扱わない。
 - 車載系の ROS 2 / DDS の直接探索・データ通信は Jetson 内部に限定する。Foxglove Bridge 等を介した明示的な情報提供は許容する。必要なら `--network host` を維持し、DDS と bridge の通信設定を区別する。詳細は要件文書を参照する。
 - Joy は DualSense を Bluetooth で接続する予定とする。操作割り当て、切替条件、停止・再開条件は、決定前に固定しない。
 - ESC・ステアリングサーボの制御に PCA は使わず、独自 firmware で対応する予定とする。マイコン、通信方式、firmware の詳細は未決定である。
@@ -81,6 +83,7 @@
 - ROS 2 の apt パッケージと OS の Python はシステム側で管理する。ROS 2 用 venv はコンテナの `/usr/bin/python3` と `--system-site-packages` を使い、配布済み ROS 2 Python 拡張との ABI を合わせる。
 - AI 学習用 venv には ROS 2 の system site-packages や `PYTHONPATH` を引き継がせない。ROS 2 の追加依存と学習依存を同じ venv に混在させない。
 - Notebook の VGL export は `docker/python/vgl-export/` の独立した project / lock / venv を使う。重い export 依存を ROS 用・学習用へ混在させず、Jetson の標準起動時には同期しない。
+- Notebook の Web API と最小曲率計算は `docker/python/web/` / `docker/python/raceline/` の独立した uv project / lock / venv を使う。`raceline` は Python 3.12 の QP / IQP helper 用で、通常の `atd-web` 起動から同期し別プロセスで実行する。Web・ROS・学習依存へ混在させず、Jetson の標準環境へ追加しない。
 - OS Python への `pip install`、`uv pip install --system`、`--break-system-packages` による追加依存の導入を標準手順にしない。
 - `uv.lock` を管理対象とし、venv・cache・ダウンロード済み Python は各ホスト・コンテナで作成する。Notebook と Jetson の venv をコピーして共有しない。
 - 学習 framework、CUDA wheel、学習用 Python のバージョンと Jetson での学習対応は用途が決まった段階で選定する。Notebook と Jetson の GPU 依存を同一と仮定しない。

@@ -14,11 +14,12 @@ RealSense D455 を初期センサとし、Jetson Orin Nano 8GB を搭載した R
 ./scripts/setup.sh            # ホスト準備、workspace・保存先の対話設定
 ./scripts/dev.sh --build      # 初回イメージを build して入室
 ./scripts/dev.sh              # 通常起動・稼働中コンテナへの再接続
+./scripts/build.sh            # 起動済みコンテナで ROS package を build
 ./scripts/docker.sh           # OK / FAIL / SKIP 診断とログ保存
 ./scripts/docker.sh --logs    # 過去ログを選択
 ./scripts/vgl.sh              # VGL export・SCP 転送・Jetson engine build を選択
 ./scripts/webui.sh            # ホストからの補助入口。通常は Docker 内で atd-web
-./scripts/input.sh            # Jetson の Joy 入力・観測設定 bridge を明示起動
+./scripts/input.sh            # Jetson の Joy 入力・teleop 操作要求・観測設定 bridge を明示起動
 ```
 
 Web UI は Notebook の Docker 内で `atd-web` を実行し、Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。FastAPI・frontend の build / 配信・地図作成ジョブはコンテナ内で動く。
@@ -59,7 +60,7 @@ ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用�
 ```bash
 ./scripts/python.sh                   # 用途・操作を fzf で選択
 ./scripts/python.sh ros check
-./scripts/python.sh ros build         # ROS 用 Python で package を build
+./scripts/build.sh                    # ROS package を build
 ./scripts/python.sh train shell
 ```
 

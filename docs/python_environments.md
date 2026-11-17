@@ -1,6 +1,6 @@
 # Docker 内の Python 環境
 
-Python の追加依存と仮想環境の管理には uv を使い、ROS 2 用、AI 学習用、Notebook の VGL export 用を分ける。Docker には uv `0.13.8` を固定導入する。用途ごとに独立した `pyproject.toml`・`uv.lock`・venv を持ち、学習・export 依存の更新が ROS 2 の追加依存へ波及しない構成とする。
+Python の追加依存と仮想環境の管理には uv を使い、ROS 2 用、AI 学習用、Notebook の VGL export・Web API・Raceline 用を分ける。Docker には uv `0.13.8` を固定導入する。用途ごとに独立した `pyproject.toml`・`uv.lock`・venv を持ち、学習・export 依存の更新が ROS 2 の追加依存へ波及しない構成とする。
 
 ## 用途と依存の管理
 
@@ -10,7 +10,8 @@ Python の追加依存と仮想環境の管理には uv を使い、ROS 2 用、
 | ROS 2 用の Python 追加依存 | 独立した uv project と venv | システム Python と `--system-site-packages` を使用し、ROS 2 の Python 拡張と ABI を合わせる |
 | AI 学習用の Python 依存 | 独立した uv project と venv | system site-packages と ROS 2 の Python 環境変数を引き継がない |
 | Notebook の VGL export 用 | `vgl-export` project と venv | Python 3.12 / Linux x86_64 用の固定依存。ROS 用・学習用へ混在させない |
-| Notebook の Web API 用 | `web` project と venv | FastAPI・幾何処理用。ROS の Python 検索パスを引き継がず、Jetson では利用しない |
+| Notebook の Web API 用 | `web` project と venv | FastAPI・領域処理・幾何検証用。ROS の Python 検索パスを引き継がず、Jetson では利用しない |
+| Notebook の Raceline 最適化用 | `raceline` project と venv | Python 3.12 の固定依存。`mincurv` / `mincurv_iqp` helper を別プロセスで実行し、Web・ROS へ混在させない |
 | 解析・推論等の追加用途 | 必要時に別 project / venv を追加 | ROS 2 用・学習用のどちらへ入れるかを曖昧にせず、依存の互換性に応じて決める |
 
 ROS 2 の apt 依存を PyPI から入れ直す手順にはしない。`uv.lock` が固定する対象は各 project の追加 Python 依存であり、ベースイメージや apt パッケージの全状態ではない。再現にはそれらのバージョン・digest も記録する。
@@ -19,7 +20,7 @@ OS Python への `pip install`、`uv pip install --system`、`--break-system-pac
 
 ## 操作と保存先
 
-コンテナは先に `./scripts/dev.sh` で起動する。ホストからの入口は [`scripts/python.sh`](../scripts/python.sh)、コンテナ内の入口は `atd-python`。引数なしでは fzf で用途・操作を選べる。
+コンテナは先に `./scripts/dev.sh` で起動する。Python 環境の同期・確認・実行は、ホストから [`scripts/python.sh`](../scripts/python.sh)、コンテナ内では `atd-python` を使う。引数なしでは fzf で用途・操作を選べる。ROS package の build は [`scripts/build.sh`](../scripts/build.sh) を入口とし、用途名や操作名を指定しない。
 
 ```bash
 ./scripts/python.sh
@@ -27,7 +28,8 @@ OS Python への `pip install`、`uv pip install --system`、`--break-system-pac
 ./scripts/python.sh ros check
 ./scripts/python.sh train shell
 ./scripts/python.sh train run -- python -c 'import sys; print(sys.executable)'
-./scripts/python.sh ros build
+./scripts/build.sh
+./scripts/build.sh --packages-up-to atd_web_bridge
 ```
 
 | 操作 | 内容 |
@@ -36,9 +38,9 @@ OS Python への `pip install`、`uv pip install --system`、`--break-system-pac
 | `check` | 選択した用途の環境を確認する |
 | `shell` | 同期後、その用途の対話シェルを開く |
 | `run -- COMMAND ...` | 同期後、その用途の環境でコマンドを実行する |
-| `build` | ROS 2 用の Python と CMake の interpreter 指定を使って `colcon build` する |
 
 ホストの `python.sh` は `--host notebook|pc|jetson` と `--dry-run` に対応し、コンテナを自動起動しない。コンテナ内では、例えば `atd-python ros check` のように使用する。
+`build.sh` も同じホスト指定・実行予定表示に対応し、残りの引数を `colcon build` へ渡す。コンテナ内からは `/workspaces/atd/scripts/build.sh --packages-up-to atd_web_bridge` と実行できる。内部では既存の ROS 用 Python・workspace・CMake interpreter 設定を利用する。従来の `python.sh ros build` / `atd-python ros build` も互換性のため維持する。
 通常の `atd-shell` は ROS 2 のシステム環境を保ち、用途別環境を自動では有効化しない。`shell` を終了すれば呼び出し元の環境へ戻る。
 ROS 2 用環境は Docker 起動時に root hook から `gosu admin` を通して自動同期する。通常ユーザーの権限で同期することで、venv・cache をその後も手動操作できる所有者に保つ。起動時に学習用環境は同期せず、`train sync`・`train run`・`train shell` で必要時に準備する。
 
@@ -48,6 +50,7 @@ ROS 2 用環境は Docker 起動時に root hook から `gosu admin` を通し�
 | 学習用 manifest / lock | `docker/python/train/{pyproject.toml,uv.lock}` |
 | VGL export 用 manifest / lock | `docker/python/vgl-export/{pyproject.toml,uv.lock}` |
 | Web API 用 manifest / lock | `docker/python/web/{pyproject.toml,uv.lock}` |
+| Raceline 用 manifest / lock | `docker/python/raceline/{pyproject.toml,uv.lock}` |
 | venv | `<選択した ROS workspace>/.atd-python/<architecture>/<purpose>` |
 | uv cache | `<選択した ROS workspace>/.atd-python/cache` |
 
@@ -56,7 +59,7 @@ venv の architecture は `uname -m` の値を使う。workspace の bind mount 
 `ros` / `train` の追加 Python 依存は空であり、学習用ライブラリの導入・動作確認までは含まない。`vgl-export` は PyTorch / torchvision・ONNX 等を固定する Notebook 専用環境で、モデルからの export を選んだときに同期する。依存の版は project と lockfile を参照する。
 VGL export・既存 bundle の package・Jetson の engine build は [専用の操作手順](vgl_models.md)を使う。Jetson の engine build に Notebook の export 用 venv をコピーしない。
 
-共通 Web UI は Notebook の Docker 内で `atd-web` を実行し、`web` 環境を同期・選択して起動する。ホストの `scripts/webui.sh` は同じコンテナ内コマンドを呼ぶ補助入口である。ソースの backend / processing は readonly の checkout から読み、frontend の build と node_modules は workspace の `.atd-web/frontend/` へ作成する。`web` は Linux x86_64 の Notebook 専用で、ROS CLI を呼ぶ子プロセスでだけシステムの ROS 環境を読み込む。操作は [Web アプリ](../apps/web/README.md)を参照する。
+共通 Web UI は Notebook の Docker 内で `atd-web` を実行し、`web` 環境を同期・選択して起動する。ホストの `scripts/webui.sh` は同じコンテナ内コマンドを呼ぶ補助入口である。ソースの backend / processing は readonly の checkout から読み、frontend の build と node_modules は workspace の `.atd-web/frontend/` へ作成する。`web` は Linux x86_64 の Notebook 専用で、ROS CLI を呼ぶ子プロセスでだけシステムの ROS 環境を読み込む。通常起動時に `atd-python raceline sync` で最小曲率 helper 用環境も同期し、`ATD_RACELINE_PYTHON` にその Python を設定して別プロセスを起動する。`raceline` は Python 3.12 と NumPy・SciPy・quadprog・固定 commit の trajectory-planning-helpers 等を独立した lock で管理する。`atd-web build` は frontend の build だけで、Python 環境の同期とは別である。`atd-web check` は `web` / `raceline` 環境と公式・自作 ROS package の導入状態を診断する。操作は [Web アプリ](../apps/web/README.md)を参照する。
 
 ## ROS 2 と Python interpreter
 
@@ -65,7 +68,8 @@ ROS 2 用 venv は、コンテナの `/usr/bin/python3` を明示して作成す
 
 venv の有効化だけで、すべての ROS 2 コマンドが venv の interpreter を使うとは限らない。apt コマンドの固定 shebang、CMake が検出した Python、install された node の shebang を区別して確認する。
 Python node の package build は従来どおり CMake / `ament_cmake_auto` を使い、必要に応じて `ament_cmake_python` を併用する。uv の project は ROS package の build・install の代替ではない。
-自作 package の編集元はリポジトリの `ros2_ws/src/` とする。別の workspace を使う場合、コンテナの workspace では `src/atd/` に mount する。`ros build` は workspace の `src` を探索対象にする。直接 `colcon build` を使う場合も `--base-paths src` を明示する。詳しくは [構成規約](project_structure.md)を参照する。
+保存地図の点群取得に使う自作 `atd_mapping` も apt や Web 環境の同期だけでは build されない。初回は Notebook の Docker 内で `/workspaces/atd/scripts/build.sh --packages-up-to atd_mapping` を実行する。画像計算は NVIDIA の C++ component、ROS の監視・snapshot 採取は ROS 互換 Python の別プロセスが担当し、Web / Raceline 用 venv に `rclpy` を混在させない。
+自作 package の編集元はリポジトリの `ros2_ws/src/` とする。別の workspace を使う場合、コンテナの workspace では `src/atd/` に mount する。`build.sh` は workspace の `src` を探索対象にする。直接 `colcon build` を使う場合も `--base-paths src` を明示する。詳しくは [構成規約](project_structure.md)を参照する。
 workspace にリポジトリの `ros2_ws` を選ぶ場合は、同じソースが workspace の `src/` にそのまま見えるため、追加の source mount は使わない。Python 環境の用途名 `ros` と `train`、`docker/python/ros/` 等の依存定義の名前は変更しない。
 
 ## AI 学習環境との分離
@@ -87,6 +91,7 @@ bag の記録・ROS 2 API の使用と、抽出済みデータによる学習は
 ## 検証の範囲
 
 スクリプトの操作契約、環境の選択、lockfile と設定の整合を確認する自動テストと、Ubuntu / Jetson の Docker 内での import・GPU 演算は分けて記録する。
+Raceline の実 QP / IQP solver を使う小規模テストはローカルで確認した。これは対象 Docker 内の導入、ROS package build、実 GPU / bag での地図処理の動作確認とは別であり、それらは未検証である。
 対象機では ROS 2 用の `sys.executable`・`rclpy` import、CMake の Python 検出先、install 後の Python node 起動を確認する。学習用では ROS 2 の追加検索パスが混入していないことを確認し、framework を追加した段階で GPU 演算を別に検証する。
 
 ## 参照

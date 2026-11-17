@@ -90,7 +90,8 @@ class DockerStatusTests(unittest.TestCase):
         (self.project / 'config').mkdir()
         (self.project / 'ros2_ws/src').mkdir(parents=True)
         (self.project / 'ros2_ws/src/README.md').write_text('ROS package source fixture\n')
-        shutil.copytree(PROJECT / 'docker', self.project / 'docker')
+        shutil.copytree(PROJECT / 'docker', self.project / 'docker',
+                        ignore=shutil.ignore_patterns('.venv', '__pycache__'))
         self.script = self.project / 'scripts/docker.sh'
         shutil.copyfile(PROJECT / 'scripts/docker.sh', self.script)
         shutil.copyfile(PROJECT / 'scripts/detect_host.sh', self.project / 'scripts/detect_host.sh')

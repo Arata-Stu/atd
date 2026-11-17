@@ -9,6 +9,7 @@
 ## 1. 目的と初期構成
 
 - RC カーを用いた自動運転を実現する。
+- Tamiya 車両の Bluetooth コントローラによる手動運転から開発を進め、まず Jetson で求めたパルス幅指令を基板へ送信することを目標にする。パルス波形の生成は基板側で行う。
 - 第一想定のセンサ構成は RealSense D455 のみとする。
 - イベントカメラは今後使用しない。関連依存は環境構築・将来の追加候補から除外する。
 - 実走行は Jetson を搭載した RC カーで行う。
@@ -60,6 +61,8 @@
 - Joy による手動介入を想定し、DualSense を Bluetooth で Jetson に接続する予定とする。
 - Joy の操作割り当て、手動・自律の切替条件、停止・再開条件は後から決める。
 - Joy の入力監視と軸・ボタン配置の調整は、地図・転送・ライブ表示と同じ Web アプリから行えるようにする。プロポへの対応も将来の検討対象とし、機種・入力経路・切替条件は固定しない。
+- 入力取得・正規化と、操舵・スロットル・操作要求への役割割り当てを分ける。役割は設定で変更し、Jetson で入力・teleop を起動した後、Notebook の同じ入力画面から受信情報の監視と設定を行う。具体的な割り当ては初期値で固定しない。
+- 初回実装は `atd_interfaces` の運転要求・操作イベント型と `atd_teleop` を対象とする。正規化した要求は最終的な走行許可・PWM・実速度ではなく、出力許可判断、パルス幅変換、基板通信、rosbag 記録処理は後続実装で接続する。
 - ESC・ステアリングサーボの制御に PCA は使わず、独自 firmware で対応する予定とする。
 - firmware を実行するマイコン、Jetson との通信方式、出力経路、異常時の動作等の詳細は未決定である。
 
@@ -92,10 +95,11 @@
 
 1. RC カーを手動走行させ、Jetson で bag を記録する。
 2. 記録した bag をノート PC へ転送する。
-3. ノート PC で offline の地図作成を行う。
-4. 作成した地図を Jetson へ転送する。
+3. ノート PC の同じ Web UI で cuVSLAM / VGL 地図を準備し、保存地図と元 bag から表示用点群を取得する。
+4. 取得した点群を背景に HDMap を編集し、走行ラインを生成する。
+5. 作成した地図を Jetson へ転送する。
 
-地図作成は NVIDIA の公式 offline 処理を利用し、cuVSLAM / VGL で使う地図を準備する。HDMap の作成・編集と centerline / raceline / 必要に応じた custom line の生成も共通 Web アプリで扱う。
+地図作成は NVIDIA の公式 offline 処理を利用し、cuVSLAM / VGL で使う地図を準備する。保存地図への localize と点群 snapshot の取得、HDMap の作成・編集、centerline / raceline / 必要に応じた custom line の生成まで共通 Web アプリで扱う。駐車機能は対象に含めない。
 bag の Jetson → ノート PC、作成地図のノート PC → Jetson の転送は、SCP を簡単に実行できる機能として提供する。
 
 VGL モデルの準備・配備は、次の分担とする。
@@ -106,7 +110,7 @@ VGL モデルの準備・配備は、次の分担とする。
 
 保存先は [構成規約](project_structure.md#データの保存構成)に従い、元の入力、export 成果物、対象環境別 engine を分ける。操作は `scripts/vgl.sh` の fzf メニューから export・検証・SCP 転送・Jetson build へ進める。初期実装の対応モデル・形式とコマンドは [VGL モデルの手順](vgl_models.md)に記録し、対象 GPU / SDK と実 SCP を含む通し動作は未検証として扱う。
 
-bag の記録対象や各 bag の topic / frame は実データに合わせて確認する。HDMap の初期 schema とライン生成方式は Web アプリの README に記録し、走行開始時の自己位置推定や実地図・実車に応じた方式の具体化は後工程で検討する。
+bag の記録対象や各 bag の topic / frame は実データに合わせて確認する。HDMap の初期 schema と採用済みライン生成方式は 2.9 節と Web アプリの README に記録する。走行開始時の自己位置推定、実地図・実車での動作・性能確認は後工程で行う。
 
 ### 2.7. シェルスクリプト・TUI・ブラウザ UI の操作方針
 
@@ -118,7 +122,7 @@ bag の記録対象や各 bag の topic / frame は実データに合わせて�
 - UI はノート PC の Chrome のみ で `http://127.0.0.1:<port>` を開いて利用する。ここでの `127.0.0.1` はブラウザを実行するノート PC の loopback を指す。
 - Jetson では UI のブラウザ・frontend を起動しない。これは Jetson 側で必要なバックエンドや bridge を動かさないという意味ではない。
 - UI の追加でも、走行処理の Jetson 内完結、PC からの遠隔走行制御を行わないこと、車載 DDS の直接通信範囲の要件を維持する。
-- 基本機能は 2.9 節の地図・転送・ライブ表示・入力設定とする。UI サーバーの配置、ライブ観測・設定用の Jetson 接続方法、ポート、画面の詳細は実装時に決める。
+- 基本機能は 2.9 節の地図・転送・ライブ表示・入力設定とする。UI サーバーは Notebook の Docker 内、Jetson との観測・設定接続は SSH 経由の loopback HTTP とし、操作・既定ポートは Web アプリの README に記録する。個別の観測 topic・周期等は実 bringup に合わせて設定する。
 - setup・Docker・Python・VGL に加えて Web UI と Jetson 入力の起動入口を実装した。UI のローカル検証と Docker / ROS / GPU / 実機での結合確認は分けて扱う。
 
 ### 2.8. Docker 内の Python 環境
@@ -127,7 +131,7 @@ bag の記録対象や各 bag の topic / frame は実データに合わせて�
 - 用途ごとに Python 環境を分離し、ROS 2 用の追加依存と AI 学習用の依存を別の環境で管理する。
 - 具体的な学習 framework、Python / CUDA wheel の組み合わせや、その他の用途別環境は必要になった段階で決める。
 
-Notebook の VGL export は `vgl-export` の独立した固定依存を持つ。これは初期実装の用途別環境であり、AI 学習用 framework の採用とは分ける。
+Notebook の VGL export は `vgl-export`、Web API は `web`、Raceline の最小曲率・反復最小曲率 helper は Python 3.12 の `raceline` という独立した uv project / lock / venv を持つ。通常の `atd-web` 起動で `web` / `raceline` を同期し、QP / IQP 計算は別プロセスへ分離する。これらは AI 学習用 framework の採用とは分ける。
 
 用途別環境の構成・操作・実装上の制約は [Python 環境](python_environments.md) を参照する。ROS 2 package の CMake / `ament_cmake_auto` による build 方針は維持する。
 
@@ -137,14 +141,18 @@ Notebook の VGL export は `vgl-export` の独立した固定依存を持つ。
 
 | 機能 | ユーザーが明示した範囲 |
 | --- | --- |
-| 地図 | rosbag から NVIDIA 公式処理による cuVSLAM / VGL 用地図の準備、HDMap の作成・編集、centerline / raceline / 必要に応じた custom line の生成 |
+| 地図 | rosbag から NVIDIA 公式処理で cuVSLAM / VGL 地図を準備し、保存地図の localize と点群取得後に HDMap を編集。centerline / raceline / 必要に応じた custom line を生成。駐車機能は不要 |
 | Jetson との転送 | SCP を簡単に実行する UI。Jetson → ノート PC の rosbag 受信、ノート PC → Jetson の作成地図送信 |
 | ライブ表示・調整 | bringup 実行中の観測。地図走行時の地図と自己位置推定の表示、ROS 2 parameter の動的調整、速度等の時系列プロット |
-| 入力監視・設定 | Joy の入力監視と軸・ボタン配置調整を共通アプリへ統合。プロポ対応は将来検討 |
+| 入力監視・設定 | Jetson の Joy 入力監視、物理配置の調整、操舵・スロットル・操作要求への役割設定を共通アプリへ統合。プロポ対応は将来検討 |
+
+地図画面は cuVSLAM 地図作成、VGL 地図準備、保存地図からの点群取得、HDMap 編集を一つの流れとして提供する。元 bag と VGL 準備時の Notebook 用モデルを原則として自動選択し、前工程や資産対応に不備があれば理由と必要な操作を示す。NVIDIA 地図は点群取得前に編集・生成を開始せず、空の手動 HDMap は点群なしで編集できる。成功したジョブの表示は自動更新し、未保存編集は破棄しない。
+
+Centerline は **領域・等距離線（region）のみ** とし、方式選択は設けない。格子間隔の初期値は 0.02 m、点数上限は 800。Raceline は **mincurv（既定）/ mincurv_iqp のみ** とし、旧 paired Centerline・local Raceline は生成方式から除外する。Centerline / Raceline は閉路向けで、Raceline は保存済みの領域方式 Centerline を参照する。Customline は編集点列から生成する。駐車は含めず、これらの初期寸法・速度値を実車検証済みとは扱わない。
 
 Joy は Jetson に接続し、ノート PC のブラウザでその入力を監視・設定する。車載 ROS 2 / DDS への直接参加を PC に要求しない。
 parameter の調整や入力配置の設定は、PC から操舵・スロットルの連続指令を送る遠隔走行制御とは区別する。走行処理は引き続き Jetson 内で完結させる。
-動的変更の対象 parameter、値の範囲、変更可能な車両状態、保存・再起動後の扱い、Joy 設定の反映・出力再開条件は未決定である。
+Joy / teleop の初期設定は永続 profile の保存、設定モード中の再読込、全入力解放後の要求出力再開を別操作にする。この入力利用条件と、最終的な走行許可・実車の停止再開条件は区別する。その他の動的 parameter の対象・範囲・変更可能な車両状態・永続化は未決定である。
 bringup 実行中の可視化は今回の要件に含むが、アプリからの bringup 起動・終了操作の範囲は別途具体化する。
 
 ## 3. 技術調査メモ
@@ -218,7 +226,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - kart の地図作成は `ros2 run isaac_mapping_ros create_map_offline.py` を呼び、`edex / compute_poses` を実行する。NVIDIA の公式リポジトリにも同名スクリプトがある。
 - kart では cuVSLAM 保存地図、VGL bundle、HDMap 背景用の点群取得、HDMap 編集・ライン生成を別工程として実装している。ATD での具体的な工程・引数・モデル・資産形式は対象環境で確認する。
 - kart の Joy GUI は Studio とは別アプリで、Jetson の生入力・状態を表示し、プロファイルを保存・再読込する。入力取得・正規化と、車両動作への割り当ては別の責務である。
-- kart の設定モードや再開条件、地図 schema、ライン生成方式・既定値は参考実装として扱い、ATD で採用済みとはしない。今回の確認はソースの読み取りであり、ROS / GPU / 実 bag / 実機での実行検証は行っていない。
+- kart の設定モードや再開条件、全設定の一括移植は採用していない。ATD で採用する地図工程・ライン方式は 2.9 節に明記する。この調査時の確認はソースの読み取りであり、ROS / GPU / 実 bag / 実機での実行検証とは区別する。
 
 参照: [NVIDIA create_map_offline.py](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_mapping_and_localization/blob/main/isaac_mapping_ros/scripts/create_map_offline.py)、[kart 地図作成](https://github.com/Arata-Stu/kart/blob/e5224221733dd4271d7132d8febcb80e91916063/ros2_ws/src/kart_mapping/kart_mapping/build_map.py)、[kart VGL 準備](https://github.com/Arata-Stu/kart/blob/e5224221733dd4271d7132d8febcb80e91916063/ros2_ws/src/kart_bringup/kart_bringup/prepare_vgl_map.py)、[kart Joy](https://github.com/Arata-Stu/kart/blob/e5224221733dd4271d7132d8febcb80e91916063/ros2_ws/src/kart_joy/README.md)
 
@@ -234,8 +242,12 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 
 - React + TypeScript / Vite の frontend、FastAPI の backend、Web 非依存の geometry / ライン生成を `apps/web/` に実装した。framework と UI の Notebook 専用配置は採用済み。
 - Map / Transfer / Live / Input を統合する。地図・転送処理は独立 worker で実行し、結果先の `runs/web/` に設定・ジョブ状態・ログを保持する。
-- 地図作成は公式 `create_map_offline.py`、VGL 地図は公式 builder / `create_cuvgl_map.py` を呼ぶ。apt 導入、モデル資産、GPU engine、地図成果物を別に扱う。表示用点群の自動 snapshot 採取は未実装で、map 座標 JSON の明示インポートを提供する。
+- 地図作成は公式 `create_map_offline.py`、VGL 地図は公式 builder / `create_cuvgl_map.py` を呼ぶ。自作 `atd_mapping` が保存地図の作業コピーと元 bag を使い、VGL hint・localize 成功後の非空点群・軌跡・TF を採取する。完了時だけ snapshot を公開して編集可能にする。apt 導入、モデル資産、GPU engine、地図成果物、点群取得成功を別に扱う。
+- map identity・VGL との対応 hash・地図生成時の平面拘束設定がない旧資産は再生成を案内し、推測で補完・自動移行しない。新規地図は平面拘束を無効と明示して記録し、取得側にも同じ値を適用する。
+- Notebook の初回は Docker 内で `/workspaces/atd/scripts/build.sh --packages-up-to atd_mapping` が必要である。公式 apt や `web` / `raceline` の同期は自作 ROS package の build を代替しない。`atd-web check` で `atd_mapping` を含む導入状態を診断する。
+- Centerline の region と、独立した `raceline` 環境による mincurv / mincurv_iqp を実装した。旧 paired / local への fallback は設けない。単体テスト、小規模閉路で実 QP / IQP solver を使うテスト、frontend の型検査・build はローカルで確認した。
 - Jetson 側に C++ component の `atd_joy` と、観測・設定用の `atd_web_bridge` を追加した。Notebook API は SSH から Jetson loopback HTTP へアクセスし、車載 DDS に直接参加しない。
+- `atd_interfaces` に正規化運転要求と操作イベント、`atd_teleop` に設定可能な役割割り当てを追加した。Notebook の入力画面に物理配置と役割設定を統合し、保存済みと反映済みを区別する。操作要求の出力までで、最終走行許可・基板通信・rosbag の記録実行は未実装。仕様と検証境界は [atd_teleop](../ros2_ws/src/atd_teleop/README.md)を参照する。
 - Web UI は Notebook の Docker 内で `atd-web` を実行して起動し、ブラウザだけを Notebook ホストで開く。ホスト用の `scripts/webui.sh` は `docker exec` による補助入口とする。Jetson の入力起動は `scripts/input.sh`、手順・初期 schema・生成方式・制約は [Web アプリ](../apps/web/README.md)と package の README に記録する。
 - Docker build、ROS build / install、実 bag / GPU での公式処理、実 SCP、Bluetooth / evdev、実走行は対象機で別に確認する。ローカルのコード検証だけでこれらを検証済みとはしない。
 
@@ -263,7 +275,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 
 - Fast DDS の loopback UDP 設定について、探索・データ通信と外部インターフェースでの実通信を検証する。
 - Foxglove Bridge 等で PC に公開する観測情報と接続設定。
-- ノート PC の Chrome で利用するブラウザ UI の提供方法、サーバー配置、Jetson 側バックエンドとの接続方法。
+- Notebook Docker の Web API・地図処理と、SSH 経由の Jetson bridge 接続について、対象機での導入・実通信・操作を確認する。
 
 ### 5.2. 後工程で検討する項目
 
@@ -273,7 +285,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 2. 初期の走行場所・路面・目標速度・到達目標、障害物に対する停止 / 回避の範囲。
 3. D455 の各ストリームの利用・記録設定、撮影モード、取付姿勢と較正。
 4. DualSense の操作割り当て、手動 / 自律の切替と停止・再開条件、UI からの配置変更の反映条件。将来のプロポ対応機器・入力経路。
-5. cuVSLAM / VGL の公式地図作成の入力・手順、HDMap schema、ライン生成方式、走行開始時の自己位置推定。VGL モデル処理の対象機での互換性、SCP の実接続と転送後の利用、成果物の対応管理。
+5. 採用済み cuVSLAM / VGL・点群取得・region / mincurv / mincurv_iqp の対象機・実 bag での結合確認、HDMap schema の拡張、実車の性能、走行開始時の自己位置推定。VGL モデルの GPU / SDK 互換性、SCP の実接続と転送後の利用、成果物の対応管理。
 6. 個別パッケージの責務、通信契約、性能目標と検証手順。
 7. ライブ表示の項目・周期・時刻と座標系、動的 parameter の対象・範囲・適用条件・永続化。
 
@@ -299,6 +311,8 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 | `../config/storage.env.example` | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
 
 ## 7. 更新履歴
+
+- 2026-11-17: 地図画面を cuVSLAM / VGL 準備、保存地図の localize と自動点群取得、HDMap 編集へ接続した。駐車を除外し、Centerline は region、Raceline は mincurv（既定）/ mincurv_iqp に限定。独立した raceline 環境、atd_mapping の初回 build、旧資産の再生成条件と実機検証境界を記録した。
 
 - 2026-11-17: React + TypeScript / Vite と FastAPI の採用、UI の Notebook 専用利用を確定。共通 Web アプリ、Jetson の入力・観測設定 bridge、Docker 追加依存と起動入口を初期実装し、未検証の実機項目を区別した。
 

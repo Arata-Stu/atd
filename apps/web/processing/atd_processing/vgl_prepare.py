@@ -18,9 +18,11 @@ sys.path.insert(0, str(REPO))
 from tools.vgl.bundle import validate_bundle, sha256, write_json, model_root, utc_now
 from tools.vgl.build_engine import inspect_engine, package_paths
 if __package__:
-    from .vgl_transaction import check_preparable, recover, publish
+    from .vgl_transaction import check_preparable, recover, publish, fingerprint
+    from .vgl_assets import validate_runtime_layout
 else:
-    from vgl_transaction import check_preparable, recover, publish
+    from vgl_transaction import check_preparable, recover, publish, fingerprint
+    from vgl_assets import validate_runtime_layout
 
 
 def gpu_identity():
@@ -52,6 +54,8 @@ def prepare(results, map_id, model_relative):
     folder = results / 'maps' / map_id
     recover(folder)
     check_preparable(folder)
+    source_map_hash = fingerprint(folder / 'nvidia/cuvslam_map')
+    source_frames_hash = sha256(folder / 'nvidia/map_frames/rectified/frames_meta.json')
     bundle = results / model_relative
     if not bundle.resolve().is_relative_to(results) or bundle.is_symlink():
         raise ValueError('モデルは結果保存先内の export bundle を選択してください')
@@ -110,10 +114,15 @@ def prepare(results, map_id, model_relative):
         run(['ros2', 'run', 'isaac_ros_visual_mapping', 'create_cuvgl_map.py', f'--map_folder={output}',
              f'--raw_image_folder={folder / "nvidia/map_frames/rectified"}', f'--config_folder_path={config}',
              f'--model_dir={engines}', f'--binary_folder_path={binaries}', '--feature_type=aliked', '--extract_feature', '--build_bow_index'])
-        if not output.is_dir() or not any(p.is_file() and p.stat().st_size for p in output.rglob('*')):
-            raise ValueError('VGL の非空成果物がありません')
+        validate_runtime_layout(output, config, engines,
+            manifest['files']['models/aliked_lightglue/aliked.onnx']['sha256'])
+        if (fingerprint(folder / 'nvidia/cuvslam_map') != source_map_hash
+                or sha256(folder / 'nvidia/map_frames/rectified/frames_meta.json') != source_frames_hash):
+            raise ValueError('VGL 生成中に元地図または保存画像・pose が変更されました')
         publish(folder, config, output, dict(model_export=model_relative,
             runtime_model_dir=str(engines.relative_to(results)), input_shape=shape,
+            cuvslam_sha256=source_map_hash, frames_meta_sha256=source_frames_hash,
+            config_sha256=fingerprint(config), cuvgl_sha256=fingerprint(output),
             bundle_sha256=report['bundle_sha256'], asset_id=manifest['asset_id'],
             export_id=manifest['export_id'], completed_at=utc_now()))
 

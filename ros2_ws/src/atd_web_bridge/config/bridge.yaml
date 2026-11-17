@@ -11,6 +11,9 @@
     joy_status_topic: /joy/status
     joy_node: /atd_joy_node
     profile_path: /data/results/runs/input/dualsense.yaml
+    teleop_node: /atd_teleop_node
+    teleop_status_topic: /teleop/status
+    teleop_profile_path: /data/results/runs/input/teleop.yaml
     parameter_node_prefix: /atd_
     # 実際の対象nodeとparameter名を明示する。既定では変更を許可しない。
     parameter_allowlist_json: '{}'

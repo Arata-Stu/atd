@@ -10,15 +10,16 @@ Docker 設定を更新した場合は、利用中の処理を終了してイメ�
 ```bash
 # Notebook のホスト: Docker を起動・入室（初回・設定変更時は --build）
 ./scripts/dev.sh --build
-# ここから Notebook の Docker 内
+# ここから Notebook の Docker 内。初回・自作package更新時に実行
+/workspaces/atd/scripts/build.sh --packages-up-to atd_mapping
 atd-web
 ```
 
-ブラウザは Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。FastAPI・frontend の build / 配信・地図作成等のジョブは Notebook の Docker 内で実行する。`atd-web` は専用の `web` 用 uv 環境を同期・選択して API を起動する。初回は frontend 依存の同期と build を行い、以後はソースの変更時だけ再buildする。source は readonly mount のまま、`node_modules` と `dist` は選択した workspace の `.atd-web/frontend/` へ生成する。
+ブラウザは Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。FastAPI・frontend の build / 配信・地図作成等のジョブは Notebook の Docker 内で実行する。`atd-web` は専用の `web` 用 uv 環境を同期・選択して API を起動する。Raceline の最小曲率計算用には、独立した Python 3.12 の `raceline` 環境も同期する。初回は frontend 依存の同期と build を行い、以後はソースの変更時だけ再buildする。source は readonly mount のまま、`node_modules` と `dist` は選択した workspace の `.atd-web/frontend/` へ生成する。
 
 ```bash
 # Notebook の Docker 内
-atd-web check                     # Web 環境と公式 ROS package を確認
+atd-web check                     # Web / Raceline環境、公式ROS packageとatd_mappingを確認
 atd-web build                     # frontend を明示的に再build
 atd-web dev                       # 開発用 UI: http://127.0.0.1:5173
 atd-web --port 8769                # 通常 UI / API の port を変更
@@ -29,17 +30,38 @@ atd-web --dry-run                 # 起動予定を表示
 
 コンテナ・センサ・車両・記録はこの入口では自動起動しない。API は loopback 待受。通常利用はビルド済み frontend と API を同じ origin で配信する。
 
+公式 package の apt 導入だけでは、自作の `atd_mapping` は build されない。上記の ROS build は Notebook の workspace で初回に必要で、`atd-web` が自動で代替する処理ではない。`atd-web check` は ROS と workspace の setup を読み込んで package の導入状態を確認する。環境や package が未準備なら `FAIL` と表示する。
+
 ## Map
 
-- `/data/record/rosbags/` の bag を一覧から選び、地図 ID、左右画像・CameraInfo の topic、base / optical frame を指定する。NVIDIA の `isaac_mapping_ros/create_map_offline.py` を別 worker で呼ぶ。
-- 結果は `/data/results/maps/<id>/nvidia/`。公式の `cuvslam_map/`、`map_frames/` 等の内部名称を維持する。
-- VGL 用地図は、Notebook で用意した export bundle を選択し、Notebook の GPU 用 engine を準備した上で公式 `create_cuvgl_map.py` を実行する。model 資産側の engine と地図の `cuvgl_map/` は別に管理する。Notebook の engine を Jetson 用として転送しない。
-- 空の HDMap を作成し、左右境界と Custom 点列を Canvas で編集・保存できる。map frame の JSON 点群をインポートして背景表示する API も提供する。
-- Centerline は左右境界の弧長対応、Raceline は領域・余裕を守る簡易平滑化、Custom は編集点の弧長再サンプリング。曲率と加減速の制約から目標速度を付ける。自己交差・領域外・余裕不足を拒否し、生成結果には方式と設定を記録する。最短ラップ最適化や実車の操舵・制動性能の検証を意味しない。
-- 車幅・余裕・速度・加速度の初期値は車両の実測値として確定したものではない。使用する車両・走行条件に合わせて画面で設定する。
-- 編集正本は `hdmap/map.json`、生成物は `lines/`。revision で保存競合を検出し、境界変更で既存ラインを失効させる。
+同じ Map 画面で、次の順に進める。駐車機能は対象に含めない。
 
-公式地図生成が成功しても、HDMap 表示用点群の取得済みとは扱わない。現実装では保存地図への bag 再生・localize 成功確認・点群 snapshot 採取の自動工程は含まず、点群の明示インポートを用いる。
+1. **cuVSLAM 地図を作成**: `/data/record/rosbags/` の bag、地図 ID、左右画像・CameraInfo の topic、base / optical frame を指定する。NVIDIA の `isaac_mapping_ros/create_map_offline.py` を独立 worker で呼び、`maps/<id>/nvidia/` に公式の `cuvslam_map/`・`map_frames/` 等の構成を維持して保存する。
+2. **VGL 地図を準備**: Notebook の export bundle を指定し、この PC の GPU 用 engine を準備してから公式 `create_cuvgl_map.py` を実行する。model 資産側の engine と地図の `cuvgl_map/` は別に保持する。Notebook engine を Jetson 用として転送しない。
+3. **保存地図から点群を取得**: 「保存地図から点群を取得」で、元 bag と VGL 準備時の Notebook 用モデルを自動選択する。必要なら詳細で選び直す。地図・保存画像・モデル・入力画像サイズ等の対応、ROS と `atd_mapping` の導入を開始前に検査し、不備は理由と前工程への案内を表示する。
+4. **HDMap を編集**: 取得後の点群を背景に、左右境界と Custom 点列を Canvas で編集・保存し、走行ラインを生成する。処理成功後は選択中の地図と背景・ラインを自動更新する。未保存編集や別地図への選択変更を、ジョブ完了で破棄しない。
+
+点群取得では元の保存地図を作業用に複製し、元 bag の画像を再生する。[atd_mapping](../../ros2_ws/src/atd_mapping/README.md) が VGL の姿勢 hint と保存地図への localize 成功を確認し、その成功区間の非空点群・軌跡と TF を採取する。点群が既に `map` frame なら再変換せず、それ以外では確認した TF を一度だけ適用する。TF 不足や自己位置未確定を原点・identity 変換で補わない。点群は全地図の landmark 網羅性を保証せず、採用時刻・入力末尾との差等は provenance に残す。
+
+成功した snapshot と manifest を `hdmap/captures/<capture_id>/` に保存し、revision と `source.pointcloud_status=ready` を更新してから編集可能にする。公式地図の生成成功と、表示用点群の取得成功は別の状態である。NVIDIA 地図は点群取得前の編集・ライン生成を禁止する。空の HDMap は手動編集を開始でき、任意の背景として `map` 座標・メートル単位の JSON 点群を読み込める。
+
+cuVSLAM 地図の内容 hash、VGL 地図・保存画像・モデルの対応情報、地図生成時の平面拘束設定がない旧資産は、開始前の検査で再生成を案内する。未記録値の推測や既存資産の自動移行は行わない。新規地図は平面拘束を無効と明示して記録し、点群取得もその記録と同じ設定を使う。
+
+### ライン生成
+
+| ライン | 採用する方式 | 初期値・条件 |
+| --- | --- | --- |
+| Centerline | 領域・等距離線（`region`）のみ | 格子間隔 0.02 m、点数上限 800、閉路のみ。方式の選択欄は設けない |
+| Raceline | 最小曲率（`mincurv`）、反復最小曲率（`mincurv_iqp`）のみ | 既定は `mincurv`。保存済みの領域方式 Centerline を参照し、閉路で生成する |
+| Customline | 編集点列から生成 | 開路・閉路に対応。指定した車体・余裕を検査し、曲率から速度を制限する |
+
+左右境界の弧長対応を使う旧 Centerline（`paired`）と、簡易平滑化の旧 Raceline（`local`）は生成方式から除外した。依存不足や最適化失敗で別方式へ切り替えない。旧生成線の表示は可能だが、旧 Centerline を Raceline の参照に使う場合は領域方式で再生成する。
+
+自己交差・領域外・車幅と余裕・長方形車体を検査し、Raceline には曲率上限も適用する。各線の曲率と加減速制約から目標速度を付ける。点間隔の初期値は 0.10 m。車幅・全長・余裕・速度・加速度の初期値は実測値として確定したものではなく、車両・走行条件に合わせて設定する。最短ラップや実車の操舵・制動性能の検証を意味しない。
+
+補正 `tph_full_curvature_jacobian_v1` は、[TPH 原実装](https://github.com/TUMFTM/trajectory_planning_helpers/blob/master/trajectory_planning_helpers/opt_min_curv.py)の接線・分母を固定する曲率近似が円環を内側へ縮める場合を修正する。TPH の spline・quadprog・[IQP 反復](https://github.com/TUMFTM/trajectory_planning_helpers/blob/master/trajectory_planning_helpers/iqp_handler.py)と幅・曲率制約を維持し、曲率の完全な一次微分を用いた基準弧長重みの曲率二乗 QP とする。出力は点数に依存する単純和ではなく3点曲率と弧長の台形和による近似 `∫κ² ds` [1/m] で保存済み Centerline と比較し、増加する候補を拒否する。単純閉路の符号付き `∫κ ds ≈ ±2π` はこの最小化目的とは異なる。補正 ID・目的・比較指標・検査による縮小倍率を metadata に記録し、IQP の検査縮小は最終反復だけでなく初期 spline からの累積移動全体へ適用する。いずれも局所近似と保守的な検査を経た候補であり、大域最適解は保証しない。
+
+編集正本は `hdmap/map.json`、生成物は `lines/`。revision で保存競合を検出し、境界変更で既存ラインを失効させる。QP / IQP は `docker/python/raceline/` の独立した uv 環境の別プロセスで計算し、Web API・ROS の依存へ混在させない。
 
 ## Transfer
 
@@ -51,21 +73,31 @@ Jetson の SSH host・user・port、bag root と map root を画面で設定す�
 
 ## Live / Input
 
-Jetson で自作 ROS package を build し、入力と bridge を明示的に起動する。
+Jetson で自作 ROS package を build し、入力・teleop 操作要求・bridge を明示的に起動する。
 
 ```bash
 # Jetson の起動済み ATD コンテナを利用
-./scripts/python.sh ros build -- --packages-up-to atd_web_bridge
+./scripts/build.sh --packages-up-to atd_web_bridge
 ./scripts/input.sh
 ```
 
 Joy が既に起動済みなら `./scripts/input.sh --bridge-only`。bridge の設定は [atd_web_bridge](../../ros2_ws/src/atd_web_bridge/README.md) を参照する。既定 topic は実際の bringup の topic・型へ合わせる必要がある。bridge の設定ファイルを用意して `./scripts/input.sh config:=/absolute/path/bridge.yaml` で指定できる。
+`--bridge-only` は teleop も起動しない。物理入力と bridge だけを起動する場合は `./scripts/input.sh teleop:=false`。通常起動でも基板出力・bag 記録は実行しない。
 
 Notebook backend は SSH 経由で Jetson の `127.0.0.1:8790` へ接続する。Notebook は車載 DDS に参加しない。Live では地図・pose・軌跡・速度の観測と ROS parameter の読書きを扱い、欠落・古いデータは表示で区別する。
 
 parameter の閲覧は node prefix、変更は node と parameter 名の allowlist で指定する。既定では変更許可なし。descriptor の型・範囲・read_only を検査し、atomic 変更後の値を再取得する。変更を永続 YAML へ自動保存しない。
 
-Input は Jetson に Bluetooth 接続した DualSense の生入力・正規化入力・接続状態と物理的な軸・ボタン配置を扱う。設定開始、profile 保存、再読込、入力出力再開を別操作とする。車両の動作割り当て・走行許可とは別の入力層である。詳細は [atd_joy](../../ros2_ws/src/atd_joy/README.md)。プロポの機器・入力経路は未決定で、対応済みとは表示しない。
+Input は Jetson に Bluetooth 接続した DualSense の生入力・正規化入力・接続状態と、物理配置・操作の役割を同じ画面で扱う。Bluetooth のペアリングは Jetson ホスト側で行う。ブラウザの Gamepad API や Notebook 接続のコントローラは使わない。
+
+1. Jetson のホストでコントローラを Bluetooth 接続し、Docker 起動後に上記の build と `scripts/input.sh` を実行する。
+2. Notebook の Docker で `atd-web` を実行し、Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。「データ転送」で Jetson の SSH 接続先を設定する。
+3. 「入力」のモニターで Jetson が受け取った信号を確認する。「軸・ボタンの配置」は evdev 入力から標準軸・ボタンへの物理配置を設定する。設定開始 → 保存 → 再読込 → 全入力を離して Joy 出力を再開する。
+4. 同じ画面の操作割り当てで操舵・スロットル・操作要求の役割を設定する。こちらも設定開始 → 保存 → 再読込 → 全入力を離して操作要求の出力を再開する。二つの設定モードは独立しており、Joy 側が設定中なら teleop の要求も無効になる。
+
+物理配置は `/data/results/runs/input/dualsense.yaml`、役割設定は `/data/results/runs/input/teleop.yaml` に永続保存する。役割の初期値はすべて未割り当て。操舵・スロットルは標準軸と差し引く軸、倍率（負値で反転）を選択でき、ボタンは出力許可の要求・記録開始要求・記録終了要求へ割り当てる。保存済みと node への反映済みを区別し、未保存の編集中に監視更新で内容を置き換えない。接続先や bridge が変わった場合は設定を再取得してから操作する。
+
+`atd_teleop` が生成するのは正規化した運転要求と操作イベント。`valid` や `enable_requested` は最終的な走行許可ではない。記録ボタンも現段階では要求イベントの生成までで、rosbag は開始しない。出力許可判断・基板通信・パルス生成は後続実装。詳細は [atd_joy](../../ros2_ws/src/atd_joy/README.md)、[atd_teleop](../../ros2_ws/src/atd_teleop/README.md)、[atd_interfaces](../../ros2_ws/src/atd_interfaces/README.md)を参照する。プロポは機器・入力経路が未決定で、未実装。
 
 ## 構成と依存
 
@@ -74,15 +106,18 @@ Input は Jetson に Bluetooth 接続した DualSense の生入力・正規化�
 | `frontend/` | React / TypeScript / Vite。依存は pnpm lock で固定 |
 | `backend/` | FastAPI、資産・設定・ジョブ管理、SCP、公式 ROS CLI、Jetson 接続 |
 | `processing/` | Web に依存しない HDMap 幾何処理・ライン生成 |
+| `../../ros2_ws/src/atd_mapping/` | 保存地図の localize と点群 snapshot の取得 |
 | `../../ros2_ws/src/atd_web_bridge/` | Jetson の ROS 観測・設定と loopback HTTP |
 | `../../ros2_ws/src/atd_joy/` | evdev の入力取得・正規化を行う C++ component |
+| `../../ros2_ws/src/atd_teleop/` | 軸・ボタンの役割を設定し、運転要求と操作イベントを生成する C++ component |
+| `../../ros2_ws/src/atd_interfaces/` | 正規化した運転要求・操作イベントの ROS message 定義 |
 
 Docker の追加 apt 依存は [dependencies.apt](../../docker/dependencies.apt)、追加処理は [Dockerfile.atd](../../docker/Dockerfile.atd)。cuVSLAM・公式 mapping・visual mapping・VGL の apt package を使う。Node / pnpm と Web 用 Python 環境は Notebook 専用で、Jetson の通常起動では Web 依存を同期しない。
 
-Docker の Web 用 Python は `docker/python/web/` の独立した uv project / lock と、workspace の `.atd-python/<architecture>/web` を使う。API は ROS の `PYTHONPATH` を引き継がず、公式 CLI を実行する子プロセスでだけ ROS 環境を読み込む。ローカル開発用には `backend/pyproject.toml` と `uv.lock` があり、`processing` をローカル依存として参照する。
+Docker の Web 用 Python は `docker/python/web/` の独立した uv project / lock と、workspace の `.atd-python/<architecture>/web` を使う。最小曲率 helper は `docker/python/raceline/` と `.atd-python/<architecture>/raceline` の Python 3.12 環境を使い、通常の `atd-web` 起動で同期する。API は ROS の `PYTHONPATH` を引き継がず、公式 CLI を実行する子プロセスでだけ ROS 環境を読み込む。ローカル開発用には `backend/pyproject.toml` と `uv.lock` があり、`processing` をローカル依存として参照する。
 
 モデルのダウンロードや対象 GPU の engine build は、apt インストール成功とは別の操作・検証である。公式手順: [cuVSLAM](https://nvidia-isaac-ros.github.io/v/release-5.0/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_cuvslam/index.html)、[地図作成](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/visual_global_localization/tutorials/tutorial_map_creation.html)。
 
 ## 検証の境界
 
-ローカルの API・ファイル保存・geometry・worker・SSH 引数・入力 profile・キャッシュのテストと、frontend の型検査・build を実行する。Docker image build、NVIDIA GPU と実 bag の公式処理、実 SCP、ROS build / service、Bluetooth / evdev、車両の実走行は対象機で別に確認する。
+ローカルの API・保存競合・capture の資産整合と成功条件・geometry・worker・SSH 引数・入力 profile の単体テスト、実際の QP / IQP solver を使う小規模閉路テスト、frontend の型検査・build を確認した。teleop の C++ 単体検証、役割設定・bridge/API の単体テスト、疑似 Jetson データを使ったブラウザの保存・再読込・要求出力再開も確認した。実 GPU と実 bag による地図作成・localize・点群取得、ROS package の build / install・型生成・service 結合、Docker image build、実 SCP、Bluetooth / evdev、実走行は未検証であり、対象機で別に確認する。

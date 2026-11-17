@@ -1,0 +1,8 @@
+/**/atd_teleop_node:
+  ros__parameters:
+    use_sim_time: false
+    profile_path: /data/results/runs/input/teleop.yaml
+    start_configuring: false
+    input_timeout_s: 0.25
+    status_timeout_s: 2.5
+    publish_rate_hz: 100.0

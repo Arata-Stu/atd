@@ -64,7 +64,8 @@ args = sys.argv[1:]
 with open(os.environ['ATD_TEST_CALLS'], 'a') as stream:
     stream.write(json.dumps({'tool':tool,'args':args,'cwd':os.getcwd(),
         'pythonpath':os.environ.get('PYTHONPATH'), 'api_target':os.environ.get('ATD_API_TARGET'),
-        'web_environment':os.environ.get('ATD_TEST_WEB_ENVIRONMENT')})+'\n')
+        'web_environment':os.environ.get('ATD_TEST_WEB_ENVIRONMENT'),
+        'raceline_python':os.environ.get('ATD_RACELINE_PYTHON')})+'\n')
 if tool == 'uname':
     print('Linux' if args == ['-s'] else os.environ.get('ATD_TEST_ARCH','x86_64'))
 elif tool == 'rsync':
@@ -79,6 +80,17 @@ elif tool == 'pnpm':
     if args and args[0] == 'dev':
         sys.exit(int(os.environ.get('ATD_TEST_DEV_EXIT','0')))
 elif tool == 'atd-python':
+    if args == ['raceline','sync']:
+        failure = int(os.environ.get('ATD_TEST_RACELINE_SYNC_EXIT','0'))
+        if failure:
+            sys.exit(failure)
+        helper = pathlib.Path(os.environ['ISAAC_ROS_WS']) / '.atd-python/x86_64/raceline/bin/python'
+        helper.parent.mkdir(parents=True,exist_ok=True)
+        helper.write_text('#!/bin/sh\nexit 0\n')
+        helper.chmod(0o755)
+        sys.exit(0)
+    if args in (['web','check'],['raceline','check']):
+        sys.exit(0)
     assert args[:3] == ['web','run','--']
     if os.environ.get('ATD_TEST_WEB_SYNC_EXIT'):
         sys.exit(int(os.environ['ATD_TEST_WEB_SYNC_EXIT']))
@@ -88,6 +100,8 @@ elif tool == 'atd-python':
     os.execvpe(args[3], args[3:], environment)
 elif tool == 'python':
     assert os.environ.get('ATD_TEST_WEB_ENVIRONMENT') == 'active', 'system Python must not start the API'
+    helper = pathlib.Path(os.environ['ATD_RACELINE_PYTHON'])
+    assert helper.is_file() and os.access(helper,os.X_OK), 'dedicated helper executable must reach the API'
     assert args[:3] == ['-m','uvicorn','atd_api.main:create_app']
     assert args[args.index('--host')+1] == '127.0.0.1'
     sys.exit(int(os.environ.get('ATD_TEST_SERVER_EXIT','0')))
@@ -117,6 +131,7 @@ class ContainerWebTests(unittest.TestCase):
         self.env = {**os.environ, 'PATH': str(self.bin)+os.pathsep+os.defpath,
                     'ATD_PROJECT_DIR': str(self.project), 'ISAAC_ROS_WS': str(self.workspace),
                     'ATD_TEST_CALLS': str(self.calls_file)}
+        self.env.pop('ATD_RACELINE_PYTHON', None)
 
     def invoke(self, *args, **env):
         return subprocess.run(['/bin/bash', str(PROJECT/'docker/scripts/atd-web.sh'), *args],
@@ -143,7 +158,8 @@ class ContainerWebTests(unittest.TestCase):
     def test_direct_container_entry_activates_web_environment_before_api(self):
         result = self.invoke('serve', PYTHONPATH='/opt/ros/lyrical/lib/python3.12/site-packages')
         self.assertEqual(result.returncode, 0, result.stderr)
-        activation, = self.calls('atd-python')
+        activation, = [call for call in self.calls('atd-python') if call['args'][:2] == ['web','run']]
+        self.assertEqual(self.calls('atd-python')[0]['args'], ['raceline','sync'])
         self.assertEqual(activation['args'][:4], ['web', 'run', '--', 'env'])
         api, = self.calls('python')
         self.assertEqual(api['web_environment'], 'active')
@@ -154,6 +170,56 @@ class ContainerWebTests(unittest.TestCase):
     def test_web_environment_failure_stops_before_api_start(self):
         result = self.invoke('serve', ATD_TEST_WEB_SYNC_EXIT='9')
         self.assertEqual(result.returncode, 9, result.stderr)
+        self.assertEqual(self.calls('python'), [])
+
+    def test_default_helper_sync_creates_dedicated_executable_and_exports_it(self):
+        result = self.invoke('serve')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        helper = self.workspace / '.atd-python/x86_64/raceline/bin/python'
+        self.assertTrue(helper.is_file())
+        self.assertTrue(os.access(helper, os.X_OK))
+        self.assertEqual([call['args'][:2] for call in self.calls('atd-python')],
+                         [['raceline', 'sync'], ['web', 'run']])
+        api, = self.calls('python')
+        self.assertEqual(api['raceline_python'], str(helper))
+        self.assertNotEqual(api['raceline_python'], str(self.bin / 'python'))
+
+    def test_helper_sync_failure_stops_api_without_falling_back(self):
+        result = self.invoke('serve', ATD_TEST_RACELINE_SYNC_EXIT='13')
+        self.assertEqual(result.returncode, 13, result.stderr)
+        self.assertEqual([call['args'] for call in self.calls('atd-python')], [['raceline', 'sync']])
+        self.assertEqual(self.calls('python'), [])
+        self.assertFalse((self.workspace / '.atd-python/x86_64/raceline/bin/python').exists())
+
+    def test_helper_override_skips_sync_and_is_preserved_in_api_environment(self):
+        helper = self.root / 'custom helper with spaces'
+        helper.write_text('#!/bin/sh\nexit 0\n')
+        helper.chmod(0o755)
+        result = self.invoke('serve', ATD_RACELINE_PYTHON=str(helper), ATD_TEST_RACELINE_SYNC_EXIT='13')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call['args'][:2] for call in self.calls('atd-python')], [['web', 'run']])
+        self.assertEqual(self.calls('python')[0]['raceline_python'], str(helper))
+        self.assertFalse((self.workspace / '.atd-python').exists())
+
+    def test_missing_or_nonexecutable_helper_override_does_not_start_api(self):
+        missing = self.root / 'missing helper'
+        not_executable = self.root / 'not executable'
+        not_executable.write_text('helper')
+        not_executable.chmod(0o644)
+        for helper in (missing, not_executable, self.bin):
+            with self.subTest(helper=helper):
+                self.calls_file.unlink(missing_ok=True)
+                result = self.invoke('serve', ATD_RACELINE_PYTHON=str(helper))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('helper', result.stderr)
+                self.assertEqual(self.calls('atd-python'), [])
+                self.assertEqual(self.calls('python'), [])
+
+    def test_build_only_does_not_sync_numerical_helper_or_start_api(self):
+        result = self.invoke('build', ATD_TEST_RACELINE_SYNC_EXIT='13')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.workspace / '.atd-web/frontend/dist/index.html').exists())
+        self.assertEqual(self.calls('atd-python'), [])
         self.assertEqual(self.calls('python'), [])
 
     def test_invalid_port_and_jetson_are_rejected_before_build(self):

@@ -26,6 +26,9 @@ def execute(store, task, action, payload):
     if action == 'vgl':
         from .offline import vgl_build
         return vgl_build(store, task, payload)
+    if action == 'capture':
+        from .capture import capture
+        return capture(store, task, payload)
     if action == 'pull':
         from .transfers import pull
         return pull(store, task, payload['connection'], payload['relative'])
@@ -59,7 +62,7 @@ def main():
         except Cancelled as error:
             task.state.update(status='cancelled', message=str(error))
         except BaseException as error:
-            task.state.update(status='failed', message=str(error))
+            task.state.update(status='failed', message=str(error), diagnostic=getattr(error, 'diagnostic', None))
             import traceback
             traceback.print_exc()
         finally:

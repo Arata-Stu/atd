@@ -58,7 +58,7 @@ def map_build(store, task, payload):
         nvidia.mkdir()
         command = ['ros2', 'run', 'isaac_mapping_ros', 'create_map_offline.py', f'--sensor_data_bag={bag}',
             f'--base_output_folder={nvidia}', f'--camera_topic_config={config}', f"--base_link_name={payload['base_frame']}",
-            '--use_raw_image=False', '--steps_to_run', 'edex', 'compute_poses']
+            '--use_raw_image=False', '--override', 'cuvslam.cfg_planar=false', '--steps_to_run', 'edex', 'compute_poses']
         task.run(command, env=dict(os.environ, ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST', ROS_DOMAIN_ID='93'))
         candidates = sorted({p.resolve() for p in nvidia.rglob('cuvslam_map') if p.is_dir()})
         if len(candidates) != 1 or not candidates[0].is_relative_to(nvidia):
@@ -76,7 +76,8 @@ def map_build(store, task, payload):
         task.check()
         document = blank(key)
         document['source'] = dict(kind='nvidia_offline', bag=payload['bag'], frame='map', pointcloud_status='pending',
-                                 metadata_sha256=hashlib.sha256((bag / 'metadata.yaml').read_bytes()).hexdigest(), inputs=payload)
+                                 metadata_sha256=hashlib.sha256((bag / 'metadata.yaml').read_bytes()).hexdigest(), inputs=payload,
+                                 mapping_options=dict(ground_constraint=False))
         atomic_json(stage / 'hdmap/map.json', document)
         atomic_json(stage / 'mapping.json', dict(command=command, source=document['source'], completed=time.time()))
         target = confined(store.maps_root, key, exists=False)

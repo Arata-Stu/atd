@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from atd_web_bridge.core import Cache, ProfileStore, prepare_parameter_value
+from atd_web_bridge.core import Cache, ProfileStore, TeleopProfileStore, prepare_parameter_value
 
 
 class CacheTests(unittest.TestCase):
@@ -45,6 +45,60 @@ class CacheTests(unittest.TestCase):
             state['status']['stale'] = True
             with self.assertRaises(ValueError):
                 store.write(original['profile'], original['revision'], state)
+
+    def test_teleop_cache_does_not_report_stale_node_as_ready(self):
+        cache = Cache()
+        self.assertEqual(cache.teleop_status()['availability']['status'], 'missing')
+        cache.put('teleop_status', {'ready': True, 'configuring': False})
+        self.assertTrue(cache.teleop_status()['ready'])
+        with patch('atd_web_bridge.core.time.monotonic', return_value=10**12):
+            result = cache.teleop_status()
+        self.assertFalse(result['ready'])
+        self.assertIsNone(result['configuring'])
+        self.assertEqual(result['availability']['status'], 'stale')
+
+    def test_teleop_saved_profile_is_not_assumed_active(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = TeleopProfileStore(Path(folder) / 'teleop.yaml')
+            original = store.read()
+            self.assertFalse(original['saved'])
+            state = {'status': {'stale': False, 'configuring': True, 'profile_valid': False,
+                                'profile_path': str(store.path), 'profile': original['profile']}}
+            value = original['profile']
+            value['axes']['steering']['axis'] = 'left_x'
+            value['axes']['throttle']['axis'] = 'r2'
+            result = store.write(value, original['revision'], state)
+            self.assertTrue(result['saved'])
+            self.assertFalse(store.read(state)['applied'])
+            state['status'].update(profile_valid=True, profile=value)
+            self.assertTrue(store.read(state)['applied'])
+            state['status']['profile']['axes']['throttle']['axis'] = 'left_y'
+            self.assertFalse(store.read(state)['applied'])
+
+    def test_teleop_edits_require_current_config_mode_path_and_revision(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = TeleopProfileStore(Path(folder) / 'teleop.yaml')
+            original = store.read()
+            state = {'status': {'stale': False, 'configuring': True, 'profile_path': str(store.path)}}
+            for changes in ({'stale': True}, {'configuring': False}, {'profile_path': '/different/profile.yaml'}):
+                with self.subTest(changes=changes), self.assertRaises(ValueError):
+                    store.write(original['profile'], original['revision'], {'status': {**state['status'], **changes}})
+            with self.assertRaises(ValueError):
+                store.write(original['profile'], 'outdated_revision', state)
+            self.assertFalse(store.path.exists())
+
+    def test_teleop_rejects_invalid_mapping_without_overwriting_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = TeleopProfileStore(Path(folder) / 'teleop.yaml')
+            original = store.read()
+            state = {'status': {'stale': False, 'configuring': True, 'profile_path': str(store.path)}}
+            store.write(original['profile'], original['revision'], state)
+            contents = store.path.read_bytes()
+            value = store.read()['profile']
+            value['axes']['steering']['scale'] = float('nan')
+            with self.assertRaises(ValueError):
+                store.write(value, store.read()['revision'], state)
+            self.assertEqual(store.path.read_bytes(), contents)
 
 
 if __name__ == '__main__':

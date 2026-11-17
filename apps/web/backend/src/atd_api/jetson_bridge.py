@@ -20,7 +20,14 @@ port = request['port']
 if type(port) is not int or not 1024 <= port <= 65535:
     raise ValueError('Invalid bridge port')
 path = request['path']
-if path not in ('/live/status', '/live/parameters', '/input/status', '/input/profile', '/input/reload', '/input/configure'):
+allowed = {
+    '/live/status': ('GET',), '/live/parameters': ('POST',),
+    '/input/status': ('GET',), '/input/profile': ('GET', 'PUT'),
+    '/input/reload': ('POST',), '/input/configure': ('POST',),
+    '/teleop/status': ('GET',), '/teleop/profile': ('GET', 'PUT'),
+    '/teleop/reload': ('POST',), '/teleop/configure': ('POST',),
+}
+if path not in allowed or request['method'] not in allowed[path]:
     raise ValueError('Unsupported bridge operation')
 data = json.dumps(request.get('body', {})).encode() if request['method'] != 'GET' else None
 req = urllib.request.Request('http://127.0.0.1:%d%s' % (port, path), data=data,

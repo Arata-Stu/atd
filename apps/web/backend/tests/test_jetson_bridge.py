@@ -1,9 +1,10 @@
+import io
 import json
 import subprocess
 import unittest
 from unittest.mock import patch
 
-from atd_api.jetson_bridge import BridgeUnavailable, request
+from atd_api.jetson_bridge import BridgeUnavailable, REMOTE, request
 
 
 class JetsonAdapterTests(unittest.TestCase):
@@ -36,3 +37,22 @@ class JetsonAdapterTests(unittest.TestCase):
             with self.assertRaises(BridgeUnavailable):
                 request(self.connection, '/input/reload', 'POST')
             self.assertEqual(run.call_count, 1)
+
+    def test_remote_allows_role_configuration_but_never_driving_routes(self):
+        for path, method in (('/teleop/status', 'GET'), ('/teleop/profile', 'GET'),
+                             ('/teleop/profile', 'PUT'), ('/teleop/configure', 'POST'),
+                             ('/teleop/reload', 'POST')):
+            with self.subTest(path=path, method=method), patch('urllib.request.build_opener') as opener:
+                opener.return_value.open.return_value.__enter__.return_value.read.return_value = b'{}'
+                payload = {'port': 8790, 'path': path, 'method': method, 'nonce': 'a' * 32, 'body': {}}
+                with patch('sys.stdin', io.StringIO(json.dumps(payload))), patch('sys.stdout', io.StringIO()):
+                    exec(compile(REMOTE, '<ssh_bridge>', 'exec'), {})
+                target = opener.return_value.open.call_args.args[0]
+                self.assertEqual(target.full_url, 'http://127.0.0.1:8790' + path)
+                self.assertEqual(target.method, method)
+        for path, method in (('/teleop/command', 'POST'), ('/teleop/status', 'PUT'), ('/teleop/reload', 'GET')):
+            with self.subTest(path=path, method=method), patch('urllib.request.build_opener') as opener:
+                payload = {'port': 8790, 'path': path, 'method': method, 'nonce': 'a' * 32}
+                with patch('sys.stdin', io.StringIO(json.dumps(payload))), self.assertRaisesRegex(ValueError, 'Unsupported'):
+                    exec(compile(REMOTE, '<ssh_bridge>', 'exec'), {})
+                opener.assert_not_called()

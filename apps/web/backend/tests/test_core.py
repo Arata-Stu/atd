@@ -28,7 +28,7 @@ def client(tmp_path):
 
 def test_geometry_clearance_speed_and_rejection():
     doc = dict(left=ring(3), right=ring(1), custom=ring(2), closed=True)
-    for kind in ('centerline', 'raceline', 'custom'):
+    for kind in ('centerline', 'custom'):
         output = generate(doc, kind, {'spacing': 0.2})
         assert output['length'] > 10
         assert len(output['points']) == len(output['speeds'])
@@ -37,14 +37,14 @@ def test_geometry_clearance_speed_and_rejection():
             j = (i + 1) % len(output['points'])
             distance = math.dist(a, output['points'][j])
             assert output['speeds'][j] ** 2 <= output['speeds'][i] ** 2 + 2 * 1.5 * distance + 1e-7
-    with pytest.raises(ValueError, match='領域外|余裕'):
+    with pytest.raises(ValueError, match='領域外|余裕|境界'):
         generate(dict(doc, custom=ring(4)), 'custom', {})
     with pytest.raises(ValueError, match='自己交差'):
         generate(dict(doc, left=[[0, 0], [3, 3], [0, 3], [3, 0]]), 'centerline', {})
 
 
 def test_open_path_endpoints_and_acceleration():
-    out = generate(dict(left=[[0, 1], [10, 1]], right=[[0, -1], [10, -1]], custom=[], closed=False), 'centerline', {})
+    out = generate(dict(left=[[0, 1], [10, 1]], right=[[0, -1], [10, -1]], custom=[[0, 0], [10, 0]], closed=False), 'custom', {})
     assert out['points'][0] == [0, 0]
     assert out['points'][-1] == [10, 0]
     assert out['speeds'][0] == out['speeds'][-1] == 0
@@ -57,7 +57,7 @@ def test_api_map_revision_job_persistence(client):
     saved = client.put('/api/maps/circle', json=document).json()
     assert saved['revision'] == 2
     assert client.put('/api/maps/circle', json=document).status_code == 400
-    result = client.post('/api/maps/circle/generate', json={'kind': 'raceline', 'revision': 2, 'settings': {}})
+    result = client.post('/api/maps/circle/generate', json={'kind': 'centerline', 'revision': 2, 'settings': {}})
     assert result.status_code == 200, result.text
     key = result.json()['id']
     deadline = time.monotonic() + 15
@@ -69,11 +69,23 @@ def test_api_map_revision_job_persistence(client):
     assert state['status'] == 'succeeded', client.get(f'/api/jobs/{key}/log').text
     document = client.get('/api/maps/circle').json()
     assert document['revision'] == 3
-    assert 'raceline' in document['lines']
+    assert 'centerline' in document['lines']
     reopened = Jobs(client.app.state.store)
     assert reopened.get(key)['status'] == 'succeeded'
     saved = client.put('/api/maps/circle', json=dict(document, left=ring(3.1))).json()
     assert saved['lines'] == {}
+
+
+def test_regenerated_centerline_invalidates_dependent_raceline(client):
+    store = client.app.state.store
+    document = store.create_map('line-dependency')
+    document = store.save_line(document['id'], document['revision'], 'centerline', {'points': []})
+    document = store.save_line(document['id'], document['revision'], 'raceline', {'points': []})
+    document = store.save_line(document['id'], document['revision'], 'custom', {'points': []})
+    document = store.save_line(document['id'], document['revision'], 'centerline', {'points': [[1, 2]]})
+    assert 'raceline' not in document['lines']
+    assert document['lines']['centerline']['points'] == [[1, 2]]
+    assert 'custom' in document['lines']
 
 
 def test_api_disconnect_security_and_cloud(client):
@@ -170,6 +182,7 @@ def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch):
         def log(self, text): pass
         def run(self, argv, env=None):
             assert argv[:4] == ['ros2', 'run', 'isaac_mapping_ros', 'create_map_offline.py']
+            assert argv[argv.index('--override') + 1] == 'cuvslam.cfg_planar=false'
             assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
             output = Path(next(a.split('=', 1)[1] for a in argv if a.startswith('--base_output_folder=')))
             run = output / 'run1'
@@ -183,6 +196,7 @@ def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch):
     assert result['cuvslam_ready'] is True and result['pointcloud_ready'] is False
     assert (store.maps_root / 'built/nvidia/cuvslam_map/map.mdb').read_bytes() == b'not-empty'
     assert store.load_map('built')['source']['pointcloud_status'] == 'pending'
+    assert store.load_map('built')['source']['mapping_options']['ground_constraint'] is False
 
 
 def test_hash_rpc_cancellation_terminates_ssh_process(tmp_path, monkeypatch):

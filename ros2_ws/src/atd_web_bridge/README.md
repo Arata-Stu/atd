@@ -1,11 +1,11 @@
 # atd_web_bridge
 
-Jetson 内だけで DDS に参加し、位置・速度・Jetson 接続 Joy のキャッシュを loopback HTTP へ提供する。Notebook の共通 Web backend が SSH（鍵・known_hosts厳格）で Jetson の標準 Python/urllib を起動してアクセスする。Notebook は車載 DDS に参加せず、Jetson でブラウザを起動しない。HTTP は Python 標準ライブラリ、ROS service 仲介は rclpy。これは低頻度の監視・設定用であり、画像の大容量経路やリアルタイム制御を担わないため Python node を用いる。
+Jetson 内だけで DDS に参加し、位置・速度・Jetson 接続 Joy・操作割り当て状態のキャッシュを loopback HTTP へ提供する。Notebook の共通 Web backend が SSH（鍵・known_hosts厳格）で Jetson の標準 Python/urllib を起動してアクセスする。Notebook は車載 DDS に参加せず、Jetson でブラウザを起動しない。HTTP は Python 標準ライブラリ、ROS service 仲介は rclpy。これは低頻度の監視・設定用であり、画像の大容量経路やリアルタイム制御を担わないため Python node を用いる。
 
 node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_auto / ament_cmake_python で install する。
 
 ```bash
-./scripts/python.sh ros build --packages-up-to atd_web_bridge
+./scripts/build.sh --packages-up-to atd_web_bridge
 # Jetson: ROS と選択したworkspaceの install/setup.bash を source 後
 ./scripts/input.sh
 # Joyが別途起動済みなら bridge だけ
@@ -14,7 +14,7 @@ node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_a
 
 `scripts/input.sh --dry-run` は Notebook でも予定する Jetson コマンドを確認できる。通常起動は Jetson 限定で、実行は既存の scripts/python.sh へ委譲する。
 
-両 launch は config（share/config/bridge.yaml）を受ける。input.launch.py は profile（`/data/results/runs/input/dualsense.yaml`）も受け、Joy と bridge に同じパスを渡す。車両制御・bag記録は開始しない。Docker の host network を使い、HTTP もDDSも Jetson 内 loopback に限定する。
+両 launch は config（share/config/bridge.yaml）を受ける。input.launch.py は profile（`/data/results/runs/input/dualsense.yaml`）と teleop_profile（`/data/results/runs/input/teleop.yaml`）も受け、各 node と bridge に同じパスを渡す。入力の役割を運転要求・単発イベントへ変換する `atd_teleop` も起動するが、基板への出力や bag 記録は開始しない。Docker の host network を使い、HTTP もDDSも Jetson 内 loopback に限定する。
 
 ## 入力と通信
 
@@ -28,8 +28,11 @@ node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_a
 | /joy | sensor_msgs/msg/Joy | normalized |
 | /joy/raw | sensor_msgs/msg/Joy | raw |
 | /joy/status | std_msgs/msg/String | YAMLの接続・設定・機器世代 |
+| /teleop/status | std_msgs/msg/String | YAMLの操作出力可否・設定モード・反映済み役割設定 |
 
 HTTP は `127.0.0.1:8790` のみ。`GET /live/status`、`POST /live/parameters`（nodeだけで一覧取得、values追加でatomic変更）、`GET /input/status`、`GET/PUT /input/profile`、`POST /input/reload`、`POST /input/configure`。各要求は SSH adapter の nonce を header `X-ATD-Request` に持ち、応答に同じ nonce と schema/instance_id/hostname/node を返す。HTTP応答形式は `{identity,request_id,data}`、失敗は error。再試行による操作の二重送信はしない。
+
+役割設定は `GET /teleop/status`、`GET/PUT /teleop/profile`、`POST /teleop/reload`、`POST /teleop/configure`。Notebook の API では同じパスの先頭に `/api` を付ける。`status` は node の状態に `age_s` / `stale` を追加し、未受信なら null を返す。`profile` は物理配置と独立した `version: 1` YAML で、操舵・スロットルの入力軸／差し引く軸／倍率と、enable 要求・記録開始／終了のボタンを保存する。未割り当ては空文字、初期値は全て未割り当て。入力候補は `axes` / `buttons` 配列として応答する。全ての teleop 変更要求は、直前に取得した応答の `identity.instance_id` を `instance_id` として body に含める。省略・不一致なら変更せず拒否し、接続先や bridge が変わった場合は状態と設定を再取得する。
 
 pose は x/y/z/yaw/frame/stamp/age_s/stale、velocity は linear_mps/angular_rps/linear/frame/stamp/age_s/stale。input は bridge接続と device_connected/ready を分離し、status/raw の世代不一致・古さを成功と扱わない。Joy ready は車両の安全・停止確認ではない。
 
@@ -39,7 +42,9 @@ ROS node 名は prefix で閲覧範囲を制限し、書込対象は `parameter_
 
 Joy profile は物理入力配置専用。新鮮な設定モード状態とprofile_path一致、revision一致を要求して atomic 保存する。保存・再読込・入力出力再開は別操作。再開は Joy node 自身が入力解放を検査する。未接続 service・不明な状態は成功にしない。車両の走行モード・ステアリング・throttleコマンドを受け付ける endpoint は持たない。
 
-消費する service は対象 node の `list_parameters` / `describe_parameters` / `get_parameters` / `set_parameters_atomically`（rcl_interfaces/srv）、および atd_joy の configure（std_srvs/srv/SetBool）/reload_profile（std_srvs/srv/Trigger）。bridge 自身の提供ROS serviceは標準parameter serviceだけ。
+Teleop profile も、新鮮な teleop 設定モード状態、profile_path 一致、revision 一致を要求して atomic 保存する。保存したファイルと node の反映済み設定を比較して `applied` を返し、保存だけで反映済みとは表示しない。UI は設定開始（`enabled: true`）、保存、再読込、入力を離して操作出力再開（`enabled: false`）の順に行う。保存内容が node に反映されていない場合は再開を拒否する。再開時の入力解放判定は teleop node が行う。service の失敗や timeout 後は観測状態を失効させ、新しい状態を受け取ってから次の設定操作を受け付ける。操作出力の再開は車両の走行許可を意味しない。
+
+消費する service は対象 node の `list_parameters` / `describe_parameters` / `get_parameters` / `set_parameters_atomically`（rcl_interfaces/srv）、および atd_joy / atd_teleop の configure（std_srvs/srv/SetBool）/reload_profile（std_srvs/srv/Trigger）。bridge 自身の提供ROS serviceは標準parameter serviceだけ。
 
 ## parameter
 
@@ -58,9 +63,12 @@ Joy profile は物理入力配置専用。新鮮な設定モード状態とprofi
 | joy_status_topic | /joy/status | 機器状態 |
 | joy_node | /atd_joy_node | Joy service対象node |
 | profile_path | /data/results/runs/input/dualsense.yaml | 既存results mount内の永続配置 |
+| teleop_status_topic | /teleop/status | 操作割り当て node の状態 |
+| teleop_node | /atd_teleop_node | Teleop service 対象 node |
+| teleop_profile_path | /data/results/runs/input/teleop.yaml | 操作の役割設定の永続配置 |
 | parameter_node_prefix | /atd_ | 閲覧対象nodeの完全名prefix |
 | parameter_allowlist_json | {} | 変更許可nodeとparameter名のJSON object |
 
 ## 検証
 
-`colcon test --packages-select atd_web_bridge` はキャッシュ鮮度・世代不一致・profile競合を検証する。Notebook単体でROSをimportせずWebを起動できる。ROS build/install・DDS/service結合・Jetson/実機は未検証であり、単体テスト通過をこれらの検証済みとは扱わない。
+`colcon test --packages-select atd_web_bridge` はキャッシュ鮮度・世代不一致・profile競合、操作割り当ての保存と反映の区別、設定 service の単発要求・timeout 後の状態失効を検証する。service の単体テストには in-process fake を用い、ROS 通信は行わない。Notebook単体でROSをimportせずWebを起動できる。ROS build/install・DDS/service結合・Jetson/実機は未検証であり、単体テスト通過をこれらの検証済みとは扱わない。

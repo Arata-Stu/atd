@@ -37,7 +37,7 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 └── tests/                     # setup・Docker 等の共通基盤のテスト
 ```
 
-`apps/web/` と `atd_joy` / `atd_web_bridge` は初期実装を追加した。firmware 等は対応するコードを実装する時点でディレクトリを作成する。ソース実装と対象機での build・実機検証は区別する。
+`apps/web/` と `atd_joy` / `atd_web_bridge`、運転要求型の `atd_interfaces` と操作割り当ての `atd_teleop`、保存地図の点群取得用 `atd_mapping` は初期実装を追加した。firmware 等は対応するコードを実装する時点でディレクトリを作成する。ソース実装と対象機での build・実機検証は区別する。
 
 | 配置 | 内容 |
 | --- | --- |
@@ -46,7 +46,7 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 | `tools/<purpose>/` | ROS node ではないデータ抽出・解析・学習等の実装 |
 | `hardware/<kind>/` | CAD 以外の回路・配線等の編集元資料 |
 
-共通 Web アプリは `apps/web/{frontend,backend,processing}/` に分ける。frontend は React / TypeScript / Vite、backend は FastAPI とジョブ・転送・公式処理 adapter、processing は Web 非依存の HDMap 幾何処理・ライン生成。UI を使うのは Notebook のみで、Jetson 側は `atd_web_bridge` / `atd_joy` を明示起動する。操作は [Web アプリ](../apps/web/README.md)を参照する。
+共通 Web アプリは `apps/web/{frontend,backend,processing}/` に分ける。frontend は React / TypeScript / Vite、backend は FastAPI とジョブ・転送・公式処理 adapter、processing は Web 非依存の HDMap 幾何処理・ライン生成。UI を使うのは Notebook のみで、Jetson 側は `atd_web_bridge` / `atd_joy` / `atd_teleop` を明示起動する。操作は [Web アプリ](../apps/web/README.md)を参照する。
 
 ## ROS 2 package
 
@@ -80,7 +80,7 @@ package 固有の parameter、較正設定、launch はその package に置く�
 
 別のホスト workspace を選択した場合、その `src/atd` は mount point として予約し、そこへ別のソースをコピーしない。既存データがある場合は setup を停止して保護する。
 コンテナの `/workspaces/atd` はプロジェクト設定の readonly 参照用であり、ソースの編集には workspace 内の package ソースを使う。別の workspace を使う場合も、編集元の `ros2_ws/src/` と workspace の `src/` を区別する。
-標準の build 入口は `./scripts/python.sh ros build` とし、workspace の `src` を探索対象にする。直接 `colcon build` を使う場合も `--base-paths src` を明示し、checkout と workspace が同じ場所にあるときの重複探索を避ける。
+標準の build 入口は `./scripts/build.sh` とし、workspace の `src` を探索対象にする。直接 `colcon build` を使う場合も `--base-paths src` を明示し、checkout と workspace が同じ場所にあるときの重複探索を避ける。
 
 ## 設定・依存・操作の入口
 
@@ -94,6 +94,7 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | Docker 起動・build | `scripts/dev.sh` |
 | 診断と履歴 | `scripts/docker.sh` |
 | 用途別 Python 操作 | `scripts/python.sh` |
+| ROS package の build | `scripts/build.sh` |
 | VGL モデルの export・転送・build | `scripts/vgl.sh` |
 | Notebook 共通 Web UI | Docker 内の `atd-web`。ホストからの補助入口は `scripts/webui.sh` |
 | Jetson の入力・観測設定 bridge | `scripts/input.sh` |
@@ -127,6 +128,7 @@ CAD 等の編集元データは `hardware/` に置き、文書から参照する
 | ROS build 成果物 | `<選択した workspace>/{build,install,log}/`。未設定時の workspace は `<ATD checkout>/ros2_ws` |
 | Python venv / cache | `<選択した workspace>/.atd-python/`。各ホスト・アーキテクチャで生成する |
 | Web の node_modules / frontend build | `<選択した workspace>/.atd-web/frontend/`。readonly の checkout と分け、Notebook 上で生成する |
+| Joy 物理配置・teleop 役割設定 | Jetson の `/data/results/runs/input/{dualsense,teleop}.yaml`。再生成用 cache ではなく永続設定として保持 |
 | bag | ホスト別設定の記録先。コンテナでは `/data/record` |
 | 地図・モデル・解析・学習結果 | ホスト別設定の結果先。コンテナでは `/data/results` |
 
@@ -153,14 +155,16 @@ Notebook では `ATD_PC_RECORD_DIR` / `ATD_PC_RESULT_DIR`、Jetson では `ATD_J
 │   │   ├── cuvgl_map/
 │   │   ├── occupancy_map.yaml
 │   │   └── ground_plane.yaml
-│   ├── hdmap/                       # HDMap の編集・保存データ
+│   ├── hdmap/
+│   │   ├── map.json                 # HDMap 編集正本・採用captureへの参照
+│   │   └── captures/<capture_id>/   # snapshot.json・表示cloud.json・manifest.json
 │   └── lines/                       # centerline / raceline / custom line
 ├── models/
 │   ├── vgl/<asset_id>/
 │   │   ├── source/                  # Notebook で取得・準備する元モデル・設定
 │   │   ├── exported/<export_id>/    # Notebook で作る可搬 export bundle。SCP 転送単位
 │   │   └── engines/<target_id>/<build_id>/
-│   │                                # Jetson で生成する TensorRT engine の出力構成を維持
+│   │                                # Notebook・Jetson のGPU別に生成。engineを相互流用しない
 │   └── e2e/<model_id>/<version>/     # 将来の E2E 用。必要になった時点で作成
 │       ├── weights/
 │       ├── onnx/

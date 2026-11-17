@@ -250,7 +250,8 @@ class DevScriptTests(unittest.TestCase):
     def auto_project(self, name, fixture):
         project = self.root / name
         (project / "scripts").mkdir(parents=True)
-        shutil.copytree(PROJECT / "docker", project / "docker")
+        shutil.copytree(PROJECT / "docker", project / "docker",
+                        ignore=shutil.ignore_patterns('.venv', '__pycache__'))
         (project / "ros2_ws/src").mkdir(parents=True)
         (project / 'ros2_ws/src/README.md').write_text('ROS package source fixture\n')
         shutil.copytree(PROJECT / 'scripts/lib', project / 'scripts/lib')

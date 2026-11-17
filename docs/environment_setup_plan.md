@@ -54,8 +54,8 @@ NVIDIA は apt 版 CLI、workspace YAML、`Dockerfile.<image_key>` による拡�
 ### 対象外と後工程の依存
 
 イベントカメラ関連の依存は完全に対象外とする。依存一覧への関連名の追加も起動スクリプトで拒否する。
-YOLO / ByteTrack、学習、raceline、MuJoCo、個別の SLAM・地図生成手法は、現在の基盤セットアップには含めない。
-このうち cuVSLAM / VGL の地図準備とライン生成は、今後の共通アプリの機能要件に含む。基盤セットアップへの依存導入が完了したことは意味しない。
+YOLO / ByteTrack、学習、MuJoCo は、現在の基盤セットアップには含めない。
+cuVSLAM / VGL の公式地図処理と保存地図の点群取得、HDMap・ライン生成は共通アプリへ実装した。最小曲率の依存は Notebook 専用の独立した `raceline` 環境で同期する。設定・コードの実装と、対象 Docker / GPU / 実 bag での動作確認は区別する。現在の手順は [Web アプリ](../apps/web/README.md)を参照する。
 同様に、kart 固有の PyTorch / torchvision、NumPy / Shapely の補正、jetson-stats の pin / patch は一括移植しない。
 必要になった機能ごとに依存と互換性を検討する。
 

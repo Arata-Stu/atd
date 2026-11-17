@@ -7,7 +7,7 @@ package / component は `atd_joy` / `atd_joy::JoyNode`、既定 node は `/atd_j
 ## 起動とプロファイル
 
 ```bash
-./scripts/python.sh ros build --packages-up-to atd_web_bridge
+./scripts/build.sh --packages-up-to atd_web_bridge
 # Jetson の ROS 環境で。起動自体では車両制御・録画を開始しない。
 ./scripts/input.sh
 ```
@@ -32,6 +32,7 @@ topic は namespace 相対。入力 topic はなく `/dev/input/event*` を読�
 | `/diagnostics` | diagnostic_msgs/msg/DiagnosticArray | 1Hz、状態診断 |
 
 raw の `header.frame_id=atd_joy_raw_<generation>`。機器変更前の raw と新しい status を混ぜない。
+`joy/status` の `instance_id` は node 起動ごとの識別子。下流は `generation` と組み合わせ、node の再起動も入力セッションの変更として扱う。
 
 | 提供 service | 型 | 内容 |
 | --- | --- | --- |

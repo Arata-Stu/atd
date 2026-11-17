@@ -101,7 +101,7 @@ workspace 操作では CLI 設定を準備する。別の workspace を選択し
 リポジトリの `ros2_ws` 自体を workspace に選ぶ場合は、その `src` がコンテナの `/workspaces/isaac_ros-dev/src` にそのまま対応する。追加の `src/atd` mount point は作らない。直接指定する場合は、プロジェクト直下で `./scripts/setup.sh --action workspace --workspace "$PWD/ros2_ws"` を使える。既定パスとホスト別設定の保存方法は変わらない。
 CLI の探索規則に合わせ、`<workspace>/.isaac-ros-cli/config.yaml`、`<workspace>/scripts/.isaac_ros_common-config`、`<workspace>/../scripts/.build_image_layers.yaml` から `docker/isaac_ros/` のテンプレートを参照する。親の `scripts` は兄弟 workspace と共通になることがある。ATD の旧配置への既知の参照は新配置へ移行し、異なる既存設定は上書きせず停止する。
 `ISAAC_ROS_WS` は `dev.sh` がホストでは選択先へ設定し、コンテナ内では `/workspaces/isaac_ros-dev` を使う。ホストの `.bashrc` へ手動で export する必要はない。
-ROS の build は workspace 内で行い、コンテナの `/workspaces/atd` は設定参照用として扱う。標準の入口は `./scripts/python.sh ros build`。直接 `colcon build` を使う場合は workspace の `src` を対象に `--base-paths src` を明示する。
+ROS の build は workspace 内で行い、コンテナの `/workspaces/atd` は設定参照用として扱う。標準の入口は `./scripts/build.sh`。直接 `colcon build` を使う場合は workspace の `src` を対象に `--base-paths src` を明示する。
 Notebook の `build/` / `install/` を Jetson へコピーせず、各ホスト用に build する。
 CLI 設定テンプレートは `docker/isaac_ros/`、Docker の生成物は `<ATD checkout>/.cache/docker/` に置く。テンプレート・ソースと、各ホストの workspace の build 成果物を分ける。詳しくは [構成規約](../project_structure.md)を参照する。
 
@@ -190,15 +190,15 @@ Docker 起動時には root の `.sh` が追加依存の不足分を確認し、
 ./scripts/python.sh ros check
 # 学習用環境で Python を実行する
 ./scripts/python.sh train run -- python -c 'import sys; print(sys.executable)'
-# ROS 2 用環境の Python を指定して package を build する
-./scripts/python.sh ros build
+# ROS package を build する
+./scripts/build.sh
 ```
 
 Notebook / Jetson の選択には通常の自動判定と `--host notebook|pc|jetson` を使う。`python.sh` は起動済みコンテナへ接続する入口であり、コンテナを起動していない場合は先に `dev.sh` を実行する。
 コンテナ内では `atd-python ros ...` / `atd-python train ...` を使用する。通常の対話シェル全体を自動で venv へ切り替えず、選んだ用途のプロセスへ環境を適用する。
 
 用途ごとの `pyproject.toml`・`uv.lock` は `docker/python/ros/` と `docker/python/train/` に置く。venv は選択した workspace の `.atd-python/<architecture>/{ros,train}`、cache は `.atd-python/cache` へ作成する。workspace の bind mount に保存するためコンテナの再作成後も使えるが、別ホスト・別アーキテクチャへコピーしない。
-`sync` は lockfile の更新を許さない同期を行い、`run`・`shell`・`build` は実行前に同期する。依存の更新は別の開発作業として manifest と lockfile に記録する。
+`sync` は lockfile の更新を許さない同期を行い、`run`・`shell` と `build.sh` は実行前に同期する。依存の更新は別の開発作業として manifest と lockfile に記録する。
 
 Docker 起動時は固定版 uv の利用可能性を確認し、root hook から `gosu admin` 経由で ROS 2 用環境を自動同期する。venv・cache は通常ユーザー所有にする。学習用環境は自動同期せず、上記の `sync`・`run`・`shell` の明示操作で準備する。
 `ros` / `train` の追加 Python 依存は空で、学習 framework は未選定。Notebook の VGL export は独立した `vgl-export` profile の固定依存を操作時に同期する。Jetson の標準起動には追加せず、実 GPU / SDK での動作検証は別途行う。

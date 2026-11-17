@@ -42,11 +42,18 @@ if [[ "$task_action" = check ]]; then
     node --version
     pnpm --version
     atd-python web check
-    task_failed=false
-    for task_package in isaac_mapping_ros isaac_ros_cuvslam isaac_ros_visual_mapping isaac_ros_visual_global_localization; do
-        if ros2 pkg prefix "$task_package" >/dev/null 2>&1; then printf '[OK] %s\n' "$task_package"; else printf '[FAIL] %s 未導入\n' "$task_package"; task_failed=true; fi
-    done
-    ! $task_failed
+    atd-python raceline check
+    (
+        set +u  # ROS setup は nounset を前提としていない。
+        source /opt/ros/lyrical/setup.bash
+        if [[ -f "$task_workspace/install/setup.bash" ]]; then source "$task_workspace/install/setup.bash"; fi
+        set -u
+        task_failed=false
+        for task_package in isaac_mapping_ros isaac_ros_cuvslam isaac_ros_visual_mapping isaac_ros_visual_global_localization atd_mapping; do
+            if ros2 pkg prefix "$task_package" >/dev/null 2>&1; then printf '[OK] %s\n' "$task_package"; else printf '[FAIL] %s 未導入 / 未build\n' "$task_package"; task_failed=true; fi
+        done
+        ! $task_failed
+    )
     exit $?
 fi
 [[ -d "$task_workspace" && -w "$task_workspace" ]] || fail 'workspace に書き込めません'
@@ -73,6 +80,12 @@ if [[ "$task_fingerprint" != "$task_previous" || ! -r "$task_build/dist/index.ht
     printf '%s\n' "$task_fingerprint" > "$task_build/.source-hash"
 fi
 [[ "$task_action" != build ]] || exit 0
+# 曲率最適化を Web / ROS の Python 依存へ混在させない。初回のみ取得し以後 lock に同期する。
+if [[ -z "${ATD_RACELINE_PYTHON:-}" ]]; then
+    atd-python raceline sync
+    export ATD_RACELINE_PYTHON="${task_workspace}/.atd-python/$(uname -m)/raceline/bin/python"
+fi
+[[ -f "$ATD_RACELINE_PYTHON" && -x "$ATD_RACELINE_PYTHON" ]] || fail '最小曲率 helper 用 Python がありません。raceline 環境を確認してください'
 export ATD_WEB_RECORD_ROOT=/data/record ATD_WEB_RESULT_ROOT=/data/results
 export ATD_WEB_STATIC_DIR="${task_build}/dist" PYTHONDONTWRITEBYTECODE=1
 task_python_path="${task_project}/apps/web/backend/src:${task_project}/apps/web/processing"

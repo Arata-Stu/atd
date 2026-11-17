@@ -15,7 +15,7 @@ import uuid
 from .store import atomic_json, read_json, identifier
 
 ACTIVE = {'starting', 'running', 'queued'}
-ACTIONS = {'generate', 'map_build', 'vgl', 'pull', 'push'}
+ACTIONS = {'generate', 'map_build', 'vgl', 'capture', 'pull', 'push'}
 
 
 class Cancelled(Exception):

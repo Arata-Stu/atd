@@ -31,16 +31,16 @@ Docker 方式では ROS・CUDA 等のアプリ依存をコンテナに置き、�
 CLI は NVIDIA の `release-5.0` / `noble` apt repository から導入する。独自 CLI のソースビルドは不要。[公式 apt 導入手順](https://nvidia-isaac-ros.github.io/v/release-5.0/getting_started/index.html#configure-isaac-ros-apt-repository)
 
 docker グループ追加は実行中セッションに反映されない。案内が表示された場合は再ログインして、必要な段階から再実行する。
-保存先は、たとえばホーム配下の `atd-data/pc/record` と `atd-data/pc/results`、または mount 済み SSD 配下を指定する。
+未設定時の保存先は実際の clone 配下の `data/record` と `data/results`。標準 clone 位置 `~/workspaces/atd` なら `~/workspaces/atd/data/{record,results}` を使い、データは Git 管理対象外の永続資産として保持する。
 storage の対話入力または `--record-dir` / `--result-dir` でホスト側の実際の絶対パスを設定し、Docker 内では共通の `/data/record` / `/data/results` を使う。
 
 ## 3. ROS workspace と初回 build
 
-Notebook 上で ROS workspace の場所を指定し、コンテナ内では標準 workspace 名へ対応させる。既定は Notebook の `~/workspaces/atd`。
+Notebook 上で ROS workspace の場所を指定し、コンテナ内では標準 workspace 名へ対応させる。未設定時は実際の clone 配下の `ros2_ws`、標準配置なら `~/workspaces/atd/ros2_ws` を使う。保存済み指定は維持するため、旧配置から変える場合は workspace / storage を選び直す。
 
 | 用途 | Notebook ホスト | コンテナ内 |
 | --- | --- | --- |
-| ROS workspace | 指定したパス。既定 `~/workspaces/atd` | `/workspaces/isaac_ros-dev`（読書き可） |
+| ROS workspace | 指定したパス。未設定なら `<ATD checkout>/ros2_ws` | `/workspaces/isaac_ros-dev`（読書き可） |
 | 自作 ROS package の編集元（別 workspace を使う場合） | `<ATD checkout>/ros2_ws/src` | `/workspaces/isaac_ros-dev/src/atd`（読書き可） |
 | プロジェクト設定参照 | `<ATD checkout>` | `/workspaces/atd`（readonly） |
 
@@ -71,8 +71,28 @@ ROS package が見つかることは、実 D455 の動作や bag 取得の成功
 ## 4. 通常の使い方
 
 通常は `./scripts/setup.sh --action start` または `./scripts/dev.sh` で入る。
-PC では受信した bag の offline 処理、地図作成・編集、解析、可視化を行う。bag と地図の転送手段・地図形式は後工程で具体化する。
-将来の UI は PC ホストの Chrome で `http://127.0.0.1:<port>` を開く予定で、UI 本体は現時点では未実装。
+PC では受信した bag の offline 処理、地図作成・編集、解析、可視化を行う。共通 Web アプリは `./scripts/webui.sh` で起動し、Notebook ホストの Chrome から `http://127.0.0.1:8766` を開く。[Web アプリ](../../apps/web/README.md)を参照する。Jetson では UI を起動せず、入力・観測用の `./scripts/input.sh` を使用する。
 
 D455 を PC に直接接続する場合は devices のホスト準備も行い、[Jetson 手順の D455 確認](jetson.md#3-d455-と-dualsense)と同じ順に確認する。
 PC の Docker と Jetson の Docker は別々に build し、PC の `build/` / `install/` を Jetson 用として転送しない。
+
+## 5. Web アプリから Jetson へ接続する SSH
+
+転送とライブ・入力監視は Notebook のコンテナ内で SSH を実行する。鍵と `known_hosts` の正本は Notebook ホストの `~/.ssh` とし、アプリにパスワードや秘密鍵を保存しない。初回はホストのターミナルで、実際のユーザー名・接続先・portへ置き換えて接続する。
+
+```bash
+# Notebook ホスト。表示されるホスト鍵を Jetson 側の情報と照合して登録する。
+ssh -p 22 USER@JETSON_HOST true
+# パスフレーズ付き鍵は既存の SSH agent へ読み込んでおく。
+ssh-add ~/.ssh/id_ed25519
+./scripts/dev.sh
+./scripts/webui.sh
+```
+
+`ssh-add` は agent を利用する場合だけ実行し、鍵ファイル名は利用中のものに合わせる。Web の「転送」で同じ接続先・ユーザー名・SSH portを保存する。ライブ・入力画面もこの接続設定を共用する。アプリは `BatchMode=yes` / `StrictHostKeyChecking=yes` を使うため、未登録のホスト鍵や未解除の鍵を接続成功扱いしない。
+
+`scripts/dev.sh` は `~/.ssh` が存在するときだけ `/home/admin/.ssh` へ readonly mount する。既存のユーザー用 Docker 追加引数に同じ source・readonly の mount があれば再利用し、異なる source・書込可能・重複した指定は起動前に停止する。既存のファイルをコピー・上書きせず、鍵の権限・所有者も変更しない。コンテナの admin が秘密鍵を読めるにはホストとの UID・ファイル権限の整合が必要であり、アクセス失敗時はホストの権限を緩めず、UIDとmountを確認する。
+
+Notebook では既存の `SSH_AUTH_SOCK` が Unix socket の場合、`/run/atd/ssh-agent` へ共有してコンテナの同環境変数を設定する。これにより agent 内の鍵を使用できる。agent がなければ readonly の鍵ファイルを通常の OpenSSH 手順で使用する。Jetson 側の agent 共有は上流 CLI の既存経路を維持する。
+
+SSH directory・agent の共有条件が変わった場合、`dev.sh` は旧コンテナへそのまま再接続しない。実行中の処理を終了してコンテナを再作成する。agent を再起動した場合も再作成する。ホスト鍵の登録・更新は readonly のコンテナ内から行わず、Notebook ホストで行う。設定・引数の単体検証と、実際の鍵・SSH/SCP・Jetson ROS の動作確認は区別する。

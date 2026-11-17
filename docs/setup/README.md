@@ -73,23 +73,23 @@ OS のフラッシュ、GPU driver の自動置換、ディスクの初期化、
 
 ## ROS workspace のパス
 
-Notebook と Jetson は、それぞれのホストで workspace のパスを指定する。既定は `~/workspaces/atd`。このディレクトリ自体が ROS workspace であり、下に `src`・`build`・`install`・`log` を持つ。
-ATD checkout と workspace は別の場所でもよい。どちらも CLI の制約により空白や shell 特殊文字を含まないパスを選ぶ（例: `/home/<user>/project/atd`、`/home/<user>/workspaces/atd`）。
+clone の標準配置は `~/workspaces/atd`、未設定時の ROS workspace は実際の clone 配下の `ros2_ws` とする。標準配置なら `~/workspaces/atd/ros2_ws` が workspace で、その下に `src`・`build`・`install`・`log` を持つ。
+Notebook と Jetson の設定は各ホストで保存する。保存済みのパス、引数・環境変数の指定はこの既定値より優先される。別の workspace も指定できるが、checkout と workspace のどちらも CLI の制約により空白や shell 特殊文字を含まないパスを使う。
 
 | 用途 | ホスト | コンテナ内 | アクセス |
 | --- | --- | --- | --- |
-| ROS workspace | 指定したパス。既定 `~/workspaces/atd` | `/workspaces/isaac_ros-dev` | 読書き可 |
+| ROS workspace | 指定したパス。未設定なら `<ATD checkout>/ros2_ws` | `/workspaces/isaac_ros-dev` | 読書き可 |
 | 自作 ROS package の編集元（リポジトリの `ros2_ws` を workspace に選ぶ場合） | `<ATD checkout>/ros2_ws/src` | `/workspaces/isaac_ros-dev/src` | workspace mount 内 |
 | 自作 ROS package の編集元（別 workspace を使う場合） | `<ATD checkout>/ros2_ws/src` | `/workspaces/isaac_ros-dev/src/atd` | 読書き可 |
 | プロジェクト設定の参照元 | `<ATD checkout>` | `/workspaces/atd` | readonly |
 
 ```bash
 ./scripts/setup.sh --action workspace
-# パスを直接指定する場合
-./scripts/setup.sh --host notebook --action workspace --workspace /mnt/ssd/atd_ws
+# clone 配下を明示する場合（プロジェクト直下から実行）
+./scripts/setup.sh --host notebook --action workspace --workspace "$PWD/ros2_ws"
 ```
 
-対話入力は空欄で表示した既存値・既定値を使い、`~/` も指定できる。設定は [設定例](../../config/workspace.env.example)を基に `config/workspace.env` へ保存する。
+対話入力は空欄で表示した既存値・既定値を使い、`~/` も指定できる。設定は [設定例](../../config/workspace.env.example)を基に `config/workspace.env` へ保存する。以前の `~/workspaces/atd` 自体を workspace として保存していた場合は、この操作で `~/workspaces/atd/ros2_ws` を明示的に選び直す。保存済み設定は自動変更しない。
 
 | ホスト | 保存する設定 |
 | --- | --- |
@@ -133,14 +133,18 @@ logs 操作は対話端末で `fzf` により過去ログを選び、非対話�
 
 ## 保存先
 
-設定は [設定例](../../config/storage.env.example)を基に `config/storage.env` へホストごとに保持する。
+記録先は `<ATD checkout>/data/record`、地図・モデル等の結果先は `<ATD checkout>/data/results` を未設定時の既定とする。clone が `~/workspaces/atd` なら、その下の `data/` を使う。`data/` は Git 管理対象外の永続資産であり、cache ではない。
+設定は storage の対話操作で、選択したホストの値だけを `config/storage.env` に保存する。[設定例](../../config/storage.env.example)を手動コピーして使う場合は、使用するホストの行へ実パスを記入してコメントを解除する。他ホストの値を推測して入力する必要はない。
 storage は対話端末で記録先と結果先を順に尋ね、空欄なら表示した既存値・既定値を使う。引数で絶対パスを直接指定することもできる。
 
 ```bash
 ./scripts/setup.sh --action storage \
-  --record-dir /mnt/ssd/atd/record \
-  --result-dir /mnt/ssd/atd/results
+  --record-dir "$PWD/data/record" \
+  --result-dir "$PWD/data/results"
 ```
+
+clone が `/home/atd/workspaces/atd` の場合、対話入力の記録先には `/home/atd/workspaces/atd/data/record`、続く結果先には `/home/atd/workspaces/atd/data/results` を指定する。
+保存済みの設定や引数・`ATD_RECORD_DIR` / `ATD_RESULT_DIR` の指定を優先するため、以前の保存先から切り替える場合は storage 操作で明示的に選び直す。既存データは自動移動しない。
 
 設定ファイルを分ける場合は `ATD_STORAGE_CONFIG=/absolute/path/storage.env` を指定し、その後の setup / dev 起動でも同じ環境変数を使う。
 コンテナ内は PC / Jetson とも次のパスを使う。

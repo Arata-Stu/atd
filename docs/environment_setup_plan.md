@@ -3,7 +3,7 @@
 調査日: 2026-11-16
 
 この文書は環境構築の比較・方針と、初期実装の状況をまとめる。
-共通依存・DDS の起動処理は実装したが、対象 PC / Jetson への導入・Docker build・実通信検証は未実施である。TUI / UI 本体は後工程とする。
+共通依存・DDS の起動処理は実装したが、対象 PC / Jetson への導入・Docker build・実通信検証は未実施である。共通 Web UI と Jetson 入力・観測 bridge は初期実装したが、対象機での結合動作は未検証である。
 確定要件は [project_requirements.md](project_requirements.md)、既存の CLI・Docker 実装は [isaac_ros_build_strategy.md](isaac_ros_build_strategy.md) を参照する。
 
 ## 1. 推奨する構成
@@ -132,7 +132,7 @@ flowchart LR
     browser["PC ホストの Chrome\n127.0.0.1:port"] --> ui["PC Docker の UI サーバー"]
     ui --> jobs["PC の offline 解析・地図作成ジョブ"]
     ui --> files["bag 受信・地図送信\nSSH / SCP"]
-    bridge["Jetson Docker の観測用 bridge"] -->|WebSocket| ui
+    ui -->|SSH 経由の loopback HTTP| bridge["Jetson Docker の観測・設定 bridge"]
     ros["Jetson 内の ROS / DDS"] --> bridge
     files --> data["Jetson の bag・地図"]
 ```
@@ -144,10 +144,10 @@ UI の HTTP 待受と Jetson の bridge 接続は別の通信経路である。
 - 短い `.sh` 入口から、環境診断、build、コンテナ起動、TUI、UI 起動へ進めるようにする。
 - fzf の検索・選択処理を共通化し、対象のパス、表示名、キャンセルを扱う。
 - UI サーバーと長時間の解析・地図作成は別プロセスにし、ジョブのログと状態を UI に返す。
-- UI の framework は未選定。参照先は標準 Python と ES modules / Canvas で実装されているが、その技術選択まで採用済みとはしない。
-- 共通アプリの基本機能は地図・SCP 転送・ライブ表示と parameter 調整・Joy 入力監視と配置設定とする。React + TypeScript / Vite、FastAPI、独立した offline 処理という構成は提案として [要件文書](project_requirements.md#41-共通-web-アプリの構成案)へ記録する。
+- UI は React + TypeScript / Vite と FastAPI を採用し、`apps/web/` に初期実装した。UI の利用は Notebook のみとする。
+- 共通アプリの基本機能は地図・SCP 転送・ライブ表示と parameter 調整・Joy 入力監視と配置設定とする。採用した構成・実装境界は [要件文書](project_requirements.md#39-共通-web-アプリの初期実装)と [Web アプリ](../apps/web/README.md)を参照する。
 - Jetson の自己位置等は観測用 bridge 経由で取得し、PC を車載 DDS へ直接参加させない。
-- PC 側 backend が Jetson の WebSocket へ接続し、UI に必要な観測情報を中継する構成を第一案とする。待受範囲、公開 topic、帯域は実装時に具体化する。
+- 初期実装は PC backend が SSH 経由で Jetson loopback の HTTP bridge に接続し、必要な観測・設定だけを中継する。連続した大容量表示が必要になった場合の Foxglove / WebSocket 利用は別途具体化する。
 - Foxglove Bridge の導入だけで観測専用と扱わず、client publish や service 呼出し等の公開機能を確認・設定する。[公式 bridge 設定](https://github.com/foxglove/foxglove-sdk/blob/main/ros/src/foxglove_bridge/README.md)
 - UI からのファイル転送や環境・記録の管理と、PC から遠隔の走行制御を与えることは区別する。操舵・スロットルや自律 / 手動の切替操作を kart から自動的に移植しない。
 - parameter の動的調整と Joy 配置設定は、Jetson 側に明示的な設定窓口を用意する案とする。対象・変更可能な車両状態・保存と反映・出力再開条件は実装時に具体化する。Joy デバイスは Jetson に接続し、プロポは将来の検討対象とする。
@@ -165,7 +165,7 @@ DDS の loopback 制限の設定と、bridge の外部向け観測通信の公�
 | 3. 共通イメージ | 現行 3 層へ開発・記録・対話ツールを追加し、各ホストで構築 | amd64 / arm64 の build、ROS 環境、ament / component、MCAP 読書きを確認する |
 | 4. デバイス | D455 と DualSense を接続 | IR・RGB・IMU・Depth の候補ごとの取得、時刻、必要な組合せ、Joy 入力・再接続を確認する |
 | 5. 通信 | DDS と bridge を設定 | 車載 topic / service 等の直接通信が外部へ出ず、必要な観測情報は PC で取得できる |
-| 6. 操作入口 | fzf メニュー、短い UI 起動、PC の localhost UI | 長いコマンドなしで起動・状態確認・bag 転送へ進める。地図作成・編集機能は後工程で追加 |
+| 6. 操作入口 | fzf メニュー、短い UI 起動、PC の localhost UI | 共通 Web UI の地図・転送・観測・入力設定を実装。対象ホストでの通し操作は別に確認する |
 
 各段階の入口は `.sh` と対話メニューで用意する案とし、非対話の引数指定とログ保存も併用できるようにする。
 UI 実装をホスト・GPU の準備より先の必須条件にはせず、初期整備の操作には短い `.sh` / TUI を使う。
@@ -181,14 +181,14 @@ Jetson の build 並列数は 8GB の実メモリ使用量を見ながら調整�
 | [10-atd-runtime.sh](../docker/scripts/10-atd-runtime.sh) と [configure-dds.sh](../docker/scripts/configure-dds.sh) | 起動時の準備と DDS 配置、準備完了記録を実装 |
 | [fastdds.xml](../docker/middleware_profiles/fastdds.xml) | Fast DDS / UDPv4 / loopback のプロファイルを実装 |
 | [scripts/dev.sh](../scripts/dev.sh) | 新規起動・構成の整合確認・専用シェルへの再接続を実装 |
-| [setup.sh](../scripts/setup.sh) と [docker.sh](../scripts/docker.sh) | ホスト準備、workspace のホスト別保存、fzf メニューと診断ログを実装。ブラウザ UI の入口は後工程 |
+| [setup.sh](../scripts/setup.sh) と [docker.sh](../scripts/docker.sh) | ホスト準備、workspace のホスト別保存、fzf メニューと診断ログを実装。Web UI の入口は `scripts/webui.sh` |
 | [scripts/python.sh](../scripts/python.sh) と `docker/python/` | ROS 2 用・AI 学習用の uv 環境を操作する入口と、用途別 manifest / lock。追加の学習依存は未選定 |
 | [docker/dev.dockerargs](../docker/dev.dockerargs) と関連設定 | 既存 mount を維持。実デバイスの権限・入力は対象機で確認する |
 | [ros2_ws/src/](../ros2_ws/src/README.md) | 自作 `atd_*` package の編集元。別 workspace を使う場合は、その `src/atd` に rw で mount する |
-| [docker/isaac_ros/config.yaml](../docker/isaac_ros/config.yaml) | 選択した workspace から参照する CLI 設定テンプレート。既定 workspace は `~/workspaces/atd` |
-| 今後の UI 実装先 | PC localhost の管理・観測 UI。配置・framework・ROS package との境界は実装時に設計 |
+| [docker/isaac_ros/config.yaml](../docker/isaac_ros/config.yaml) | 選択した workspace から参照する CLI 設定テンプレート。未設定時は実 clone 配下の `ros2_ws` |
+| [共通 Web UI](../apps/web/README.md) | React / TypeScript / Vite と FastAPI を `apps/web/` へ初期実装。Notebook 限定。Jetson に `atd_joy` / `atd_web_bridge` を用意 |
 
 現在の配置と今後の実装先は [構成規約](project_structure.md)を参照する。共通 Web アプリは `apps/web/`、独自 firmware は `firmware/<target>/`、ROS node ではない処理は `tools/<purpose>/` を実装時に作成する。
 
 依存・DDS のスクリプト実装と、実機上の apt 導入・Docker build・実通信検証は区別する。
-ホスト側への実導入、D455 / Joy の実接続、bridge、対象機での TUI 操作、UI 本体、自動運転アプリの検証は未実施である。
+ホスト側への実導入、D455 / Joy の実接続、bridge、対象機での TUI 操作、対象機での Web UI と Jetson bridge の結合、自動運転アプリの検証は未実施である。

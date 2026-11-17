@@ -12,10 +12,11 @@ usage() {
   --dry-run    設定とコマンドを表示する。CLI / Docker は起動しない
   -h, --help   この説明を表示する
 
-設定: config/storage.env（config/storage.env.example をコピーして編集）
+保存先: setup.sh --action storage で対話設定し、config/storage.env に保存。
+手動設定は config/storage.env.example をコピーし、対象行のコメントを外して実パスを記入する。
 通常は Jetson / Tegra の機種・BSP 情報から自動判定し、それ以外は PC として扱う。
 ATD_STORAGE_CONFIG で別の設定ファイルを指定できる。
-ROS workspace は config/workspace.env のホスト別設定、未設定なら ~/workspaces/atd。
+ROS workspace は config/workspace.env のホスト別設定、未設定なら clone 先の ros2_ws/。
 setup.sh --action workspace で対話設定する。ATD_WORKSPACE_CONFIG で設定ファイルを変更できる。
 ATD_ROS_WS は ROS workspace を単発で上書きする。
 ATD_RECORD_DIR / ATD_RESULT_DIR は、選択ホストの保存先を単発で上書きする。
@@ -121,6 +122,26 @@ validate_directory "$task_result_dir" "results 保存先"
 [[ -w "$task_result_dir" ]] || fail "results 保存先に書き込めません: $task_result_dir"
 [[ -w "$task_record_dir" ]] || fail "record 保存先に書き込めません: $task_record_dir"
 
+# ホストの鍵・known_hostsを正本とし、内容のコピーや権限変更をしない。
+export ATD_HOST_SSH_DIR=''
+export ATD_HOST_SSH_AGENT=''
+if [[ -d "$HOME/.ssh" ]]; then
+    validate_directory "$HOME/.ssh" "SSH directory"
+    ATD_HOST_SSH_DIR="$(CDPATH= cd -- "$HOME/.ssh" && pwd -P)"
+    validate_directory "$ATD_HOST_SSH_DIR" "SSH directory"
+fi
+# Jetson の agent は上流 CLI が /ssh-agent へ共有する。PCのみ不足分を補う。
+if [[ "$task_host" = pc && -n "${SSH_AUTH_SOCK:-}" && -S "$SSH_AUTH_SOCK" ]]; then
+    case "$SSH_AUTH_SOCK" in
+        /*) ;;
+        *) fail 'SSH_AUTH_SOCK は絶対パスが必要です' ;;
+    esac
+    case "$SSH_AUTH_SOCK" in
+        *[\$\`\"\\,]*|*$'\n'*|*$'\r'*) fail 'SSH_AUTH_SOCK に使用できない文字が含まれています' ;;
+    esac
+    ATD_HOST_SSH_AGENT="$SSH_AUTH_SOCK"
+fi
+
 export ATD_PROJECT_DIR="$task_project_dir"
 export ISAAC_ROS_WS="$task_workspace"
 export ATD_RECORD_DIR="$task_record_dir"
@@ -152,6 +173,8 @@ else
 fi
 printf 'record: %s -> /data/record (read-write)\nresults: %s -> /data/results (read-write)\n' "$ATD_RECORD_DIR" "$ATD_RESULT_DIR"
 printf 'DDS: Fast DDS / UDPv4 loopback\nruntime: %s\n' "$ATD_RUNTIME_REV"
+if [[ -n "$ATD_HOST_SSH_DIR" ]]; then printf 'SSH: %s -> /home/admin/.ssh (read-only)\n' "$ATD_HOST_SSH_DIR"; fi
+if [[ -n "$ATD_HOST_SSH_AGENT" ]]; then printf 'SSH agent: existing socket -> /run/atd/ssh-agent\n'; fi
 printf 'docker_args: %s\ncommand: isaac-ros' "$DOCKER_ARGS_FILE"
 printf ' %q' "${task_cli_args[@]}"
 printf '\n'
@@ -199,6 +222,27 @@ for destination, (source, writable) in expected.items():
             or mount.get("RW") != writable):
         sys.exit("エラー: 起動済みコンテナの mount が設定と異なります。記録等を終了してコンテナを再作成してください: " + sys.argv[1])
 environment = dict(item.split("=", 1) for item in container.get("Config", {}).get("Env", []) if "=" in item)
+ssh_source = os.environ.get("ATD_HOST_SSH_DIR", "")
+ssh_agent = os.environ.get("ATD_HOST_SSH_AGENT", "")
+if ssh_source:
+    expected["/home/admin/.ssh"] = (ssh_source, False)
+elif environment.get("ATD_HOST_SSH_SHARED") == "1":
+    sys.exit("エラー: SSH共有設定が変わりました。コンテナを再作成してください")
+if ssh_agent:
+    expected["/run/atd/ssh-agent"] = (ssh_agent, False)
+    if environment.get("SSH_AUTH_SOCK") != "/run/atd/ssh-agent":
+        sys.exit("エラー: SSH agent 設定が変わりました。コンテナを再作成してください")
+elif environment.get("ATD_HOST_SSH_AGENT_SHARED") == "1":
+    sys.exit("エラー: SSH agent 共有設定が変わりました。コンテナを再作成してください")
+for destination in ("/home/admin/.ssh", "/run/atd/ssh-agent"):
+    if destination not in expected:
+        continue
+    source, writable = expected[destination]
+    mount = mounts.get(destination)
+    if (not mount or mount.get("Type") != "bind"
+            or os.path.realpath(mount.get("Source", "")) != os.path.realpath(source)
+            or mount.get("RW") != writable):
+        sys.exit("エラー: SSH共有 mount が設定と異なります。コンテナを再作成してください")
 required = {
     "ATD_RUNTIME_API": "1",
     "ATD_RUNTIME_REV": os.environ["ATD_RUNTIME_REV"],
@@ -230,12 +274,60 @@ fi
 python3 - "$task_project_dir" "$ATD_GENERATED_DOCKER_DIR" "$ATD_RUNTIME_REV" "$DOCKER_ARGS_FILE" "$task_source_layout" <<'PY'
 import os
 from pathlib import Path
+import shlex
 import sys
 import tempfile
 root, destination, revision = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 source = (root / 'docker/Dockerfile.atd').read_bytes()
 dockerfile = source + ('\n# ATD runtime source revision: ' + revision + '\n').encode()
 arguments = (root / 'docker/dev.dockerargs').read_text().splitlines(keepends=True)
+
+def add_ssh_mount(source, destination):
+    # 上流の追加引数も加算される。標準のユーザー設定に同じ宛先がある場合は再利用する。
+    candidates = [Path.home() / '.isaac_ros_dev-dockerargs']
+    workspace_args = Path(os.environ['ISAAC_ROS_WS']) / 'scripts/.isaac_ros_dev-dockerargs'
+    candidates.append(workspace_args if workspace_args.exists() else Path('/etc/isaac-ros-cli/.isaac_ros_dev-dockerargs'))
+    lines = arguments + [line for path in candidates if path.is_file() for line in path.read_text().splitlines()]
+    found = []
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        if destination not in line:
+            continue
+        line = line.strip()
+        if len(line) > 1 and line[0] == line[-1] and line[0] in ('"', "'"):
+            line = line[1:-1]
+        tokens = []
+        for token in shlex.split(os.path.expandvars(line)):
+            if token.startswith(('--mount=', '--volume=')):
+                tokens.extend(token.split('=', 1))
+            elif token.startswith('-v') and len(token) > 2:
+                tokens.extend(['-v', token[2:]])
+            else:
+                tokens.append(token)
+        for index, token in enumerate(tokens):
+            if token in ('--mount',) and index + 1 < len(tokens):
+                parts = dict(item.split('=', 1) if '=' in item else (item, '') for item in tokens[index+1].split(','))
+                target = parts.get('dst', parts.get('destination', parts.get('target', '')))
+                if target.rstrip('/') == destination:
+                    found.append((parts.get('src', parts.get('source', '')), 'readonly' in parts or parts.get('ro') == 'true'))
+            if token in ('-v', '--volume') and index + 1 < len(tokens):
+                parts = tokens[index+1].split(':')
+                if len(parts) >= 2 and parts[1].rstrip('/') == destination:
+                    found.append((os.path.expanduser(parts[0]), len(parts) >= 3 and 'ro' in parts[2].split(',')))
+    if found:
+        if len(found) != 1 or os.path.realpath(found[0][0]) != os.path.realpath(source) or not found[0][1]:
+            sys.exit('エラー: 既存の追加Docker引数のSSH mountが異なるか書込可能です。同じ宛先への重複を避けてください: ' + destination)
+        return
+    arguments.append('--mount type=bind,src="' + source + '",dst=' + destination + ',readonly\n')
+
+ssh_directory, ssh_agent = os.environ.get('ATD_HOST_SSH_DIR'), os.environ.get('ATD_HOST_SSH_AGENT')
+if ssh_directory:
+    add_ssh_mount(ssh_directory, '/home/admin/.ssh')
+    arguments.append('-e ATD_HOST_SSH_SHARED=1\n')
+if ssh_agent:
+    add_ssh_mount(ssh_agent, '/run/atd/ssh-agent')
+    arguments.extend(['-e SSH_AUTH_SOCK=/run/atd/ssh-agent\n', '-e ATD_HOST_SSH_AGENT_SHARED=1\n'])
 if sys.argv[5] == 'native':
     source_mount = '--mount type=bind,src="${ATD_PROJECT_DIR}/ros2_ws/src",dst=/workspaces/isaac_ros-dev/src/atd'
     if sum(line.rstrip('\r\n') == source_mount for line in arguments) != 1:

@@ -4,6 +4,8 @@
 /logs/docker/
 /logs/vgl/
 /.cache/
+# bag・地図・モデル・engine・解析結果の永続保存先（自動削除しない）。
+/data/
 # checkout 自体を ROS workspace にした場合の生成物と mount 先。
 /build/
 /install/
@@ -23,3 +25,6 @@
 __pycache__/
 *.pyc
 .DS_Store
+node_modules/
+/apps/web/frontend/dist/
+.atd-web/

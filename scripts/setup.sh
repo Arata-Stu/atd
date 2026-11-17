@@ -27,7 +27,8 @@ ACTION: menu, check, tools, docker, runtime, isaac, storage, workspace, devices,
 --dry-run: 実行予定のみ表示。sudo、通信、ファイル作成を行わない
 Notebook（x86_64）/ Jetson は自動判定。notebook は pc の別名。
 ROS workspace は対話的に指定し、Notebook / Jetson 別に config/workspace.env へ保存。
-既定値は ~/workspaces/atd、Docker 内は /workspaces/isaac_ros-dev。
+既定値は <clone先>/ros2_ws、データは <clone先>/data/{record,results}。
+標準の clone 先は ~/workspaces/atd。Docker 内の workspace は /workspaces/isaac_ros-dev。
 OS・GPU driver・JetPack の自動更新は行わない。
 全体を sudo で起動せず、必要なホスト操作だけ内部で sudo を使用する。
 手順: docs/setup/README.md
@@ -77,6 +78,7 @@ else
     task_host="$(detect_atd_host)"
 fi
 printf 'ATD setup — host: %s (%s)\n' "$task_host" "$task_host_selection"
+printf 'プロジェクト（clone先）: %s\n' "$task_project_dir"
 if [[ "$task_host" = pc ]]; then
     printf 'profile: Notebook / x86_64 (amd64)\n'
 else
@@ -104,8 +106,8 @@ configure_storage() {
     task_config="${ATD_STORAGE_CONFIG:-${task_project_dir}/config/storage.env}"
     if $task_dry_run; then
         printf '保存先を設定予定: %s\nrecord: %s\nresults: %s\n' "$task_config" \
-            "${task_record_override:-既存値または ~/atd-data/${task_host}/record}" \
-            "${task_result_override:-既存値または ~/atd-data/${task_host}/results}"
+            "${task_record_override:-既存値または ${task_project_dir}/data/record}" \
+            "${task_result_override:-既存値または ${task_project_dir}/data/results}"
         return 0
     fi
     command -v python3 >/dev/null 2>&1 || { fail '先に tools を実行して python3 を導入してください'; return 1; }
@@ -114,20 +116,20 @@ configure_storage() {
         source "$task_config" || return $?
     fi
     if [[ "$task_host" = pc ]]; then
-        task_default_record="${ATD_PC_RECORD_DIR:-${HOME}/atd-data/pc/record}"
-        task_default_result="${ATD_PC_RESULT_DIR:-${HOME}/atd-data/pc/results}"
+        task_default_record="${ATD_PC_RECORD_DIR:-${task_project_dir}/data/record}"
+        task_default_result="${ATD_PC_RESULT_DIR:-${task_project_dir}/data/results}"
     else
-        task_default_record="${ATD_JETSON_RECORD_DIR:-${HOME}/atd-data/jetson/record}"
-        task_default_result="${ATD_JETSON_RESULT_DIR:-${HOME}/atd-data/jetson/results}"
+        task_default_record="${ATD_JETSON_RECORD_DIR:-${task_project_dir}/data/record}"
+        task_default_result="${ATD_JETSON_RESULT_DIR:-${task_project_dir}/data/results}"
     fi
     task_record="${task_record_override:-${ATD_RECORD_DIR:-$task_default_record}}"
     task_result="${task_result_override:-${ATD_RESULT_DIR:-$task_default_result}}"
     if [[ -t 0 && -z "$task_record_override" ]]; then
-        read -r -p "record 保存先 [$task_record]: " task_input || return 1
+        read -r -p "record 保存先（rosbag）[$task_record]: " task_input || return 1
         task_record="${task_input:-$task_record}"
     fi
     if [[ -t 0 && -z "$task_result_override" ]]; then
-        read -r -p "results 保存先 [$task_result]: " task_input || return 1
+        read -r -p "results 保存先（地図・モデル・解析）[$task_result]: " task_input || return 1
         task_result="${task_input:-$task_result}"
     fi
     case "$task_record" in '~/'*) task_record="${HOME}/${task_record:2}" ;; esac
@@ -177,7 +179,7 @@ PY
 resolve_setup_workspace() {
     if $task_dry_run; then
         # dry-run ではユーザーのローカル Bash 設定を source しない。
-        ATD_RESOLVED_ROS_WS="${task_workspace_override:-${ATD_ROS_WS:-${HOME}/workspaces/atd}}"
+        ATD_RESOLVED_ROS_WS="${task_workspace_override:-${ATD_ROS_WS:-${task_project_dir}/ros2_ws}}"
     else
         atd_load_workspace "$task_project_dir" "$task_host" || return $?
         ATD_RESOLVED_ROS_WS="${task_workspace_override:-$ATD_RESOLVED_ROS_WS}"

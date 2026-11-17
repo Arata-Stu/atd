@@ -1,0 +1,265 @@
+"""Notebook の loopback API とビルド済み Web UI。"""
+from __future__ import annotations
+
+import math
+import os
+from pathlib import Path
+import shutil
+import time
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
+
+from atd_processing.geometry import settings as generation_settings
+from .jobs import Jobs
+from .offline import DEFAULT_INPUTS, build_payload, vgl_payload
+from .store import Store, atomic_json, confined, read_json
+from . import transfers
+
+
+class Strict(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+
+class CreateMap(Strict):
+    id: str
+    title: str = ''
+
+
+class Generate(Strict):
+    revision: int = Field(ge=1)
+    kind: str
+    settings: dict = Field(default_factory=dict)
+
+
+class Connection(Strict):
+    host: str
+    user: str
+    port: int = 22
+    record_root: str
+    map_root: str
+    bridge_port: int = 8790
+
+
+class Relative(Strict):
+    relative: str = ''
+
+
+class Push(Strict):
+    id: str
+
+
+class VGL(Strict):
+    model_dir: str
+
+
+class Build(Strict):
+    id: str
+    bag: str
+    left_image: str = DEFAULT_INPUTS['left_image']
+    right_image: str = DEFAULT_INPUTS['right_image']
+    left_info: str = DEFAULT_INPUTS['left_info']
+    right_info: str = DEFAULT_INPUTS['right_info']
+    base_frame: str = DEFAULT_INPUTS['base_frame']
+    left_frame: str = DEFAULT_INPUTS['left_frame']
+    right_frame: str = DEFAULT_INPUTS['right_frame']
+
+
+def create_app(record_root=None, result_root=None, static_dir=None):
+    app = FastAPI(title='ATD Studio', version='0.1.0')
+    # record_root は既存 mount の基底で、bag の保存単位はその rosbags/ 配下。
+    store = Store(Path(record_root or os.environ.get('ATD_WEB_RECORD_ROOT', '/data/record')) / 'rosbags',
+                  result_root or os.environ.get('ATD_WEB_RESULT_ROOT', '/data/results'))
+    app.state.store = store
+    app.state.jobs = jobs = Jobs(store)
+
+    @app.exception_handler(ValueError)
+    async def invalid(_request, error):
+        return JSONResponse(status_code=400, content={'detail': str(error)})
+
+    @app.exception_handler(OSError)
+    async def io_error(_request, error):
+        return JSONResponse(status_code=503, content={'detail': 'ファイル・外部処理を確認してください: ' + str(error)})
+
+    @app.middleware('http')
+    async def local_request(request: Request, call_next):
+        host = request.headers.get('host', '').split(':')[0]
+        if host not in ('127.0.0.1', 'localhost', 'testserver'):
+            return JSONResponse(status_code=403, content={'detail': 'loopback 専用です'})
+        origin = request.headers.get('origin')
+        if origin and origin not in ('http://' + request.headers.get('host', ''), 'https://' + request.headers.get('host', '')):
+            return JSONResponse(status_code=403, content={'detail': '異なる Origin の要求を拒否しました'})
+        if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+            if request.headers.get('content-type', '').split(';')[0] != 'application/json' and request.headers.get('content-length', '0') != '0':
+                return JSONResponse(status_code=415, content={'detail': 'application/json を指定してください'})
+            try:
+                if int(request.headers.get('content-length', '0')) > 32 * 1024 * 1024:
+                    return JSONResponse(status_code=413, content={'detail': '要求が大きすぎます'})
+            except ValueError:
+                return JSONResponse(status_code=400, content={'detail': 'Content-Length が不正です'})
+        response = await call_next(request)
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Referrer-Policy'] = 'same-origin'
+        return response
+
+    @app.get('/api/health')
+    def health():
+        return dict(status='ok', service='atd-web', timestamp=time.time())
+
+    @app.get('/api/config')
+    def config():
+        return dict(record_root=str(store.record_root), result_root=str(store.result_root), map_root=str(store.maps_root),
+                    capabilities=dict(ros=bool(shutil.which('ros2')), ssh=bool(shutil.which('ssh')), scp=bool(shutil.which('scp'))),
+                    mapping_defaults=DEFAULT_INPUTS)
+
+    @app.get('/api/connection')
+    def get_connection():
+        return store.connection()
+
+    @app.put('/api/connection')
+    def set_connection(body: Connection):
+        return store.save_connection(body.model_dump())
+
+    @app.get('/api/records')
+    def records():
+        return dict(items=store.records())
+
+    @app.get('/api/maps')
+    def maps():
+        return dict(items=store.list_maps())
+
+    @app.post('/api/maps')
+    def create_map(body: CreateMap):
+        return store.create_map(body.id, body.title)
+
+    @app.post('/api/maps/build')
+    def build(body: Build):
+        payload = build_payload(store, body.model_dump())
+        return jobs.start('map_build', payload, ['map:' + body.id, 'ros-domain:93'], '公式 cuVSLAM 地図作成: ' + body.id)
+
+    @app.get('/api/maps/{key}')
+    def load_map(key: str):
+        return store.load_map(key)
+
+    @app.put('/api/maps/{key}')
+    def save_map(key: str, body: dict):
+        with jobs.registry():
+            jobs.require_available(['map:' + key])
+            return store.save_map(key, body)
+
+    @app.post('/api/maps/{key}/generate')
+    def generate(key: str, body: Generate):
+        document = store.load_map(key)
+        if body.kind not in ('centerline', 'raceline', 'custom'):
+            raise ValueError('未知のライン種別です')
+        if document['revision'] != body.revision:
+            raise ValueError('地図を保存してから生成してください')
+        generation_settings(body.settings)
+        return jobs.start('generate', dict(id=key, **body.model_dump()), ['map:' + key], body.kind + ' 生成: ' + key)
+
+    @app.post('/api/maps/{key}/export')
+    def export(key: str):
+        from .exports import export_map
+        with jobs.registry():
+            jobs.require_available(['map:' + key])
+            return export_map(store, key)
+
+    @app.post('/api/maps/{key}/vgl')
+    def vgl(key: str, body: VGL):
+        payload = vgl_payload(store, key, body.model_dump())
+        return jobs.start('vgl', payload, ['map:' + key, 'ros-domain:93'], '公式 VGL 地図準備: ' + key)
+
+    @app.get('/api/maps/{key}/cloud')
+    def cloud(key: str):
+        folder = store.folder(key)
+        path = folder / 'hdmap/cloud.json'
+        if not path.is_file():
+            return dict(points=[], frame='map', source_count=0, truncated=False, status='unavailable', message='表示用点群は未取得です')
+        data = read_json(confined(folder, 'hdmap/cloud.json'))
+        all_points = data['points']
+        stride = max(1, math.ceil(len(all_points) / 250000))
+        return dict(points=all_points[::stride], frame='map', source_count=len(all_points), truncated=stride > 1, status='ready')
+
+    @app.post('/api/maps/{key}/cloud')
+    def import_cloud(key: str, body: dict):
+        # map frame の明示インポートのみ。odom や単位の推測で変換しない。
+        if body.get('frame') != 'map' or not isinstance(body.get('points'), list) or len(body['points']) > 1000000:
+            raise ValueError('100万点以内の map 座標点群を指定してください')
+        for point in body['points']:
+            if not isinstance(point, list) or len(point) != 3 or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in point):
+                raise ValueError('点群は有限の [x,y,z] メートル座標で指定してください')
+        with jobs.registry(), store.lock('map-' + key):
+            jobs.require_available(['map:' + key])
+            document = store.load_map(key)
+            if body.get('revision') != document['revision']:
+                raise ValueError('地図 revision が変わりました')
+            atomic_json(store.folder(key) / 'hdmap/cloud.json', dict(frame='map', points=body['points'], provenance='explicit_import'))
+            document['source']['pointcloud_status'] = 'ready'
+            document.update(revision=document['revision'] + 1, updated=time.time())
+            atomic_json(store.folder(key) / 'hdmap/map.json', document)
+        return document
+
+    @app.post('/api/transfer/browse')
+    def browse(body: Relative):
+        p = transfers.connection(store.connection())
+        return transfers.request(p, 'browse', p['record_root'], body.relative)
+
+    @app.post('/api/transfer/pull')
+    def pull(body: Relative):
+        p = transfers.connection(store.connection())
+        relative = transfers.relative(body.relative)
+        if not relative or relative == '.':
+            raise ValueError('bag ディレクトリを選択してください')
+        if confined(store.record_root, relative, False).exists():
+            raise ValueError('受信先が既に存在します')
+        return jobs.start('pull', dict(connection=p, relative=relative), ['transfer', 'record:' + relative], 'SCP bag 受信: ' + relative)
+
+    @app.post('/api/transfer/push')
+    def push(body: Push):
+        p = transfers.connection(store.connection())
+        store.load_map(body.id)
+        return jobs.start('push', dict(connection=p, id=body.id), ['transfer', 'map:' + body.id], 'SCP 地図送信: ' + body.id)
+
+    @app.get('/api/jobs')
+    def job_list():
+        return dict(items=jobs.list())
+
+    @app.get('/api/jobs/{key}')
+    def job_get(key: str):
+        return jobs.get(key)
+
+    @app.get('/api/jobs/{key}/log')
+    def job_log(key: str, offset: int = 0):
+        return jobs.log(key, offset)
+
+    @app.post('/api/jobs/{key}/cancel')
+    def job_cancel(key: str):
+        return jobs.cancel(key)
+
+    from .live_input import router
+    app.include_router(router, prefix='/api')
+    static = Path(static_dir or os.environ.get('ATD_WEB_STATIC_DIR', Path(__file__).resolve().parents[3] / 'frontend/dist'))
+    if (static / 'index.html').is_file():
+        if (static / 'assets').is_dir():
+            app.mount('/assets', StaticFiles(directory=static / 'assets'), name='assets')
+
+        @app.get('/favicon.svg')
+        def favicon():
+            if not (static / 'favicon.svg').is_file():
+                raise HTTPException(status_code=404, detail='favicon がありません')
+            return FileResponse(static / 'favicon.svg', media_type='image/svg+xml')
+
+        @app.get('/')
+        def home():
+            return FileResponse(static / 'index.html')
+    else:
+        @app.get('/')
+        def build_required():
+            return JSONResponse(status_code=503, content={'detail': 'frontend が未buildです。scripts/webui.sh を使って準備してください'})
+    return app
+
+
+# import だけで /data を作らない。factory=True で uvicorn から起動する。

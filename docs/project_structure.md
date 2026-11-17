@@ -1,14 +1,18 @@
 # ディレクトリ・ファイルの配置規約
 
-ATD のソース・設定と、ホストごとの ROS workspace・生成物を分ける。配置はこの文書を基準とし、必要な実装を追加する時点でディレクトリを作る。将来用の空ディレクトリや空の文書を先に増やさない。
+clone 内でソース・設定、ROS workspace、永続データ、生成物の役割を分ける。clone の標準配置は `~/workspaces/atd`。未設定時の workspace と保存先は実際の clone 位置を基準に決める。
+配置はこの文書を基準とし、必要な実装を追加する時点でディレクトリを作る。将来用の空ディレクトリや空の文書を先に増やさない。
 
 ## リポジトリの構成
 
 ```text
-atd/
+~/workspaces/atd/              # clone の標準配置
 ├── AGENTS.md                  # 開発規約
 ├── README.md                  # 目的・操作入口・文書一覧
 ├── config/                    # ホスト固有設定の例とローカル設定
+├── data/                      # Git 管理対象外の永続資産。storage 操作で root を準備
+│   ├── record/                # bag 等の記録データ
+│   └── results/               # 地図・モデル・run 結果
 ├── docker/
 │   ├── Dockerfile.*           # Isaac ROS の追加 image layer
 │   ├── isaac_ros/             # 公式 CLI 用の設定テンプレート
@@ -16,6 +20,7 @@ atd/
 │   ├── python/ros/            # ROS 2 用 pyproject.toml / uv.lock
 │   ├── python/train/          # 学習用 pyproject.toml / uv.lock
 │   ├── python/vgl-export/     # Notebook の VGL ONNX export 用依存
+│   ├── python/web/            # Notebook の Web API 用 uv 環境
 │   └── scripts/               # コンテナの起動処理・環境操作
 ├── docs/                      # 要件・構成・操作手順・技術的な判断
 │   └── setup/                 # 共通・Notebook・Jetson の導入手順
@@ -32,7 +37,7 @@ atd/
 └── tests/                     # setup・Docker 等の共通基盤のテスト
 ```
 
-次の配置は、対応するコードを実装する時点で使用する。現段階で UI・firmware・ROS node の実装済みを示すものではない。
+`apps/web/` と `atd_joy` / `atd_web_bridge` は初期実装を追加した。firmware 等は対応するコードを実装する時点でディレクトリを作成する。ソース実装と対象機での build・実機検証は区別する。
 
 | 配置 | 内容 |
 | --- | --- |
@@ -40,6 +45,8 @@ atd/
 | `firmware/<target>/` | ESC・サーボ制御用の独自 firmware。対象マイコン確定後に追加する |
 | `tools/<purpose>/` | ROS node ではないデータ抽出・解析・学習等の実装 |
 | `hardware/<kind>/` | CAD 以外の回路・配線等の編集元資料 |
+
+共通 Web アプリは `apps/web/{frontend,backend,processing}/` に分ける。frontend は React / TypeScript / Vite、backend は FastAPI とジョブ・転送・公式処理 adapter、processing は Web 非依存の HDMap 幾何処理・ライン生成。UI を使うのは Notebook のみで、Jetson 側は `atd_web_bridge` / `atd_joy` を明示起動する。操作は [Web アプリ](../apps/web/README.md)を参照する。
 
 ## ROS 2 package
 
@@ -79,7 +86,7 @@ package 固有の parameter、較正設定、launch はその package に置く�
 
 | 対象 | 配置・管理 |
 | --- | --- |
-| workspace・保存先の設定例 | `config/*.env.example`。共有する既定値・説明を記録する |
+| workspace・保存先の設定例 | `config/*.env.example`。変数名・実パスの記入例・説明を記録する |
 | ホスト固有の値 | `config/workspace.env`、`config/storage.env`。ホストごとに保存し、Git 管理対象外 |
 | 共通 apt 依存 | `docker/dependencies.apt` |
 | 追加 Python 依存 | `docker/python/<purpose>/{pyproject.toml,uv.lock}`。用途別に管理する |
@@ -88,6 +95,8 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | 診断と履歴 | `scripts/docker.sh` |
 | 用途別 Python 操作 | `scripts/python.sh` |
 | VGL モデルの export・転送・build | `scripts/vgl.sh` |
+| Notebook 共通 Web UI | Docker 内の `atd-web`。ホストからの補助入口は `scripts/webui.sh` |
+| Jetson の入力・観測設定 bridge | `scripts/input.sh` |
 
 ユーザー向けの操作は `scripts/` の短い入口から提供する。コンテナ内の処理は `docker/scripts/`、ホスト準備の内部処理は `scripts/setup/`、共通関数は `scripts/lib/` に置く。入口ごとに同じ設定読込みやホスト判定を実装し直さない。
 
@@ -105,7 +114,7 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | [Python 環境](python_environments.md) | uv、用途別環境、ROS 2 Python との関係 |
 | [VGL モデル](vgl_models.md) | Notebook export、SCP 転送、Jetson engine build、検証・ログ |
 | [ビルド方針](isaac_ros_build_strategy.md) | CLI・Docker・ROS package の build 方針と技術的な根拠 |
-| [環境セットアップ案](environment_setup_plan.md) | Kart の比較調査と、未実装の UI・デバイス等の構成案 |
+| [環境セットアップ案](environment_setup_plan.md) | Kart の比較調査、初期実装の状況と対象機での残りの検証 |
 
 CAD 等の編集元データは `hardware/` に置き、文書から参照する。`docs/` は説明文書を置く場所とし、編集元 CAD と空の仕様書を混在させない。実測・確定した仕様が増えた時点で、対応する文書を追加する。
 
@@ -115,19 +124,21 @@ CAD 等の編集元データは `hardware/` に置き、文書から参照する
 | --- | --- |
 | CLI 用の生成 Dockerfile | `<ATD checkout>/.cache/docker/<revision>/`。再生成可能、Git 管理対象外 |
 | 診断ログ | `<ATD checkout>/logs/docker/<host>/`。履歴を保持し、Git 管理対象外 |
-| ROS build 成果物 | `<選択した workspace>/{build,install,log}/`。各ホストで生成する |
+| ROS build 成果物 | `<選択した workspace>/{build,install,log}/`。未設定時の workspace は `<ATD checkout>/ros2_ws` |
 | Python venv / cache | `<選択した workspace>/.atd-python/`。各ホスト・アーキテクチャで生成する |
+| Web の node_modules / frontend build | `<選択した workspace>/.atd-web/frontend/`。readonly の checkout と分け、Notebook 上で生成する |
 | bag | ホスト別設定の記録先。コンテナでは `/data/record` |
 | 地図・モデル・解析・学習結果 | ホスト別設定の結果先。コンテナでは `/data/results` |
 
-bag・地図・モデル重み・TensorRT engine・大きな学習結果をコードのリポジトリへ直接置かない。実装コードと、参照する入力・モデル・成果物の情報を管理する。venv や build 成果物を Notebook と Jetson の間でコピーして利用しない。
+bag・地図・モデル重み・TensorRT engine・大きな学習結果は、clone 配下の `data/` を既定の保存先とし、Git の管理対象には含めない。実装コードと永続資産の役割を分け、参照する入力・モデル・成果物の情報を管理する。venv や build 成果物を Notebook と Jetson の間でコピーして利用しない。
 
 自動生成できる cache と bytecode は必要時に再生成する。記録データ・地図・診断ログ・CAD 等の編集元は、cache と同じ扱いで削除しない。
 
 ## データの保存構成
 
 保存先の設定と mount は既存の記録先・結果先の二つを使い、その中の用途別配置を次のように定める。新しい環境変数や mount は追加しない。
-Notebook では `ATD_PC_RECORD_DIR` / `ATD_PC_RESULT_DIR`、Jetson では `ATD_JETSON_RECORD_DIR` / `ATD_JETSON_RESULT_DIR` がホスト側の root に対応する。設定例の既定値はそれぞれ `~/atd-data/<pc|jetson>/record` と `~/atd-data/<pc|jetson>/results` であり、SSD を使う場合はホストごとの実際のパスを設定する。
+Notebook では `ATD_PC_RECORD_DIR` / `ATD_PC_RESULT_DIR`、Jetson では `ATD_JETSON_RECORD_DIR` / `ATD_JETSON_RESULT_DIR` がホスト側の root に対応する。未設定時は実際の clone 配下の `data/record`・`data/results` を使う。clone が `~/workspaces/atd` なら `~/workspaces/atd/data/record`・`~/workspaces/atd/data/results` となる。
+両ホストの設定は別々に保持し、保存済み指定や引数・環境変数の上書きを優先する。設定例のコメントはホストの実パスを記入して使うためのものであり、他ホストの未設定値を自動保存するものではない。
 
 ```text
 /data/record/

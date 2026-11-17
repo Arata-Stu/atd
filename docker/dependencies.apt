@@ -6,6 +6,8 @@ build-essential
 cmake
 ninja-build
 pkg-config
+libevdev-dev
+libyaml-cpp-dev
 python3
 python3-dev
 python3-venv
@@ -34,6 +36,12 @@ ros-lyrical-ament-cmake-python
 ros-lyrical-rclcpp
 ros-lyrical-rclcpp-components
 ros-lyrical-rclpy
+ros-lyrical-rcl-interfaces
+ros-lyrical-std-msgs
+ros-lyrical-std-srvs
+ros-lyrical-diagnostic-msgs
+ros-lyrical-ament-cmake-gtest
+ros-lyrical-ament-cmake-pytest
 ros-lyrical-launch-ros
 ros-lyrical-sensor-msgs
 ros-lyrical-geometry-msgs
@@ -49,7 +57,11 @@ ros-lyrical-joy
 ros-lyrical-foxglove-bridge
 ros-lyrical-rmw-fastrtps-cpp
 
-# VGL の配布モデル・公式 engine builder と実読み込み検査
+# Isaac ROS 5 / Lyrical の apt 配布。地図作成と車載 localization の実装に使う。
+# モデル取得・engine build・地図生成・ROS 起動は apt 導入とは別の明示操作。
+ros-lyrical-isaac-ros-cuvslam
+ros-lyrical-isaac-ros-visual-slam-interfaces
+ros-lyrical-isaac-mapping-ros
 ros-lyrical-isaac-ros-visual-mapping
 ros-lyrical-isaac-ros-visual-global-localization
 python3-libnvinfer

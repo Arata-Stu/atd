@@ -93,7 +93,7 @@ Isaac ROS 5.0 / ROS 2 Lyrical / JetPack 7.2 を対象とし、上流に対して
 | [`../scripts/docker.sh`](../scripts/docker.sh) | 項目別の診断結果をホストごとのログへ保存・再表示し、起動・build に進める |
 | [`../scripts/detect_host.sh`](../scripts/detect_host.sh) | Jetson / Tegra の機種情報・BSP マーカーを参照する判定関数 |
 | [`../config/storage.env.example`](../config/storage.env.example) | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
-| [`../config/workspace.env.example`](../config/workspace.env.example) | PC / Jetson ごとの ROS workspace の設定例。既定は各ホストの `~/workspaces/atd` |
+| [`../config/workspace.env.example`](../config/workspace.env.example) | PC / Jetson ごとの ROS workspace の設定例。未設定時は実 clone 配下の `ros2_ws` |
 | [`../docker/Dockerfile.realsense455`](../docker/Dockerfile.realsense455) | 標準 RealSense layer の置換。librealsense SDK のみ CUDA 無効で構築する |
 | [`../docker/Dockerfile.atd`](../docker/Dockerfile.atd) | 共通依存・DDS の build 時準備、固定版 uv、root 起動 hook、専用シェル、Docker ENV を配置する |
 | [`../docker/dependencies.apt`](../docker/dependencies.apt) | 起動時に不足分を確認する共通 apt 依存一覧。イベントカメラ関連は含めない |
@@ -114,7 +114,7 @@ Isaac ROS 5.0 / ROS 2 Lyrical / JetPack 7.2 を対象とし、上流に対して
 追加層の名前は CLI の `Dockerfile.<image_key>` 規則に合わせて `Dockerfile.atd` とした。image key は `atd` であり、`.additional_setting` 等の独自名は使わない。
 
 `scripts/dev.sh` は apt 版の `isaac-ros activate` を利用する。`--build` を付けると `--build-local` を渡す。
-ホストの workspace は `config/workspace.env` から選び、既定は各ホストの `~/workspaces/atd`。コンテナ内の `/workspaces/isaac_ros-dev` は共通にする。CLI の探索規則に合わせ、選択先とその親の `scripts` から `docker/isaac_ros/` のテンプレートを参照する。ATD の旧配置への既知の参照を移行し、異なる既存設定は自動上書きしない。具体的な配置と設定変更は [セットアップ手順](setup/README.md#ros-workspace-のパス)を参照する。
+ホストの workspace は `config/workspace.env` の保存済み指定と上書き指定を使い、未設定時は実際の clone 配下の `ros2_ws` とする。clone の標準配置 `~/workspaces/atd` なら `~/workspaces/atd/ros2_ws`。記録先・結果先は clone の `data/record`・`data/results` を未設定時の値とし、コンテナ内の workspace とデータのパスは維持する。CLI の探索規則に合わせ、選択先とその親の `scripts` から `docker/isaac_ros/` のテンプレートを参照する。ATD の旧配置への既知の CLI 参照を移行し、異なる既存設定や保存先は自動変更しない。具体的な配置と設定変更は [セットアップ手順](setup/README.md#ros-workspace-のパス)を参照する。
 公式の `isaac_ros` をベースに、ローカルの `realsense455`、`atd` layer を構築し、コンテナ内での手動インストールだけに依存しない構成とした。
 Foxglove Bridge のパッケージ導入と、bridge の起動・公開設定・動作確認は区別する。現時点では bridge は自動起動しない。
 

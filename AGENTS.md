@@ -13,16 +13,16 @@
 - プロジェクトの要件、機材、想定環境、提案、未決事項は [docs/project_requirements.md](docs/project_requirements.md) を参照する。
 - ユーザーが明示した要件と、調査に基づく提案を混同しない。提案や候補を採用済みとして扱わない。
 - 設計に影響する要件が決まった場合は、関連する文書も整合させる。
-- 現在は要件定義と Docker 開発環境の初期実装段階である。設定・スクリプトの作成、ホスト上の検証、Docker 内での動作、実機検証を区別して報告する。
+- 現在は Docker 開発環境と共通 Web アプリ・入力監視の初期実装段階である。設定・スクリプトの作成、ホスト上の検証、Docker 内での動作、実機検証を区別して報告する。
 - 自動運転ソフトウェアの詳細は後工程で検討する。走行目標・アルゴリズム等の確定を、現在の環境整備や共通規約の定義を進める前提条件にしない。
 
 ## ディレクトリ・ファイルの配置
 
-- 配置は [構成規約](docs/project_structure.md) を基準とする。自作 ROS package は `ros2_ws/src/atd_<module>/`、共通 Web アプリは実装時に `apps/web/`、独自 firmware は対象確定後に `firmware/<target>/` へ置く。
+- 配置は [構成規約](docs/project_structure.md) を基準とする。自作 ROS package は `ros2_ws/src/atd_<module>/`、共通 Web アプリは `apps/web/`、独自 firmware は対象確定後に `firmware/<target>/` へ置く。
 - ROS package の `launch/`・`config/`・`test/` は package 内に置く。root の `config/` はホストの workspace・保存先等、root の `tests/` は setup・Docker 等の共通基盤に使う。
 - ユーザー向け `.sh` は `scripts/`、共通関数は `scripts/lib/`、ホスト準備の内部処理は `scripts/setup/`、コンテナ内処理は `docker/scripts/` に置く。
 - CLI 設定テンプレートは `docker/isaac_ros/`、生成 Dockerfile は Git 管理対象外の `.cache/docker/` に置く。ROS package の編集元は `ros2_ws/src/` とする。リポジトリの `ros2_ws` を workspace に選ぶ場合はその `src` を使い、別の workspace の場合はコンテナの `src/atd` に rw で mount する。
-- CAD 等の編集元は `hardware/`、説明文書は `docs/` に置く。bag・地図・モデル重み・engine・学習結果は設定した外部保存先で管理する。
+- CAD 等の編集元は `hardware/`、説明文書は `docs/` に置く。clone の標準配置は `~/workspaces/atd` とし、bag・地図・モデル重み・engine・学習結果は clone 配下の `data/record`・`data/results` を既定とする。`data/` は Git 管理対象外の永続資産として保持する。
 - データは既存の記録先・結果先を使い、`/data/record/rosbags/` と `/data/results/{maps,models,runs}/` に整理する。NVIDIA の地図・モデル・exporter の内部構成は維持し、地図とモデルを混同しない。対象環境別 engine・run の checkpoint / log は保持する資産とし、cache として自動削除しない。詳細は [保存構成](docs/project_structure.md#データの保存構成)に従う。
 - VGL モデルの準備・export は Notebook で行い、export 済みモデルと必要な設定・管理情報を SCP で Jetson へ転送する。VGL モデル準備に関して Jetson では転送済み資産からの TensorRT engine build のみを行う。入力、export 成果物、対象環境別 engine を分けて保存し、処理の実装と対象機での動作検証を区別する。
 - VGL 操作の入口は `scripts/vgl.sh` と [手順](docs/vgl_models.md) とする。Notebook のモデルからの ONNX export と、既存 ONNX bundle の package 操作を区別する。転送・build では manifest の ID・hash を検証し、既存の資産を上書きしない。実装のテストと、対象 SDK / GPU・実 SCP での検証を分けて報告する。
@@ -38,7 +38,7 @@
 - 同じ依存導入スクリプトを Docker build 時にも実行し、既知の依存をイメージにキャッシュする。起動時の不足確認は省略しない。
 - DDS は Fast DDS の UDPv4 / loopback 設定を使う。生成先は `/etc/atd/fastdds.xml` と `/etc/atd/dds.env.sh` とし、起動時の root スクリプトで配置する。
 - 初回準備は `scripts/setup.sh` と [セットアップ手順](docs/setup/README.md) を入口とする。Notebook（x86_64 / amd64）と Jetson（aarch64 / arm64 と BSP）を区別し、既存 Docker・CLI 設定を不用意に置換しない。
-- ROS workspace は setup の workspace 操作で対話的に指定し、既定は各ホストの `~/workspaces/atd` とする。`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存する。コンテナでは `/workspaces/isaac_ros-dev` を使い、`ISAAC_ROS_WS` は `dev.sh` が設定する。Notebook / Jetson のホストパスやビルド成果物を同一視しない。別の workspace を使う場合、その `src/atd` はリポジトリの `ros2_ws/src/` を mount する予約先とし、編集元を別々に管理しない。
+- ROS workspace は setup の workspace 操作で対話的に指定し、未設定時は実際の clone 配下の `ros2_ws` を使う。標準 clone 位置なら `~/workspaces/atd/ros2_ws` となる。`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存する。保存済み指定と引数・環境変数の上書きを優先し、旧設定や既存データを自動移行しない。コンテナでは `/workspaces/isaac_ros-dev` を使い、`ISAAC_ROS_WS` は `dev.sh` が設定する。Notebook / Jetson のホストパスやビルド成果物を同一視しない。別の workspace を使う場合、その `src/atd` はリポジトリの `ros2_ws/src/` を mount する予約先とし、編集元を別々に管理しない。
 - 環境の診断は `scripts/docker.sh` から項目ごとの `OK` / `FAIL` / `SKIP` を表示し、結果を `logs/docker/<host>/` に保存して後から確認できるようにする。導入状態の診断と、Docker 起動・GPU 演算・センサ・実走行の検証を区別する。
 - 開発環境は `scripts/dev.sh` で起動し、PC / Jetson は機種情報・BSP のマーカーから自動判定する。必要な場合だけ `--host pc|jetson` で上書きする。保存先はホストごとに設定し、記録データと解析結果を毎回読書き可能で mount する。rosbag 記録や車両起動は自動実行しない。
 - 新規起動と稼働中コンテナへの再接続を区別する。再接続は `atd-shell` を使い、稼働中の依存・DDS 設定を更新しない。構成が変わった場合や旧コンテナは、処理を終了して再作成する。
@@ -58,7 +58,8 @@
 - 処理、bag、地図、設定等の候補を検索・選択する場面では、`fzf` を積極的に活用し、対話的に実行できるようにする。
 - 対話操作と、引数・環境変数による直接指定を併用できる構成にする。既存の PC / Jetson の自動判定など、確定済みの起動方針との整合を保つ。
 - 操作や可視化に役立つブラウザ UI も積極的に作成する。主な用途は地図の編集、自己位置の確認、PC / Jetson の操作・状態確認である。
-- ブラウザ UI はノート PC の Chrome で `http://127.0.0.1:<port>` を開く利用形態を基本とする。Jetson の負荷を抑えるため、Jetson 自身では通常ブラウザを開かない。
+- ブラウザ UI はノート PC のみで使い、Chrome で `http://127.0.0.1:<port>` を開く。Jetson で UI のブラウザ・frontend を起動しない。観測・設定用の Jetson 側 ROS bridge は別に配置する。
+- 共通 Web アプリは React + TypeScript / Vite と FastAPI を採用する。`apps/web/` に frontend・backend・Web に依存しない processing を分け、通常は Notebook の Docker 内で `atd-web` を実行する。`scripts/webui.sh` はホストから同じコンテナ内コマンドへ委譲する補助入口。ブラウザだけを Notebook ホストで開く。Node / pnpm と `web` 用 uv 環境は Notebook 専用。実装・ホスト上の検証・Docker / ROS / 実機検証を区別する。
 - 共通 Web アプリは地図、Jetson との SCP 転送、bringup 中のライブ表示・ROS 2 parameter 動的調整、Joy 入力監視・軸ボタン配置調整を扱う。プロポ対応は将来検討とする。具体的な入力割り当てや設定の反映・再開条件は固定しない。機能要件と framework・実装構成案は [要件文書](docs/project_requirements.md) で区別する。
 - UI の追加でも、走行処理の Jetson 内完結と、PC から遠隔の走行制御を与えない要件を維持する。ブラウザの実行場所と、サーバー・Jetson 側バックエンドの配置は区別する。
 

@@ -1,0 +1,16 @@
+/**/atd_web_bridge:
+  ros__parameters:
+    use_sim_time: false
+    port: 8790
+    freshness_s: 2.5
+    odometry_topic: /localization/odometry
+    pose_topic: /localization/pose
+    velocity_topic: /vehicle/velocity
+    joy_topic: /joy
+    joy_raw_topic: /joy/raw
+    joy_status_topic: /joy/status
+    joy_node: /atd_joy_node
+    profile_path: /data/results/runs/input/dualsense.yaml
+    parameter_node_prefix: /atd_
+    # 実際の対象nodeとparameter名を明示する。既定では変更を許可しない。
+    parameter_allowlist_json: '{}'

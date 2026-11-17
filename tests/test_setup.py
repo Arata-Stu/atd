@@ -102,7 +102,7 @@ class SetupScriptTests(unittest.TestCase):
         self.config = self.project / "config/storage.env"
         self.home = self.root / "home"
         self.home.mkdir()
-        self.workspace = self.home / "workspaces/atd"
+        self.workspace = self.project / "ros2_ws"
         self.workspace_config = self.project / "config/workspace.env"
         self.recorder = self.root / "record.py"
         self.recorder.write_text(RECORDER)
@@ -186,7 +186,7 @@ class SetupScriptTests(unittest.TestCase):
         self.assertFalse(record.exists())
         self.assertFalse(results.exists())
         self.assertFalse((self.project / ".cache").exists())
-        self.assertFalse(self.workspace.exists())
+        self.assertFalse((self.workspace / '.isaac-ros-cli').exists())
         self.assertFalse(self.workspace_config.exists())
         self.assertEqual(set(self.project.rglob("*")), before_paths)
         self.assertEqual({path: path.read_bytes() for path in before_files}, before_files)
@@ -243,6 +243,8 @@ class SetupScriptTests(unittest.TestCase):
                 self.assertEqual({relative: (self.project / relative).read_bytes()
                                   for relative in WORKSPACE_CONFIGS}, before)
                 self.assertEqual(self.calls(), [])
+                self.assertFalse((self.project / 'src').exists())
+                self.assertFalse((self.workspace / 'src/atd').exists())
 
     def test_workspace_saves_distinct_hosts_and_preserves_unrelated_settings(self):
         pc_workspace, jetson_workspace = self.root / "notebook-ws", self.root / "jetson-ws"
@@ -331,13 +333,13 @@ class SetupScriptTests(unittest.TestCase):
                 finally:
                     shutil.copyfile(PROJECT / relative, path)
 
-    def test_native_workspace_keeps_existing_ros_package_source(self):
+    def test_default_workspace_keeps_existing_ros_package_source(self):
         workspace = self.project / 'ros2_ws'
         package = workspace / 'src/atd_fixture/package.xml'
         package.parent.mkdir()
         package.write_text('<package format="3"><name>atd_fixture</name></package>\n')
         before = package.read_bytes()
-        result = self.invoke('--action', 'workspace', '--workspace', str(workspace))
+        result = self.invoke('--action', 'workspace')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.read_workspace()['ATD_PC_ROS_WS'], str(workspace))
         self.assertEqual(package.read_bytes(), before)
@@ -350,7 +352,7 @@ class SetupScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(set(self.project.rglob("*")), before_paths)
         self.assertFalse((self.project / ".cache").exists())
-        self.assertFalse(self.workspace.exists())
+        self.assertFalse((self.workspace / '.isaac-ros-cli').exists())
         self.assertFalse(self.workspace_config.exists())
         self.assertFalse((self.home / ".bashrc").exists())
         self.assertEqual(self.calls(), [])
@@ -384,6 +386,61 @@ class SetupScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.read_storage(), first)
         self.assertEqual(self.calls(), [])
+
+    def test_storage_defaults_to_the_actual_clone_and_saves_only_the_selected_host(self):
+        for host in ('pc', 'jetson'):
+            with self.subTest(host=host):
+                self.config.unlink(missing_ok=True)
+                result = self.invoke('--host', host, '--action', 'storage')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                values = self.read_storage()
+                selected = host.upper()
+                other = 'JETSON' if host == 'pc' else 'PC'
+                self.assertEqual(values[f'ATD_{selected}_RECORD_DIR'], str(self.project / 'data/record'))
+                self.assertEqual(values[f'ATD_{selected}_RESULT_DIR'], str(self.project / 'data/results'))
+                self.assertEqual(values[f'ATD_{other}_RECORD_DIR'], '')
+                self.assertEqual(values[f'ATD_{other}_RESULT_DIR'], '')
+                self.assertTrue((self.project / 'data/record').is_dir())
+                self.assertTrue((self.project / 'data/results').is_dir())
+                self.assertFalse((self.home / 'atd-data').exists())
+                self.assertEqual(self.calls(), [])
+
+    def test_storage_interactive_enter_uses_clone_defaults_and_labels_their_purpose(self):
+        master, slave = pty.openpty()
+        try:
+            process = subprocess.Popen(
+                ['/bin/bash', str(self.script), '--host', 'jetson', '--action', 'storage'],
+                env=self.env, stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            os.write(master, b'\n\n')
+            stdout, stderr = process.communicate(timeout=15)
+        finally:
+            os.close(slave)
+            os.close(master)
+        self.assertEqual(process.returncode, 0, stdout + stderr)
+        self.assertIn('record 保存先（rosbag）', stderr)
+        self.assertIn('results 保存先（地図・モデル・解析）', stderr)
+        self.assertIn(str(self.project / 'data/record'), stderr)
+        self.assertEqual(self.read_storage()['ATD_JETSON_RESULT_DIR'], str(self.project / 'data/results'))
+
+    def test_storage_changed_paths_do_not_move_or_delete_existing_recordings(self):
+        previous_record = self.root / 'old-record'
+        previous_result = self.root / 'old-results'
+        previous_record.mkdir()
+        previous_result.mkdir()
+        bag = previous_record / 'recording.mcap'
+        bag.write_bytes(b'preserved recording fixture')
+        self.config.write_text(f'ATD_JETSON_RECORD_DIR={previous_record}\n'
+                               f'ATD_JETSON_RESULT_DIR={previous_result}\n')
+        result = self.invoke('--host', 'jetson', '--action', 'storage')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read_storage()['ATD_JETSON_RECORD_DIR'], str(previous_record))
+        new_record, new_results = self.project / 'data/record', self.project / 'data/results'
+        result = self.invoke('--host', 'jetson', '--action', 'storage',
+                             '--record-dir', str(new_record), '--result-dir', str(new_results))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read_storage()['ATD_JETSON_RECORD_DIR'], str(new_record))
+        self.assertEqual(bag.read_bytes(), b'preserved recording fixture')
+        self.assertFalse((new_record / bag.name).exists())
 
     def test_storage_preserves_other_host_and_unrelated_settings(self):
         existing = self.root / "existing PC record"

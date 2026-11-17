@@ -16,7 +16,7 @@ Jetson / Tegra の機種・BSP マーカー、Ubuntu、GPU・Docker・CLI、保�
 CPU が arm64 という理由だけで Jetson と扱う構成にはしない。
 必要な場合だけ `--host jetson` で手動上書きする。
 
-1TB SSD を使う場合、先にホストで mount されていることを確認し、その実際のパスを保存先に設定する。
+未設定時の記録先・結果先は実際の clone 配下の `data/record`・`data/results`。標準 clone 位置 `~/workspaces/atd` なら `~/workspaces/atd/data/{record,results}` を使い、Git 管理対象外の永続資産として保持する。1TB SSD 上で使う場合は、その filesystem がホストで mount 済みであることを確認する。
 setup はディスクの初期化、パーティション変更、root filesystem の移行をしない。
 記録先・解析結果先はそれぞれ存在し、通常ユーザーが読書きできることを確認する。
 
@@ -62,11 +62,11 @@ IR・RGB・IMU・Depth は利用候補として残す。全ストリームの常
 
 ## 4. ROS workspace・初回 build・通常起動
 
-Jetson 自身の ROS workspace の場所を指定する。既定は Jetson の `~/workspaces/atd`。Notebook の workspace とは別の実体を使い、`build/` / `install/` を共有しない。
+Jetson 自身の ROS workspace の場所を指定する。未設定時は実際の clone 配下の `ros2_ws`、標準配置なら `~/workspaces/atd/ros2_ws` を使う。Notebook の workspace とは別の実体で、`build/` / `install/` を共有しない。旧配置の保存済み指定は自動変更せず、workspace / storage 操作で選び直す。
 
 | 用途 | Jetson ホスト | コンテナ内 |
 | --- | --- | --- |
-| ROS workspace | 指定したパス。既定 `~/workspaces/atd` | `/workspaces/isaac_ros-dev`（読書き可） |
+| ROS workspace | 指定したパス。未設定なら `<ATD checkout>/ros2_ws` | `/workspaces/isaac_ros-dev`（読書き可） |
 | 自作 ROS package の編集元（別 workspace を使う場合） | `<ATD checkout>/ros2_ws/src` | `/workspaces/isaac_ros-dev/src/atd`（読書き可） |
 | プロジェクト設定参照 | `<ATD checkout>` | `/workspaces/atd`（readonly） |
 

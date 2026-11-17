@@ -24,8 +24,8 @@ atd_load_workspace() {
         source "$task_config" || return $?
     fi
     case "$task_profile" in
-        pc) ATD_RESOLVED_ROS_WS="${ATD_ROS_WS:-${ATD_PC_ROS_WS:-${HOME}/workspaces/atd}}" ;;
-        jetson) ATD_RESOLVED_ROS_WS="${ATD_ROS_WS:-${ATD_JETSON_ROS_WS:-${HOME}/workspaces/atd}}" ;;
+        pc) ATD_RESOLVED_ROS_WS="${ATD_ROS_WS:-${ATD_PC_ROS_WS:-${task_project}/ros2_ws}}" ;;
+        jetson) ATD_RESOLVED_ROS_WS="${ATD_ROS_WS:-${ATD_JETSON_ROS_WS:-${task_project}/ros2_ws}}" ;;
         *) printf 'エラー: 不明な workspace ホスト: %s\n' "$task_profile" >&2; return 1 ;;
     esac
     case "$ATD_RESOLVED_ROS_WS" in '~/'*) ATD_RESOLVED_ROS_WS="${HOME}/${ATD_RESOLVED_ROS_WS:2}" ;; esac

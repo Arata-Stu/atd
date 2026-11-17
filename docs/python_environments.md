@@ -10,6 +10,7 @@ Python の追加依存と仮想環境の管理には uv を使い、ROS 2 用、
 | ROS 2 用の Python 追加依存 | 独立した uv project と venv | システム Python と `--system-site-packages` を使用し、ROS 2 の Python 拡張と ABI を合わせる |
 | AI 学習用の Python 依存 | 独立した uv project と venv | system site-packages と ROS 2 の Python 環境変数を引き継がない |
 | Notebook の VGL export 用 | `vgl-export` project と venv | Python 3.12 / Linux x86_64 用の固定依存。ROS 用・学習用へ混在させない |
+| Notebook の Web API 用 | `web` project と venv | FastAPI・幾何処理用。ROS の Python 検索パスを引き継がず、Jetson では利用しない |
 | 解析・推論等の追加用途 | 必要時に別 project / venv を追加 | ROS 2 用・学習用のどちらへ入れるかを曖昧にせず、依存の互換性に応じて決める |
 
 ROS 2 の apt 依存を PyPI から入れ直す手順にはしない。`uv.lock` が固定する対象は各 project の追加 Python 依存であり、ベースイメージや apt パッケージの全状態ではない。再現にはそれらのバージョン・digest も記録する。
@@ -46,12 +47,16 @@ ROS 2 用環境は Docker 起動時に root hook から `gosu admin` を通し�
 | ROS 2 用 manifest / lock | `docker/python/ros/{pyproject.toml,uv.lock}` |
 | 学習用 manifest / lock | `docker/python/train/{pyproject.toml,uv.lock}` |
 | VGL export 用 manifest / lock | `docker/python/vgl-export/{pyproject.toml,uv.lock}` |
+| Web API 用 manifest / lock | `docker/python/web/{pyproject.toml,uv.lock}` |
 | venv | `<選択した ROS workspace>/.atd-python/<architecture>/<purpose>` |
 | uv cache | `<選択した ROS workspace>/.atd-python/cache` |
 
 venv の architecture は `uname -m` の値を使う。workspace の bind mount へ保存するため、CLI が `--rm` でコンテナを削除しても保持される。colcon の探索対象にしないため `.atd-python` に `COLCON_IGNORE` を置く。manifest と lockfile は共通の参照元で管理し、venv と cache は管理対象外とする。
+未設定時の workspace は実際の clone 配下の `ros2_ws`。標準配置なら venv は `~/workspaces/atd/ros2_ws/.atd-python/` に作成する。モデル・export bundle 等の永続資産は、venv と分けて clone の `data/results/` 以下に保存する。
 `ros` / `train` の追加 Python 依存は空であり、学習用ライブラリの導入・動作確認までは含まない。`vgl-export` は PyTorch / torchvision・ONNX 等を固定する Notebook 専用環境で、モデルからの export を選んだときに同期する。依存の版は project と lockfile を参照する。
 VGL export・既存 bundle の package・Jetson の engine build は [専用の操作手順](vgl_models.md)を使う。Jetson の engine build に Notebook の export 用 venv をコピーしない。
+
+共通 Web UI は Notebook の Docker 内で `atd-web` を実行し、`web` 環境を同期・選択して起動する。ホストの `scripts/webui.sh` は同じコンテナ内コマンドを呼ぶ補助入口である。ソースの backend / processing は readonly の checkout から読み、frontend の build と node_modules は workspace の `.atd-web/frontend/` へ作成する。`web` は Linux x86_64 の Notebook 専用で、ROS CLI を呼ぶ子プロセスでだけシステムの ROS 環境を読み込む。操作は [Web アプリ](../apps/web/README.md)を参照する。
 
 ## ROS 2 と Python interpreter
 

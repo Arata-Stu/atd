@@ -1,6 +1,7 @@
 # ATD 固有の依存を追加する層。isaac_ros → realsense455 → atd の順に構築する。
 # CLI が前の層のイメージを BASE_IMAGE として渡す。
 ARG BASE_IMAGE
+FROM node:24.22.3-bookworm-slim AS atd_web_node
 FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -22,11 +23,24 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && test "$(uv --version | awk '{print $2}')" = 0.13.8 \
     && rm -rf /var/lib/apt/lists/*
 
+# Notebook のみが UI を提供する。Jetson の最終 image に Node / pnpm を入れない。
+# 公式 Debian/glibc binary を使い、Ubuntu apt の古い Node と Vite の要件を混在させない。
+RUN --mount=type=bind,from=atd_web_node,source=/usr/local,target=/mnt/atd-node,ro \
+    if [ "$(dpkg --print-architecture)" = amd64 ]; then \
+        install -m 0755 /mnt/atd-node/bin/node /usr/local/bin/node; \
+        mkdir -p /usr/local/lib/node_modules; \
+        cp -a /mnt/atd-node/lib/node_modules/npm /usr/local/lib/node_modules/; \
+        ln -sfn ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
+        ln -sfn ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
+        npm install --global --ignore-scripts pnpm@11.25.0; \
+    fi
+
 # 公式 workspace-entrypoint が root で source する hook。CLI 本体は変更しない。
 COPY --chmod=0755 scripts/10-atd-runtime.sh /usr/local/bin/scripts/entrypoint_additions/10-atd-runtime.sh
 COPY --chmod=0755 scripts/atd-shell.sh /usr/local/bin/atd-shell
 COPY --chmod=0755 scripts/atd-python.sh /usr/local/bin/atd-python
 COPY --chmod=0755 scripts/atd-vgl.sh /usr/local/bin/atd-vgl
+COPY --chmod=0755 scripts/atd-web.sh /usr/local/bin/atd-web
 COPY scripts/atd.bashrc /etc/atd/bashrc
 
 # entrypoint での export だけでは docker exec へ継承されないため、既定値も記録する。

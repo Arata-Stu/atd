@@ -1,4 +1,4 @@
-"""外部 workspace の準備と、既存設定・解決後パスの保護を確認する。"""
+"""clone 内と外部 workspace の準備、既存設定・解決後パスの保護を確認する。"""
 
 import os
 from pathlib import Path
@@ -64,6 +64,10 @@ class WorkspaceHelperTests(unittest.TestCase):
         return result
 
     def test_default_workspace_metadata_and_second_prepare_are_idempotent(self):
+        workspace = self.project / 'ros2_ws'
+        package_source = workspace / 'src/atd_default/example.cpp'
+        package_source.parent.mkdir()
+        package_source.write_text('int example;\n')
         result = subprocess.run(
             ["/bin/bash", "-c",
              'source "$1"; atd_load_workspace "$2" pc && atd_prepare_workspace "$2" "$ATD_RESOLVED_ROS_WS"',
@@ -72,23 +76,74 @@ class WorkspaceHelperTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         destinations = {
-            self.workspace.parent / "scripts/.build_image_layers.yaml": self.project / TEMPLATES[0],
-            self.workspace / "scripts/.isaac_ros_common-config": self.project / TEMPLATES[1],
-            self.workspace / ".isaac-ros-cli/config.yaml": self.project / TEMPLATES[2],
+            self.project / "scripts/.build_image_layers.yaml": self.project / TEMPLATES[0],
+            workspace / "scripts/.isaac_ros_common-config": self.project / TEMPLATES[1],
+            workspace / ".isaac-ros-cli/config.yaml": self.project / TEMPLATES[2],
         }
         for destination, source in destinations.items():
             self.assertTrue(destination.is_symlink(), str(destination))
             self.assertEqual(destination.resolve(), source)
-        self.assertTrue((self.workspace / "src").is_dir())
-        self.assertTrue((self.workspace / 'src/atd').is_dir())
-        self.assertEqual(list((self.workspace / 'src/atd').iterdir()), [])
+        self.assertIn(str(workspace), result.stdout)
+        self.assertFalse((workspace / 'src/atd').exists())
+        self.assertEqual(package_source.read_text(), 'int example;\n')
+        self.assertFalse(self.workspace.exists())
         self.assertFalse(self.config.exists())
         first = self.snapshot()
         inodes = {path: path.lstat().st_ino for path in destinations}
-        result = self.call("atd_prepare_workspace")
+        result = self.call("atd_prepare_workspace", workspace=workspace)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.snapshot(), first)
         self.assertEqual({path: path.lstat().st_ino for path in destinations}, inodes)
+
+    def test_explicit_external_workspace_is_idempotent_and_has_source_mountpoint(self):
+        result = self.call('atd_prepare_workspace')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        destinations = {
+            self.workspace.parent / 'scripts/.build_image_layers.yaml': self.project / TEMPLATES[0],
+            self.workspace / 'scripts/.isaac_ros_common-config': self.project / TEMPLATES[1],
+            self.workspace / '.isaac-ros-cli/config.yaml': self.project / TEMPLATES[2],
+        }
+        for destination, source in destinations.items():
+            self.assertEqual(destination.resolve(), source)
+        self.assertEqual(list((self.workspace / 'src/atd').iterdir()), [])
+        first = self.snapshot()
+        inodes = {path: path.lstat().st_ino for path in destinations}
+        self.assertEqual(self.call('atd_prepare_workspace').returncode, 0)
+        self.assertEqual(self.snapshot(), first)
+        self.assertEqual({path: path.lstat().st_ino for path in destinations}, inodes)
+
+    def test_default_saved_host_settings_and_environment_override_keep_their_priority(self):
+        saved = {'pc': self.root / 'saved-pc', 'jetson': self.root / 'saved-jetson'}
+        self.config.write_text(''.join(f'ATD_{host.upper()}_ROS_WS={path}\n' for host, path in saved.items()))
+        before = self.config.read_bytes()
+        for profile in ('pc', 'jetson'):
+            for config, override, expected in (
+                (str(self.root / 'absent.env'), '', self.project / 'ros2_ws'),
+                (str(self.config), '', saved[profile]),
+                (str(self.config), str(self.root / 'override'), self.root / 'override'),
+            ):
+                with self.subTest(profile=profile, config=config, override=override):
+                    result = subprocess.run(
+                        ['/bin/bash', '-c', 'source "$1"; atd_load_workspace "$2" "$3" && printf "%s\\n" "$ATD_RESOLVED_ROS_WS"',
+                         'workspace-test', str(HELPER), str(self.project), profile],
+                        env={**self.env, 'ATD_WORKSPACE_CONFIG': config, 'ATD_ROS_WS': override},
+                        text=True, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), str(expected))
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_default_workspace_parent_cli_conflict_preserves_source_and_existing_settings(self):
+        existing = self.project / 'scripts/.build_image_layers.yaml'
+        existing.parent.mkdir(parents=True)
+        existing.write_text('image_key_order: [another.project]\n')
+        before = self.snapshot()
+        result = subprocess.run(
+            ['/bin/bash', '-c', 'source "$1"; atd_load_workspace "$2" jetson && atd_prepare_workspace "$2" "$ATD_RESOLVED_ROS_WS"',
+             'workspace-test', str(HELPER), str(self.project)],
+            env=self.env, text=True, capture_output=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(existing), result.stderr)
+        self.assertEqual(self.snapshot(), before)
 
     def test_resolved_root_paths_are_rejected_before_any_write(self):
         # 検証が退行しても実際の / へ metadata を作らないよう、source を1つ隠す。

@@ -67,7 +67,8 @@
 
 - 初回準備の入口は `scripts/setup.sh` とする。fzf のメニューを優先し、未導入の初回は番号選択を利用する。
 - Notebook（Ubuntu 24.04 / x86_64・amd64）と Jetson（JetPack 7.2 / aarch64・arm64、BSP マーカー）を区別してホスト準備を行う。`--host notebook` は内部の `pc` 設定へ対応する。
-- ROS workspace は workspace 操作で対話的に指定する。既定は各ホストの `~/workspaces/atd` とし、その直下に `src` を作成する。`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存し、`--workspace` での直接指定にも対応する。Docker 内は `/workspaces/isaac_ros-dev` とし、`dev.sh` が `ISAAC_ROS_WS` を設定する。両ホストの配置パス・build / install は別々に扱う。
+- clone の標準配置は `~/workspaces/atd`、未設定時の ROS workspace は実際の clone 配下の `ros2_ws` とする。標準配置なら `~/workspaces/atd/ros2_ws` となる。workspace 操作で対話的に指定し、`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存する。`--workspace` での直接指定にも対応する。Docker 内は `/workspaces/isaac_ros-dev` とし、両ホストの build / install は別々に扱う。
+- bag・地図・モデル等は clone 配下の `data/record`・`data/results` を未設定時の保存先とする。`data/` は Git 管理対象外の永続資産として保持する。既存の保存済み指定、引数・環境変数の上書きを優先し、旧設定の変更と既存データの移動は自動実行しない。新しい配置は setup の workspace / storage 操作で明示的に選び直す。
 - 自作 ROS package の編集元はリポジトリの `ros2_ws/src/atd_<module>/` とする。別の workspace を使う場合はコンテナの workspace `src/atd/` に rw で mount する。CLI 設定テンプレートは `docker/isaac_ros/`、生成 Dockerfile は Git 管理対象外の `.cache/docker/` に置く。配置の詳細は [構成規約](project_structure.md)に従う。
 - `scripts/docker.sh` でセットアップ状態を項目ごとの `OK` / `FAIL` / `SKIP` として表示する。結果は `logs/docker/<host>/` に保存し、後から対話的に確認できるようにする。診断だけではホストへの導入や Docker 起動を行わない。
 - Isaac ROS CLI は apt 版を採用する。
@@ -105,7 +106,7 @@ VGL モデルの準備・配備は、次の分担とする。
 
 保存先は [構成規約](project_structure.md#データの保存構成)に従い、元の入力、export 成果物、対象環境別 engine を分ける。操作は `scripts/vgl.sh` の fzf メニューから export・検証・SCP 転送・Jetson build へ進める。初期実装の対応モデル・形式とコマンドは [VGL モデルの手順](vgl_models.md)に記録し、対象 GPU / SDK と実 SCP を含む通し動作は未検証として扱う。
 
-bag の記録対象、公式処理への入力・引数、HDMap の schema、ライン生成方式、走行開始時の自己位置推定方法等の詳細は後工程で検討する。
+bag の記録対象や各 bag の topic / frame は実データに合わせて確認する。HDMap の初期 schema とライン生成方式は Web アプリの README に記録し、走行開始時の自己位置推定や実地図・実車に応じた方式の具体化は後工程で検討する。
 
 ### 2.7. シェルスクリプト・TUI・ブラウザ UI の操作方針
 
@@ -114,11 +115,11 @@ bag の記録対象、公式処理への入力・引数、HDMap の schema、ラ
 - `fzf` を用いた TUI を積極的に活用し、候補を検索・選択して対話的に実行できるようにする。
 - 対象となる操作の例は、実行する処理、bag、地図、設定の選択である。具体的な画面や操作は各機能の実装時に設計する。
 - ブラウザ UI の作成も積極的に行う。主な用途は地図の編集、自己位置の確認、PC / Jetson の操作・状態確認とする。
-- UI は主にノート PC の Chrome で `http://127.0.0.1:<port>` を開いて利用する。ここでの `127.0.0.1` はブラウザを実行するノート PC の loopback を指す。
-- Jetson の負荷を抑えるため、Jetson 自身では通常ブラウザを開かない。これは Jetson 側で必要なバックエンドや bridge を動かさないという意味ではない。
+- UI はノート PC の Chrome のみ で `http://127.0.0.1:<port>` を開いて利用する。ここでの `127.0.0.1` はブラウザを実行するノート PC の loopback を指す。
+- Jetson では UI のブラウザ・frontend を起動しない。これは Jetson 側で必要なバックエンドや bridge を動かさないという意味ではない。
 - UI の追加でも、走行処理の Jetson 内完結、PC からの遠隔走行制御を行わないこと、車載 DDS の直接通信範囲の要件を維持する。
 - 基本機能は 2.9 節の地図・転送・ライブ表示・入力設定とする。UI サーバーの配置、ライブ観測・設定用の Jetson 接続方法、ポート、画面の詳細は実装時に決める。
-- setup・Docker・Python・VGL の対話的な入口は用意している。ブラウザ UI 本体は未実装であり、操作方針の決定と UI の動作確認を区別する。
+- setup・Docker・Python・VGL に加えて Web UI と Jetson 入力の起動入口を実装した。UI のローカル検証と Docker / ROS / GPU / 実機での結合確認は分けて扱う。
 
 ### 2.8. Docker 内の Python 環境
 
@@ -132,7 +133,7 @@ Notebook の VGL export は `vgl-export` の独立した固定依存を持つ。
 
 ### 2.9. 共通 Web アプリの基本機能
 
-以前の `kart` のシステムと作業の流れを基本として、次の 4 機能を一つのアプリで扱う。機能の採用と、旧コード・framework・設定値の一括移植は区別する。現時点では要件の定義であり、ATD の UI 本体は未実装である。
+以前の `kart` のシステムと作業の流れを基本として、次の 4 機能を一つのアプリで扱う。機能の採用と、旧コード・framework・設定値の一括移植は区別する。React + TypeScript / Vite と FastAPI の採用を確定し、`apps/web/` に初期実装した。UI はノート PC のみで使用する。動作・制約と検証境界は [Web アプリ](../apps/web/README.md)を参照する。
 
 | 機能 | ユーザーが明示した範囲 |
 | --- | --- |
@@ -229,6 +230,15 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - `scripts/vgl.sh` に診断・資産一覧・検証・ログ確認を含む対話操作を用意した。接続先はホストの `config/vgl.env` に保存する。具体的な操作と検証範囲は [VGL モデルの手順](vgl_models.md)を参照する。
 - これらは処理・操作契約の実装であり、実 GPU / TensorRT / Isaac ROS 5 SDK での数値互換性、実 SCP、localization の動作確認は未実施である。
 
+### 3.9. 共通 Web アプリの初期実装
+
+- React + TypeScript / Vite の frontend、FastAPI の backend、Web 非依存の geometry / ライン生成を `apps/web/` に実装した。framework と UI の Notebook 専用配置は採用済み。
+- Map / Transfer / Live / Input を統合する。地図・転送処理は独立 worker で実行し、結果先の `runs/web/` に設定・ジョブ状態・ログを保持する。
+- 地図作成は公式 `create_map_offline.py`、VGL 地図は公式 builder / `create_cuvgl_map.py` を呼ぶ。apt 導入、モデル資産、GPU engine、地図成果物を別に扱う。表示用点群の自動 snapshot 採取は未実装で、map 座標 JSON の明示インポートを提供する。
+- Jetson 側に C++ component の `atd_joy` と、観測・設定用の `atd_web_bridge` を追加した。Notebook API は SSH から Jetson loopback HTTP へアクセスし、車載 DDS に直接参加しない。
+- Web UI は Notebook の Docker 内で `atd-web` を実行して起動し、ブラウザだけを Notebook ホストで開く。ホスト用の `scripts/webui.sh` は `docker exec` による補助入口とする。Jetson の入力起動は `scripts/input.sh`、手順・初期 schema・生成方式・制約は [Web アプリ](../apps/web/README.md)と package の README に記録する。
+- Docker build、ROS build / install、実 bag / GPU での公式処理、実 SCP、Bluetooth / evdev、実走行は対象機で別に確認する。ローカルのコード検証だけでこれらを検証済みとはしない。
+
 ## 4. 提案・候補（未確定）
 
 | 対象 | 提案内容 | 状態 |
@@ -244,27 +254,8 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 | 通信契約 | 単位、座標系、TF 発行元、時刻、topic 型、QoS、周期、許容遅延を文書化する | 提案。個別仕様未決定 |
 | 再現性 | Docker digest、依存 commit、較正、設定、地図、bag の対応を記録する | 提案 |
 | bag 再生 | 実機デバイスを渡さず、車両 I/O を起動しない解析専用構成を用意する | 提案 |
-| Web アプリの技術構成 | React + TypeScript / Vite と FastAPI を使い、offline 処理と Jetson 接続を分離する | 提案。4 機能の要件は確定、framework・実配置は未確定 |
 
 ネットワーク方式の参照: [Docker の host network](https://docs.docker.com/engine/network/drivers/host/)
-
-### 4.1. 共通 Web アプリの構成案
-
-解析専用の `frontend / backend / analysis` 案を、地図作成・編集、転送、ライブ表示、入力設定を扱える構成へ広げる。次は論理的な分担の提案であり、ディレクトリ名や ROS package の実配置はまだ固定しない。
-
-| 層 | 分担案 |
-| --- | --- |
-| frontend | `maps`、`transfers`、`live`、`input` の機能別 UI。共通の地図描画・プロット・操作部品を共有する |
-| backend | API、入出力 schema、設定・資産管理、永続ジョブ管理。SCP、公式地図処理、Jetson の観測・設定窓口への adapter を持つ |
-| offline 処理 | HDMap の幾何処理、ライン生成、bag / 軌跡等の解析。API や UI に依存しないライブラリ・CLI として利用する。名称は `processing` 等を候補とする |
-| Jetson 側の ROS 機能・接続窓口 | 自己位置・速度・Joy 等の取得、対象 parameter と入力設定の読書き。DDS は Jetson 内に保ち、必要な情報・設定操作だけを PC へ提供する |
-
-- 地図生成などの長時間処理は別 worker へ委譲し、ジョブ状態・ログ・中止要求を保持する。コードを分割するだけで再接続や停止が成立するとは扱わない。
-- cuVSLAM 地図、VGL 用資産、表示・編集用点群、HDMap、生成ラインを識別し、元 bag・座標系・revision 等で対応付ける。転送完了と Jetson での読込・適用完了は別の状態として扱う。
-- ライブ観測、parameter 調整、Joy 設定、SCP 転送は用途ごとに通信経路を設計する。Foxglove 等の観測 bridge と、設定変更用 API の役割を明確にする。
-- Joy の物理入力の正規化・配置と、車両の動作割り当てを分ける。プロポの機器・接続方式は未決定のまま、入力表示・設定の共通化を検討する。
-- PC の Docker 内に backend を置き、通常利用ではビルド済み frontend を loopback で配信する案とする。起動入口は既存の Docker 起動と整合させた短い `.sh` を用意する。
-- 保存先は既存のホスト別設定と `/data/record`・`/data/results` の mount を利用する。Python の project / lock / venv は用途と依存互換性に応じて管理し、コードの層ごとに環境分割を必須としない。
 
 ## 5. 今後の検討事項
 
@@ -309,6 +300,9 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 
 ## 7. 更新履歴
 
+- 2026-11-17: React + TypeScript / Vite と FastAPI の採用、UI の Notebook 専用利用を確定。共通 Web アプリ、Jetson の入力・観測設定 bridge、Docker 追加依存と起動入口を初期実装し、未検証の実機項目を区別した。
+
+- 2026-11-17: clone を `~/workspaces/atd`、ROS workspace をその `ros2_ws`、bag・地図・モデル等を `data/` 以下へまとめる配置を選択した。未設定時の値は実際の clone 位置を基準にし、PC / Jetson 別の保存済み指定と上書き指定を優先する。`data/` は Git 管理外の永続資産で、旧設定・データは自動移行しない。
 - 2026-11-17: VGL の二段階処理を `scripts/vgl.sh` として実装した。ALIKED-n16 ONNX export と既存 bundle の package を分け、manifest 検証、SCP、Jetson の公式 engine builder、診断・ログの入口を追加した。対象機の GPU / SDK・実 SCP・localization の通し検証は未実施。
 - 2026-11-17: VGL モデルは Notebook で準備・export し、export 成果物を SCP 転送して Jetson では TensorRT engine build のみを行う分担を先に確定した。保存先へ `exported/<export_id>/` を追加し、方針定義・処理の実装・実機検証を分離した。
 - 2026-11-16: 構成規約を定義し、ROS 編集元を `ros2_ws/src/`、CLI テンプレートを `docker/isaac_ros/`、生成物を `.cache/docker/`、CAD 編集元を `hardware/cad/` へ整理した。README の操作説明は詳細手順へ集約し、空の仕様書・仮置きと再生成可能な cache を整理した。
@@ -327,4 +321,4 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - 2026-11-16: 日常操作に `.sh`・TUI・ブラウザ UI を積極的に用意する方針を追記した。UI はノート PC の Chrome から `127.0.0.1` で利用し、地図編集・自己位置確認等を行う想定。Jetson 自身では通常ブラウザを開かず、サーバー配置や接続方法は実装時に決める。
 - 2026-11-16: イベントカメラを今後の対象から完全に除外した。Docker 起動時の root スクリプトによる不足依存の導入と Fast DDS の loopback UDP 設定を実装した。依存の build 時キャッシュ、`atd-shell` と再接続時の整合確認を追加し、実機導入・実 Docker build・実通信検証とは区別した。
 - 2026-11-16: `setup.sh` とホスト別セットアップ手順を追加した。Notebook / Jetson の区別、fzf 対話メニュー、ホスト準備、保存先と ROS workspace の確認を入口へまとめた。ホストへの実導入は未実施。
-- 2026-11-16: ROS workspace のパスを対話入力し、Notebook / Jetson 別に保存する方針を追加した。既定は `~/workspaces/atd`。`docker.sh` による項目別診断とログの保存・再表示を追加した。対象ホストへの通し導入・実 Docker build は未実施。
+- 2026-11-16: ROS workspace のパスを対話入力し、Notebook / Jetson 別に保存する方針を追加した。当時の workspace 既定は `~/workspaces/atd` 自体で、2026-11-17 に clone 配下の `ros2_ws` へ見直した。`docker.sh` による項目別診断とログの保存・再表示を追加した。対象ホストへの通し導入・実 Docker build は未実施。

@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-使い方: scripts/python.sh [--host notebook|pc|jetson] [--dry-run] [ros|train|vgl-export] [ACTION] [-- ARGS...]
+使い方: scripts/python.sh [--host notebook|pc|jetson] [--dry-run] [ros|train|vgl-export|web] [ACTION] [-- ARGS...]
 
 引数なし: コンテナ内の対話メニューで Python 環境と操作を選択
 ACTION: sync, check, shell, run, build（build は ros のみ）

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -80,6 +81,10 @@ source_root = os.path.join(os.environ['ATD_PROJECT_DIR'], 'ros2_ws', 'src')
 native = os.path.realpath(os.path.join(os.environ['ISAAC_ROS_WS'], 'src')) == os.path.realpath(source_root)
 if not native or state == 'stale_nested_source':
     expected.append(('/workspaces/isaac_ros-dev/src/atd', source_root, True))
+if os.environ.get('ATD_HOST_SSH_DIR') and state != 'missing_ssh':
+    expected.append(('/home/admin/.ssh', os.environ['ATD_HOST_SSH_DIR'], False))
+if os.environ.get('ATD_HOST_SSH_AGENT') and state != 'missing_agent':
+    expected.append(('/run/atd/ssh-agent', os.environ['ATD_HOST_SSH_AGENT'], False))
 mounts = [
     {"Destination": dst, "Source": src, "RW": writable, "Type": "bind"}
     for dst, src, writable in expected
@@ -103,6 +108,10 @@ environment = {
     "ROS_STATIC_PEERS": "",
     "RMW_FASTRTPS_USE_QOS_FROM_XML": "0",
 }
+if os.environ.get('ATD_HOST_SSH_DIR'):
+    environment['ATD_HOST_SSH_SHARED'] = '1'
+if os.environ.get('ATD_HOST_SSH_AGENT'):
+    environment.update(SSH_AUTH_SOCK='/run/atd/ssh-agent', ATD_HOST_SSH_AGENT_SHARED='1')
 if state == "different_dds":
     environment["RMW_IMPLEMENTATION"] = "rmw_cyclonedds_cpp"
 if state == "different_runtime":
@@ -117,6 +126,57 @@ print(json.dumps([{
 
 
 class DevScriptTests(unittest.TestCase):
+    def test_optional_host_ssh_is_readonly_and_required_on_reconnect(self):
+        ssh = self.root / '.ssh'
+        ssh.mkdir(mode=0o700)
+        (ssh / 'known_hosts').write_text('test-host-key\n')
+        result = self.invoke('pc')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        activation, = self.activations()
+        self.assertIn(['--mount', f'type=bind,src={ssh},dst=/home/admin/.ssh,readonly'], activation['mount_args'])
+        self.assertEqual((ssh / 'known_hosts').read_text(), 'test-host-key\n')
+        self.reset_calls()
+        result = self.invoke('pc', env={'ATD_TEST_CONTAINER': 'running'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.activations(), [])
+        self.reset_calls()
+        result = self.invoke('pc', env={'ATD_TEST_CONTAINER': 'missing_ssh'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('SSH共有 mount', result.stderr)
+        self.assertEqual(self.activations(), [])
+
+    def test_optional_pc_ssh_agent_is_forwarded_and_missing_mount_refused(self):
+        with tempfile.TemporaryDirectory(prefix='atd-agent-', dir='/tmp') as directory:
+            agent_path = str(Path(directory) / 'agent.sock')
+            agent = socket.socket(socket.AF_UNIX)
+            self.addCleanup(agent.close)
+            agent.bind(agent_path)
+            result = self.invoke('pc', env={'SSH_AUTH_SOCK': agent_path})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            activation, = self.activations()
+            self.assertIn(['--mount', f'type=bind,src={agent_path},dst=/run/atd/ssh-agent,readonly'], activation['mount_args'])
+            self.assertIn(['-e', 'SSH_AUTH_SOCK=/run/atd/ssh-agent'], activation['mount_args'])
+            self.reset_calls()
+            result = self.invoke('pc', env={'SSH_AUTH_SOCK': agent_path, 'ATD_TEST_CONTAINER': 'missing_agent'})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.activations(), [])
+
+    def test_existing_matching_ssh_mount_is_reused_and_writable_one_refused(self):
+        ssh = self.root / '.ssh'
+        ssh.mkdir()
+        additional = self.root / '.isaac_ros_dev-dockerargs'
+        additional.write_text('--mount=type=bind,src="${HOME}/.ssh",dst=/home/admin/.ssh,readonly\n')
+        result = self.invoke('pc')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        activation, = self.activations()
+        self.assertFalse(any('dst=/home/admin/.ssh' in ' '.join(v) for v in activation['mount_args']))
+        additional.write_text('--mount type=bind,src="${HOME}/.ssh",dst=/home/admin/.ssh\n')
+        self.reset_calls()
+        result = self.invoke('pc')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('SSH mount', result.stderr)
+        self.assertEqual(self.activations(), [])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="atd-dev-test-")
         self.addCleanup(self.temp.cleanup)
@@ -301,21 +361,30 @@ class DevScriptTests(unittest.TestCase):
         self.assertEqual(self.activations()[0]["record"], str(self.paths[("jetson", "record")]))
 
     def test_workspace_default_override_and_notebook_alias(self):
-        default = self.root / 'workspaces/atd'
-        default.mkdir(parents=True)
-        result = self.invoke('notebook', env={'ATD_WORKSPACE_CONFIG': str(self.root / 'absent.env')})
+        fixture = self.detector_fixture('default-workspace-fixture', [])
+        script = self.auto_project('default-workspace-project', fixture)
+        project = script.parent.parent
+        default = project / 'ros2_ws'
+        result = self.invoke('notebook', script=script,
+                             env={'ATD_WORKSPACE_CONFIG': str(self.root / 'absent.env')})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.activations()[0]['workspace'], str(default))
+        activation, = self.activations()
+        self.assertEqual(activation['workspace'], str(default))
+        self.assertFalse(any('dst=/workspaces/isaac_ros-dev/src/atd' in str(args)
+                             for args in activation['mount_args']))
+        self.assertEqual((project / 'scripts/.build_image_layers.yaml').resolve(),
+                         project / 'docker/isaac_ros/build_image_layers.yaml')
+        self.assertFalse((self.root / 'workspaces/atd').exists())
         self.reset_calls()
         override = self.root / 'override_ws'
         override.mkdir()
         before = self.workspace_config.read_bytes()
-        result = self.invoke('jetson', '--workspace', str(override))
+        result = self.invoke('jetson', '--workspace', str(override), script=script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.activations()[0]['workspace'], str(override))
         self.assertEqual(self.workspace_config.read_bytes(), before)
         self.reset_calls()
-        result = self.invoke('jetson', env={'ATD_ROS_WS': str(override)})
+        result = self.invoke('jetson', env={'ATD_ROS_WS': str(override)}, script=script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.activations()[0]['workspace'], str(override))
 

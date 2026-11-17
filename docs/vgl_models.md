@@ -87,6 +87,7 @@ SSH の接続先、port、Jetson 上の ATD checkout と結果保存先は `conf
 | `ATD_VGL_REMOTE_RESULT_DIR` | Jetson の結果保存先の絶対パス。`storage.env` の設定と対応させる |
 
 設定例は [`config/vgl.env.example`](../config/vgl.env.example)。別ファイルを使う場合は `ATD_VGL_CONFIG` を指定する。SSH の秘密鍵や password をこのファイルへ保存しない。
+標準配置なら Jetson の checkout は `~/workspaces/atd`、結果保存先はその `data/results` となる。保存先を見直した場合は、保存済みの `ATD_VGL_REMOTE_RESULT_DIR` も実パスへ合わせて更新する。旧データは自動移動しない。
 
 SCP の対象は選択した `exported/<export_id>/` の bundle 全体で、元モデルの checkout や Notebook 用 engine を一括コピーしない。転送先で hash と manifest を検証してから正式な保存先へ反映し、同じ ID の既存資産を上書きしない。
 
@@ -105,7 +106,7 @@ SCP の対象は選択した `exported/<export_id>/` の bundle 全体で、元�
 logs/vgl/<pc|jetson>/                    # ホスト側の操作ログ
 ```
 
-結果保存先は既存の `ATD_PC_RESULT_DIR` / `ATD_JETSON_RESULT_DIR` がホストの実パスに対応する。新しいデータ用 mount は増やさない。bundle・engine・run のログは保持する資産として扱い、cache として削除しない。保存構成全体は [構成規約](project_structure.md#データの保存構成)を参照する。
+結果保存先は既存の `ATD_PC_RESULT_DIR` / `ATD_JETSON_RESULT_DIR` がホストの実パスに対応し、未設定時は実際の clone 配下の `data/results` を使う。標準 clone 位置なら `~/workspaces/atd/data/results` となる。新しいデータ用 mount は増やさない。bundle・engine・run のログは Git 管理外の永続資産として保持し、cache として削除しない。保存構成全体は [構成規約](project_structure.md#データの保存構成)を参照する。
 `logs` は対話端末でホストの実行ログを選び、非対話端末では最新ログを表示する。処理が失敗した場合も終了値とログを残す。
 
 Jetson の build は model / export ID と hash、GPU 名・UUID・compute capability、TensorRT の版、CUDA driver version、関連 package の版、`atd_runtime_revision` とログの対応を記録する。`atd_runtime_revision` は Dockerfile・起動 script 等の構成 hash であり、Docker image digest 自体は現実装の記録に含まれない。target の名前だけで互換性を判断せず、実際の環境を確認する。

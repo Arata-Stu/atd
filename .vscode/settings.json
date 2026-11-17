@@ -1,0 +1,10 @@
+{
+  "git.repositoryScanIgnoredFolders": [
+    "node_modules",
+    ".cache"
+  ],
+  "git.ignoredRepositories": [
+    ".cache/uv/git-v1/db/96c49621ac8e4a65",
+    ".cache/uv/git-v1/checkouts/96c49621ac8e4a65/aa950f6"
+  ]
+}

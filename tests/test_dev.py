@@ -182,6 +182,118 @@ class DevScriptTests(unittest.TestCase):
         self.assertIn('SSH mount', result.stderr)
         self.assertEqual(self.activations(), [])
 
+    def test_upstream_realpath_ssh_mount_is_reused_without_shell_evaluation(self):
+        ssh = self.root / '.ssh'
+        ssh.mkdir()
+        additional = self.root / '.isaac_ros_dev-dockerargs'
+        # apt CLI の標準テンプレートと同じ行。loader は shlex より前に realpath を展開する。
+        for line in ('-v `realpath ~/.ssh`:/home/admin/.ssh:ro',
+                     '"-v `realpath ~/.ssh`:/home/admin/.ssh:ro"',
+                     "'-v `realpath ~/.ssh`:/home/admin/.ssh:ro'"):
+            with self.subTest(line=line):
+                additional.write_text(line + '\n')
+                self.reset_calls()
+                result = self.invoke('pc')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                activation, = self.activations()
+                self.assertFalse(any('dst=/home/admin/.ssh' in ' '.join(v)
+                                     for v in activation['mount_args']))
+                self.assertIn(['-e', 'ATD_HOST_SSH_SHARED=1'], activation['mount_args'])
+                self.assertEqual(additional.read_text(), line + '\n')
+
+    def test_upstream_realpath_ssh_mount_conflicts_are_rejected_before_activation(self):
+        (self.root / '.ssh').mkdir()
+        (self.root / 'other-ssh').mkdir()
+        additional = self.root / '.isaac_ros_dev-dockerargs'
+        for lines in ('-v `realpath ~/.ssh`:/home/admin/.ssh:rw\n',
+                      '-v `realpath ~/other-ssh`:/home/admin/.ssh:ro\n',
+                      '--mount type=bind,src=${HOME}/.ssh,dst=/home/admin/.ssh,readonly=false\n',
+                      '--mount type=bind,src=${HOME}/.ssh,target=/home/admin/.ssh,readonly,ro=false\n',
+                      '-v `realpath ~/.ssh`:/home/admin/.ssh:ro\n' * 2):
+            with self.subTest(lines=lines):
+                additional.write_text(lines)
+                self.reset_calls()
+                result = self.invoke('pc')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('SSH mount', result.stderr)
+                self.assertEqual(self.activations(), [])
+
+    def test_docker_mount_key_aliases_and_last_readonly_value_are_respected(self):
+        (self.root / '.ssh').mkdir()
+        additional = self.root / '.isaac_ros_dev-dockerargs'
+        for line in ('--mount TYPE=bind,SOURCE=${HOME}/.ssh,TARGET=/home/admin/.ssh,READONLY',
+                     '--mount type=bind,src=/different,source=${HOME}/.ssh,target=/different,dst=/home/admin/.ssh,ro=false,readonly=true'):
+            with self.subTest(line=line):
+                additional.write_text(line + '\n')
+                self.reset_calls()
+                result = self.invoke('pc')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                activation, = self.activations()
+                self.assertFalse(any('dst=/home/admin/.ssh' in ' '.join(v)
+                                     for v in activation['mount_args']))
+
+    def test_ssh_destination_variables_are_expanded_before_matching(self):
+        (self.root / '.ssh').mkdir()
+        additional = self.root / '.isaac_ros_dev-dockerargs'
+        additional.write_text('-v ${HOME}/.ssh:${ATD_TEST_SSH_TARGET}:ro\n')
+        result = self.invoke('pc', env={'ATD_TEST_SSH_TARGET': '/home/admin/.ssh'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        activation, = self.activations()
+        self.assertFalse(any('dst=/home/admin/.ssh' in ' '.join(v)
+                             for v in activation['mount_args']))
+
+    def test_ssh_mount_file_priority_matches_the_apt_cli(self):
+        (self.root / '.ssh').mkdir()
+        etc_args = self.root / 'etc/isaac-ros-cli/.isaac_ros_dev-dockerargs'
+        adjacent_args = self.root / 'usr/lib/isaac-ros-cli/.isaac_ros_dev-dockerargs'
+        workspace_args = self.workspaces['pc'] / 'scripts/.isaac_ros_dev-dockerargs'
+        for path in (etc_args, adjacent_args, workspace_args):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        correct = '-v `realpath ~/.ssh`:/home/admin/.ssh:ro\n'
+        conflict = '-v /different/ssh:/home/admin/.ssh:ro\n'
+        etc_args.write_text(correct)
+        result = self.invoke('pc')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        activation, = self.activations()
+        self.assertFalse(any('dst=/home/admin/.ssh' in ' '.join(v)
+                             for v in activation['mount_args']))
+
+        # workspace は /etc より優先する。CLI隣接設定があれば、さらに優先する。
+        workspace_args.write_text(conflict)
+        self.reset_calls()
+        result = self.invoke('pc')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.activations(), [])
+        adjacent_args.write_text(correct)
+        self.reset_calls()
+        result = self.invoke('pc')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        # 同名ディレクトリをファイル扱いして /etc の設定を見落とさない。
+        adjacent_args.unlink()
+        workspace_args.unlink()
+        workspace_args.mkdir()
+        self.reset_calls()
+        result = self.invoke('pc')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        activation, = self.activations()
+        self.assertFalse(any('dst=/home/admin/.ssh' in ' '.join(v)
+                             for v in activation['mount_args']))
+
+    def test_ssh_mount_does_not_execute_unknown_substitutions(self):
+        (self.root / '.ssh').mkdir()
+        marker = self.root / 'must-not-exist'
+        additional = self.root / '.isaac_ros_dev-dockerargs'
+        for substitution in (f'`touch {marker}`', f'$(touch {marker})',
+                             f'`realpath ~/.ssh; touch {marker}`'):
+            with self.subTest(substitution=substitution):
+                additional.write_text(f'-v {substitution}:/home/admin/.ssh:ro\n')
+                self.reset_calls()
+                result = self.invoke('pc')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.activations(), [])
+                self.assertFalse(marker.exists())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="atd-dev-test-")
         self.addCleanup(self.temp.cleanup)

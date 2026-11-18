@@ -157,7 +157,7 @@ ssh-add ~/.ssh/id_ed25519
 
 `ssh-add` は agent を利用する場合だけ実行し、鍵ファイル名は利用中のものに合わせる。Web の「転送」で同じ接続先・ユーザー名・SSH portを保存する。ライブ・入力画面もこの接続設定を共用する。アプリは `BatchMode=yes` / `StrictHostKeyChecking=yes` を使うため、未登録のホスト鍵や未解除の鍵を接続成功扱いしない。
 
-`scripts/dev.sh` は `~/.ssh` が存在するときだけ `/home/admin/.ssh` へ readonly mount する。既存のユーザー用 Docker 追加引数に同じ source・readonly の mount があれば再利用し、異なる source・書込可能・重複した指定は起動前に停止する。既存のファイルをコピー・上書きせず、鍵の権限・所有者も変更しない。コンテナの admin が秘密鍵を読めるにはホストとの UID・ファイル権限の整合が必要であり、アクセス失敗時はホストの権限を緩めず、UIDとmountを確認する。
+`scripts/dev.sh` は `~/.ssh` が存在するときだけ `/home/admin/.ssh` へ readonly mount する。ユーザー・workspace・apt CLI の追加引数は公式loaderと同じ優先順で調べ、公式テンプレートの realpath 形式を含め同じ source・readonly の mount があれば再利用する。異なる source・書込可能・重複した指定は起動前に停止する。既存のファイルをコピー・上書きせず、鍵の権限・所有者も変更しない。コンテナの admin が秘密鍵を読めるにはホストとの UID・ファイル権限の整合が必要であり、アクセス失敗時はホストの権限を緩めず、UIDとmountを確認する。
 
 Notebook では既存の `SSH_AUTH_SOCK` が Unix socket の場合、`/run/atd/ssh-agent` へ共有してコンテナの同環境変数を設定する。これにより agent 内の鍵を使用できる。agent がなければ readonly の鍵ファイルを通常の OpenSSH 手順で使用する。Jetson 側の agent 共有は上流 CLI の既存経路を維持する。
 

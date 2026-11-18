@@ -171,8 +171,9 @@ PC と Jetson のディレクトリは別々の実体であり、bag や地図�
 ./scripts/setup.sh --action start
 ```
 
-短い入口として、従来の `./scripts/dev.sh` も使える。
+短い入口として `./scripts/dev.sh` も使える。新規起動に成功すると、そのままコンテナ内の `atd-shell` を開く。稼働中の場合は同じシェルへ再接続する。ホスト側の準備だけを行って終了するコマンドではない。
 Dockerfile・起動用スクリプト等を更新した場合は、利用中の処理を終了してからメニューの build を実行する。
+初回やローカルイメージがない場合は `./scripts/dev.sh --build` で ATD の追加層を build してから起動する。
 
 Docker 起動時には root の `.sh` が追加依存の不足分を確認し、Fast DDS の UDPv4 / loopback 設定を適用する。
 依存が揃っていれば apt 操作を省略する。再接続時は初期化を繰り返さず、設定の整合を確認して `atd-shell` を開く。
@@ -229,6 +230,8 @@ ROS 2 の apt 依存との関係、Python node の interpreter と CMake の注�
 | workspace の CLI 設定が既存設定と衝突する | 表示されたファイルを確認する。setup は別用途の設定を自動上書きしない |
 | 以前の診断結果を確認したい | `./scripts/tools/docker.sh --action logs` でホスト別のログを選ぶ |
 | 起動中コンテナの設定が古い | 作業を終了してコンテナを再作成する。必要なら build を実行する |
+| `Duplicate mount point: /home/admin/.ssh` | `dev.sh` のSSH重複検出を更新する。公式の realpath 形式を含め、同じsource・readonlyの既存mountは再利用する。追加引数ファイルの読込元はログで確認し、異なるsource・書込可能・複数のSSH指定は起動前にエラーとする |
+| 独自の `isaac_ros-realsense455-atd_...` タグがregistryにない | ローカルイメージが利用できればpull失敗だけで起動失敗とは判断しない。初回・イメージ更新時は `./scripts/dev.sh --build` を使う。mountエラーが出ている場合はそちらも解消する |
 | Python 用途別環境を使えない | `scripts/dev.sh` でコンテナを起動し、`./scripts/tools/python.sh ros sync` と `./scripts/tools/python.sh ros check` を実行する。学習用は `ros` を `train` に置き換える。uv 未導入の旧 image は build して再作成する |
 | D455 / DualSense が見えない | まずホスト認識、その後コンテナの device と非 root 権限を確認する。詳細は Jetson 手順を参照 |
 

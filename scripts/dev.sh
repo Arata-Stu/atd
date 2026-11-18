@@ -311,6 +311,7 @@ atd_check_isaac_cli || exit 1
 python3 - "$task_project_dir" "$ATD_GENERATED_DOCKER_DIR" "$ATD_RUNTIME_REV" "$DOCKER_ARGS_FILE" "$task_source_layout" <<'PY'
 import os
 from pathlib import Path
+import re
 import shlex
 import sys
 import tempfile
@@ -327,20 +328,35 @@ if os.environ['ATD_SERIAL_ACCESS'] == '1':
 def add_ssh_mount(source, destination):
     # 上流の追加引数も加算される。標準のユーザー設定に同じ宛先がある場合は再利用する。
     candidates = [Path.home() / '.isaac_ros_dev-dockerargs']
+    cli_root = Path(os.environ.get('ATD_SETUP_ROOT', '/'))
+    adjacent_args = cli_root / 'usr/lib/isaac-ros-cli/.isaac_ros_dev-dockerargs'
     workspace_args = Path(os.environ['ISAAC_ROS_WS']) / 'scripts/.isaac_ros_dev-dockerargs'
-    candidates.append(workspace_args if workspace_args.exists() else Path('/etc/isaac-ros-cli/.isaac_ros_dev-dockerargs'))
+    candidates.append(next((path for path in (adjacent_args, workspace_args,
+        cli_root / 'etc/isaac-ros-cli/.isaac_ros_dev-dockerargs') if path.is_file()),
+        cli_root / 'etc/isaac-ros-cli/.isaac_ros_dev-dockerargs'))
     lines = arguments + [line for path in candidates if path.is_file() for line in path.read_text().splitlines()]
     found = []
     for line in lines:
         if not line.strip() or line.lstrip().startswith('#'):
             continue
-        if destination not in line:
+        if destination not in os.path.expandvars(line):
             continue
         line = line.strip()
         if len(line) > 1 and line[0] == line[-1] and line[0] in ('"', "'"):
             line = line[1:-1]
+        # 公式テンプレートの `realpath ~/.ssh` を shlex より先に解決する。
+        # 任意の shell 式は実行せず、単一パスの正規化だけを行う。
+        def realpath(match):
+            path = match.group(1).strip()
+            if not path or path.startswith('-') or any(c in path for c in '$;|&<>\n\r'):
+                sys.exit('エラー: SSH mount の realpath 指定を解釈できません: ' + destination)
+            return shlex.quote(str(Path(path).expanduser().resolve()))
+        line = re.sub(r'`realpath ([^`]+)`', realpath, line)
+        line = os.path.expandvars(line)
+        if '`' in line or '$(' in line:
+            sys.exit('エラー: SSH mount の未対応の shell 式は実行しません: ' + destination)
         tokens = []
-        for token in shlex.split(os.path.expandvars(line)):
+        for token in shlex.split(line):
             if token.startswith(('--mount=', '--volume=')):
                 tokens.extend(token.split('=', 1))
             elif token.startswith('-v') and len(token) > 2:
@@ -349,10 +365,17 @@ def add_ssh_mount(source, destination):
                 tokens.append(token)
         for index, token in enumerate(tokens):
             if token in ('--mount',) and index + 1 < len(tokens):
-                parts = dict(item.split('=', 1) if '=' in item else (item, '') for item in tokens[index+1].split(','))
-                target = parts.get('dst', parts.get('destination', parts.get('target', '')))
+                # Docker は大文字小文字を区別せず、同義属性も記載順で上書きする。
+                aliases = {'source': 'src', 'destination': 'dst', 'target': 'dst', 'readonly': 'ro'}
+                parts = {}
+                for item in tokens[index+1].split(','):
+                    key, _, value = item.partition('=')
+                    key = aliases.get(key.lower(), key.lower())
+                    parts[key] = value
+                target = parts.get('dst', '')
                 if target.rstrip('/') == destination:
-                    found.append((parts.get('src', parts.get('source', '')), 'readonly' in parts or parts.get('ro') == 'true'))
+                    readonly = 'ro' in parts and parts['ro'].lower() in ('', 'true', '1')
+                    found.append((parts.get('src', ''), readonly))
             if token in ('-v', '--volume') and index + 1 < len(tokens):
                 parts = tokens[index+1].split(':')
                 if len(parts) >= 2 and parts[1].rstrip('/') == destination:

@@ -58,7 +58,7 @@ done
 case "$task_host" in ''|pc|jetson) ;; *) fail '--host は notebook、pc、jetson から指定してください' ;; esac
 task_project="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)" || exit 1
 if [[ -z "$task_host" ]]; then
-    source "${task_project}/scripts/detect_host.sh" || exit 1
+    source "${task_project}/scripts/lib/detect_host.sh" || exit 1
     task_host="$(detect_atd_host)" || exit 1
 fi
 if $task_dry_run; then

@@ -27,9 +27,10 @@ class BuildLauncherTests(unittest.TestCase):
         shutil.copytree(PROJECT / 'scripts/lib', scripts / 'lib')
         shutil.copytree(PROJECT / 'docker', self.project / 'docker',
                         ignore=shutil.ignore_patterns('.venv', '__pycache__'))
-        (scripts / 'detect_host.sh').write_text(
+        (scripts / 'lib/detect_host.sh').write_text(
             'detect_atd_host() { printf "%s\\n" "${ATD_TEST_HOST:-pc}"; }\n')
-        (scripts / 'python.sh').write_text(
+        (scripts / 'tools').mkdir()
+        (scripts / 'tools/python.sh').write_text(
             'printf called > "$ATD_TEST_PYTHON_SENTINEL"\nexit 93\n')
         self.bin = self.root / 'bin'
         self.bin.mkdir()

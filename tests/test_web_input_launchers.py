@@ -1,7 +1,8 @@
-"""UI/入力入口の配置、引数保持、readonly frontend cache を偽コマンドで検証。"""
+"""bringup/Web補助入口の引数・構成選択、readonly frontend cache を偽コマンドで検証。"""
 import json
 import os
 from pathlib import Path
+import pty
 import shutil
 import subprocess
 import sys
@@ -18,10 +19,13 @@ class EntryTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.scripts = self.root / 'scripts'
         self.scripts.mkdir()
-        for name in ('webui.sh', 'input.sh'):
-            shutil.copyfile(PROJECT / 'scripts' / name, self.scripts / name)
-        (self.scripts / 'detect_host.sh').write_text('detect_atd_host() { printf "%s\\n" "${ATD_TEST_HOST:-pc}"; }\n')
-        (self.scripts / 'python.sh').write_text('printf "%s\\0" "$@" > "$ATD_TEST_ARGS"\nexit "${ATD_TEST_EXIT:-0}"\n')
+        (self.scripts / 'lib').mkdir()
+        (self.scripts / 'tools').mkdir()
+        shutil.copyfile(PROJECT / 'scripts/bringup.sh', self.scripts / 'bringup.sh')
+        shutil.copyfile(PROJECT / 'scripts/lib/bringup.sh', self.scripts / 'lib/bringup.sh')
+        shutil.copyfile(PROJECT / 'scripts/tools/webui.sh', self.scripts / 'tools/webui.sh')
+        (self.scripts / 'lib/detect_host.sh').write_text('detect_atd_host() { printf "%s\\n" "${ATD_TEST_HOST:-pc}"; }\n')
+        (self.scripts / 'tools/python.sh').write_text('printf "%s\\0" "$@" > "$ATD_TEST_ARGS"\nexit "${ATD_TEST_EXIT:-0}"\n')
         self.output = self.root / 'args'
         self.env = {**os.environ, 'ATD_TEST_ARGS': str(self.output)}
 
@@ -32,26 +36,122 @@ class EntryTests(unittest.TestCase):
     def args(self):
         return self.output.read_bytes().decode().split('\0')[:-1]
 
-    def test_input_is_jetson_only_and_dry_run_delegates_without_launch(self):
-        result = self.invoke('input.sh')
+    def test_bringup_is_jetson_only_and_dry_run_delegates_without_launch(self):
+        result = self.invoke('bringup.sh', 'input')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.output.exists())
-        result = self.invoke('input.sh', '--dry-run', '--bridge-only', 'config:=/path with spaces/config.yaml')
+        result = self.invoke('bringup.sh', '--dry-run', 'bridge', 'config:=/path with spaces/config.yaml')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.args(), ['--host', 'jetson', '--dry-run', 'ros', 'run', '--',
             'ros2', 'launch', 'atd_web_bridge', 'bridge.launch.py', 'config:=/path with spaces/config.yaml'])
 
-    def test_input_jetson_keeps_launch_arguments_and_exit_code(self):
-        literal = 'profile:=$(touch should_not_run)'
-        result = self.invoke('input.sh', literal, ATD_TEST_HOST='jetson', ATD_TEST_EXIT='8')
+    def test_bringup_keeps_literal_launch_arguments_and_exit_code(self):
+        marker = self.root / 'must-not-exist'
+        literal = f'profile:=$(touch {marker})'
+        result = self.invoke('bringup.sh', 'input', literal, ATD_TEST_HOST='jetson', ATD_TEST_EXIT='8')
         self.assertEqual(result.returncode, 8)
         self.assertEqual(self.args()[-2:], ['input.launch.py', literal])
+        self.assertFalse(marker.exists())
+
+    def test_bare_dry_run_and_zero_parameter_profiles_support_bash_three(self):
+        for arguments, launch in ((('--dry-run',), 'input.launch.py'),
+                                  (('--dry-run', 'input'), 'input.launch.py'),
+                                  (('--dry-run', 'bridge'), 'bridge.launch.py')):
+            with self.subTest(arguments=arguments):
+                result = self.invoke('bringup.sh', *arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.args()[-1], launch)
+
+    def test_help_list_and_invalid_profiles_do_not_launch(self):
+        for option in ('--help', '--list'):
+            result = self.invoke('bringup.sh', option)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('input', result.stdout)
+            self.assertIn('bridge', result.stdout)
+            self.assertFalse(self.output.exists())
+        for arguments in ((), ('pico_serial:=pico-1',), ('autonomy',), ('input', 'bridge'), ('--unknown',)):
+            with self.subTest(arguments=arguments):
+                result = self.invoke('bringup.sh', *arguments, ATD_TEST_HOST='jetson')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.output.exists())
+
+    def test_launch_options_after_separator_keep_order(self):
+        result = self.invoke('bringup.sh', '--dry-run', 'bridge', '--', '--show-args')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.args()[-2:], ['bridge.launch.py', '--show-args'])
+
+    def test_profile_picker_uses_only_registered_names(self):
+        fake_bin = self.root / 'bin'
+        fake_bin.mkdir()
+        picker = fake_bin / 'fzf'
+        picker.write_text('#!/bin/sh\ncat >/dev/null\nprintf "%s\\n" "$ATD_TEST_PICK"\n')
+        picker.chmod(0o755)
+        helper = self.scripts / 'lib/bringup.sh'
+        for selection, succeeds in (('bridge\tobservations', True), ('../../other', False),
+                                    ('$(touch forbidden)', False)):
+            with self.subTest(selection=selection):
+                # メニュー出力も実行コードとして解釈せず、登録済み構成だけを解決する。
+                result = subprocess.run(['/bin/bash', '-c',
+                    'source "$1"; selected="$(atd_bringup_choose)"; atd_bringup_lookup "$selected"',
+                    'picker-test', str(helper)], text=True, capture_output=True, timeout=10,
+                    env={**self.env, 'PATH': str(fake_bin) + os.pathsep + os.defpath,
+                         'ATD_TEST_PICK': selection})
+                self.assertEqual(result.returncode == 0, succeeds, result.stderr)
+                if succeeds:
+                    self.assertEqual(result.stdout.strip(), 'jetson\tatd_web_bridge\tbridge.launch.py')
+
+    def test_interactive_entry_chooses_bridge_and_cancel_does_not_launch(self):
+        fake_bin = self.root / 'menu-bin'
+        fake_bin.mkdir()
+        picker = fake_bin / 'fzf'
+        picker.write_text('#!/bin/sh\ncat >/dev/null\n'
+                          '[ "$ATD_TEST_PICK" != cancel ] || exit 130\n'
+                          'printf "%s\\n" "$ATD_TEST_PICK"\n')
+        picker.chmod(0o755)
+        for selected in ('bridge\tmonitor', 'quit\tquit', 'cancel'):
+            with self.subTest(selected=selected):
+                self.output.unlink(missing_ok=True)
+                master, slave = pty.openpty()
+                try:
+                    process = subprocess.Popen(['/bin/bash', str(self.scripts / 'bringup.sh')],
+                        stdin=slave, stdout=slave, stderr=subprocess.PIPE,
+                        env={**self.env, 'PATH': str(fake_bin) + os.pathsep + os.defpath,
+                             'ATD_TEST_HOST': 'jetson', 'ATD_TEST_PICK': selected})
+                    try:
+                        _, error = process.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.communicate()
+                        raise
+                    self.assertEqual(process.returncode, 0, error.decode())
+                finally:
+                    os.close(master)
+                    os.close(slave)
+                if selected.startswith('bridge'):
+                    self.assertEqual(self.args()[-1], 'bridge.launch.py')
+                else:
+                    self.assertFalse(self.output.exists())
+
+    def test_number_picker_selects_bridge_or_quits_without_fzf(self):
+        helper = self.scripts / 'lib/bringup.sh'
+        commands = self.root / 'number-menu-bin'
+        commands.mkdir()
+        awk = shutil.which('awk')
+        self.assertIsNotNone(awk)
+        (commands / 'awk').symlink_to(awk)
+        for response, expected in (('2\n', 'bridge'), ('3\n', 'quit'), ('\n', ''), ('90\n', '')):
+            with self.subTest(response=response):
+                result = subprocess.run(['/bin/bash', '-c', 'source "$1"; atd_bringup_choose',
+                    'picker-test', str(helper)], input=response, text=True, capture_output=True,
+                    timeout=10, env={**self.env, 'PATH': str(commands)})
+                self.assertEqual(result.stdout.strip(), expected)
+                self.assertEqual(result.returncode == 0, bool(expected))
 
     def test_web_is_pc_only_and_uses_web_environment(self):
-        result = self.invoke('webui.sh', ATD_TEST_HOST='jetson')
+        result = self.invoke('tools/webui.sh', ATD_TEST_HOST='jetson')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.output.exists())
-        result = self.invoke('webui.sh', 'serve', '--dry-run', '--port', '8877')
+        result = self.invoke('tools/webui.sh', 'serve', '--dry-run', '--port', '8877')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.args(), ['--host', 'pc', '--dry-run', 'web', 'run', '--',
             '/usr/local/bin/atd-web', 'serve', '--port', '8877'])

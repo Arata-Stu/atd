@@ -4,13 +4,13 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-使い方: scripts/python.sh [--host notebook|pc|jetson] [--dry-run] [ros|train|vgl-export|web|raceline] [ACTION] [-- ARGS...]
+使い方: scripts/tools/python.sh [--host notebook|pc|jetson] [--dry-run] [ros|train|vgl-export|web|raceline] [ACTION] [-- ARGS...]
 
 引数なし: コンテナ内の対話メニューで Python 環境と操作を選択
 ACTION: sync, check, shell, run
 ROS package の build は scripts/build.sh を使用する。
-例: scripts/python.sh ros check
-    scripts/python.sh train run -- python train.py
+例: scripts/tools/python.sh ros check
+    scripts/tools/python.sh train run -- python train.py
 
 --host / --dry-run は用途名より前に指定する。
 起動済みコンテナのみ使用する。先に scripts/dev.sh で起動する。
@@ -49,6 +49,6 @@ if [[ -f /.dockerenv && -x /usr/local/bin/atd-python ]]; then
     exec /usr/local/bin/atd-python "$@"
 fi
 
-task_project_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+task_project_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 source "${task_project_dir}/scripts/lib/container.sh"
 atd_container_exec "$task_project_dir" "$task_host" "$task_dry_run" /usr/local/bin/atd-python "$@"

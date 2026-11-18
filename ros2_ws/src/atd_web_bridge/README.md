@@ -6,13 +6,13 @@ node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_a
 
 ```bash
 ./scripts/build.sh --packages-up-to atd_web_bridge
-# Jetson: ROS と選択したworkspaceの install/setup.bash を source 後
-./scripts/input.sh
+# Jetson: 起動済み ATD Docker 内の ROS 環境を利用
+./scripts/bringup.sh input
 # 入力・役割 node が別途起動済みなら bridge だけ
-./scripts/input.sh --bridge-only
+./scripts/bringup.sh bridge
 ```
 
-`scripts/input.sh --dry-run` は Notebook でも予定する Jetson コマンドを確認できる。通常起動は Jetson 限定で、実行は既存の scripts/python.sh へ委譲する。
+`./scripts/bringup.sh` は対話端末で `input` / `bridge` を選択し、`--list` は一覧を表示する。`./scripts/bringup.sh --dry-run input` は Notebook でも予定する Jetson コマンドを確認できる。実行は Jetson の起動済み Docker 内で行い、ROS 環境の選択には `scripts/tools/python.sh` を利用する。[bringup の操作](../../../docs/bringup.md)を参照する。
 
 両 launch は config（share/config/bridge.yaml）を受ける。input.launch.py は profile（`/data/results/runs/input/dualsense.yaml`）、teleop_profile（`/data/results/runs/input/teleop.yaml`）、rc_profile（`/data/results/runs/input/propo.yaml`）を各 node と bridge に渡す。Joy・teleop と Pico 受信・プロポ役割処理を起動し、`teleop:=false` / `propo:=false` で各経路を除外できる。Pico の選択は `pico_serial` / `pico_sensor_path`、各 node の設定は `joy_config` / `teleop_config` / `pico_config` / `rc_config` で指定する。子launchの引数はスコープを分け、bridge の config・profile と混在させない。基板への走行指令や bag 記録は開始しない。Docker の host network を使い、HTTP もDDSも Jetson 内 loopback に限定する。
 

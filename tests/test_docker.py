@@ -87,15 +87,16 @@ class DockerStatusTests(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.project = self.root / 'project'
         (self.project / 'scripts/lib').mkdir(parents=True)
+        (self.project / 'scripts/tools').mkdir()
         (self.project / 'config').mkdir()
         (self.project / 'ros2_ws/src').mkdir(parents=True)
         (self.project / 'ros2_ws/src/README.md').write_text('ROS package source fixture\n')
         shutil.copytree(PROJECT / 'docker', self.project / 'docker',
                         ignore=shutil.ignore_patterns('.venv', '__pycache__'))
-        self.script = self.project / 'scripts/docker.sh'
-        shutil.copyfile(PROJECT / 'scripts/docker.sh', self.script)
-        shutil.copyfile(PROJECT / 'scripts/detect_host.sh', self.project / 'scripts/detect_host.sh')
-        for relative in ('scripts/lib/workspace.sh', 'scripts/lib/runtime.sh'):
+        self.script = self.project / 'scripts/tools/docker.sh'
+        shutil.copyfile(PROJECT / 'scripts/tools/docker.sh', self.script)
+        shutil.copyfile(PROJECT / 'scripts/lib/detect_host.sh', self.project / 'scripts/lib/detect_host.sh')
+        for relative in ('scripts/lib/workspace.sh', 'scripts/lib/runtime.sh', 'scripts/lib/isaac_cli.sh'):
             shutil.copyfile(PROJECT / relative, self.project / relative)
         self.workspace = self.root / 'workspace'
         (self.workspace / 'src/atd').mkdir(parents=True)
@@ -134,7 +135,7 @@ class DockerStatusTests(unittest.TestCase):
         dev = self.project / 'scripts/dev.sh'
         dev.write_text(f'#!{sys.executable}\n' + FAKE.replace(
             'tool, args = sys.argv[1], sys.argv[2:]', "tool, args = 'dev', sys.argv[1:]"))
-        # docker.sh invokes dev.sh with bash, just like the normal entrypoint.
+        # tools/docker.sh invokes dev.sh with bash, just like the normal entrypoint.
         recorder = self.root / 'dev.py'
         recorder.write_text(dev.read_text())
         dev.write_text('#!/bin/bash\nexec "$ATD_TEST_PYTHON" "$ATD_TEST_DEV" "$@"\n')
@@ -193,6 +194,17 @@ class DockerStatusTests(unittest.TestCase):
         result = self.invoke(env={'ATD_TEST_MODE': 'native'})
         self.assertEqual(result.returncode, 1)
         self.assertIn('[FAIL] Isaac-CLI', result.stdout)
+
+    def test_build_with_kart_launcher_reports_recovery_and_skips_dev(self):
+        launcher = self.hostroot / 'usr/lib/isaac-ros-cli/run_dev.py'
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text('raise ValueError("ISAAC_ROS_WS must be <kart project>/ros2_ws beside packages.repos")\n')
+        result = self.invoke('--build')
+        self.assertEqual(result.returncode, 1)
+        report = self.reports()[0].read_text()
+        self.assertIn('[FAIL] Isaac-CLI', report)
+        self.assertIn('docs/setup/pc.md#kart-cli', report)
+        self.assertFalse(any(call['tool'] == 'dev' for call in self.calls()))
 
     def test_missing_nvidia_runtime_fails_without_gpu_probe(self):
         result = self.invoke(env={'ATD_TEST_NO_NVIDIA': '1'})

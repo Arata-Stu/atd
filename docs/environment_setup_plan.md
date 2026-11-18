@@ -181,8 +181,9 @@ Jetson の build 並列数は 8GB の実メモリ使用量を見ながら調整�
 | [10-atd-runtime.sh](../docker/scripts/10-atd-runtime.sh) と [configure-dds.sh](../docker/scripts/configure-dds.sh) | 起動時の準備と DDS 配置、準備完了記録を実装 |
 | [fastdds.xml](../docker/middleware_profiles/fastdds.xml) | Fast DDS / UDPv4 / loopback のプロファイルを実装 |
 | [scripts/dev.sh](../scripts/dev.sh) | 新規起動・構成の整合確認・専用シェルへの再接続を実装 |
-| [setup.sh](../scripts/setup.sh) と [docker.sh](../scripts/docker.sh) | ホスト準備、workspace のホスト別保存、fzf メニューと診断ログを実装。Web UI の入口は `scripts/webui.sh` |
-| [scripts/python.sh](../scripts/python.sh) と `docker/python/` | ROS 2 用・AI 学習用の uv 環境を操作する入口と、用途別 manifest / lock。追加の学習依存は未選定 |
+| [scripts/bringup.sh](../scripts/bringup.sh) | `input` / `bridge` の実在 profile を選択し、Jetson の起動済み Docker 内で明示起動する。操作と追加方針は [bringup](bringup.md) |
+| [setup.sh](../scripts/setup.sh) と [docker.sh](../scripts/tools/docker.sh) | ホスト準備、workspace のホスト別保存、fzf メニューと診断ログを実装。Web UI の入口は `scripts/tools/webui.sh` |
+| [scripts/tools/python.sh](../scripts/tools/python.sh) と `docker/python/` | ROS 2 用・AI 学習用の uv 環境を操作する入口と、用途別 manifest / lock。追加の学習依存は未選定 |
 | [docker/dev.dockerargs](../docker/dev.dockerargs) と関連設定 | 既存 mount を維持。実デバイスの権限・入力は対象機で確認する |
 | [ros2_ws/src/](../ros2_ws/src/README.md) | 自作 `atd_*` package の編集元。別 workspace を使う場合は、その `src/atd` に rw で mount する |
 | [docker/isaac_ros/config.yaml](../docker/isaac_ros/config.yaml) | 選択した workspace から参照する CLI 設定テンプレート。未設定時は実 clone 配下の `ros2_ws` |

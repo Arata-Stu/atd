@@ -123,11 +123,12 @@ class SetupScriptTests(unittest.TestCase):
                 + shlex.quote(tool) + ' "$@"\n'
             )
             executable.chmod(0o755)
-        (self.project / "scripts/detect_host.sh").write_text(
+        (self.project / "scripts/lib/detect_host.sh").write_text(
             'detect_atd_host() { printf "%s\\n" "${ATD_TEST_HOST:-pc}"; }\n')
         self.env = {
             "PATH": os.pathsep.join((str(self.bin), "/usr/bin", "/bin", "/usr/sbin", "/sbin")),
             "HOME": str(self.home), "USER": "atd-test",
+            "ATD_SETUP_ROOT": str(self.root),
             "ATD_TEST_PYTHON": sys.executable,
             "ATD_TEST_RECORDER": str(self.recorder),
             "ATD_TEST_LOG": str(self.log),
@@ -522,6 +523,15 @@ class SetupScriptTests(unittest.TestCase):
                 self.assertFalse(any(call["args"][0] == "run" for call in self.calls("docker")))
                 self.assertEqual(bool(self.calls("isaac-ros")), cli_called)
                 self.assertEqual(self.calls("host"), [])
+
+    def test_verify_stops_before_gpu_probe_for_kart_launcher(self):
+        launcher = self.root / "usr/lib/isaac-ros-cli/run_dev.py"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text('raise ValueError("ISAAC_ROS_WS must be <kart project>/ros2_ws beside packages.repos")\n')
+        result = self.invoke("--action", "verify")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("kart", result.stderr)
+        self.assertEqual(self.calls("docker"), [])
 
     def test_verify_runs_only_gpu_runtime_probe(self):
         result = self.invoke("--action", "verify")

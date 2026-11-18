@@ -4,7 +4,7 @@ set -uo pipefail
 
 usage() {
     cat <<'EOF'
-使い方: scripts/docker.sh [--host notebook|pc|jetson] [--action check|logs|start|build] [--dry-run]
+使い方: scripts/tools/docker.sh [--host notebook|pc|jetson] [--action check|logs|start|build] [--dry-run]
 
 引数なし / --check: 設定を OK / FAIL / SKIP で確認し、結果を保存する
 --logs / --latest: 保存済み結果を表示（対話端末では fzf で選択）
@@ -42,9 +42,9 @@ done
 [[ "$task_host" != notebook ]] || task_host=pc
 case "$task_host" in ''|pc|jetson) ;; *) fail '--host は notebook、pc または jetson を指定してください'; exit 1 ;; esac
 case "$task_action" in check|logs|start|build) ;; *) fail "不明な action: $task_action"; exit 1 ;; esac
-task_project_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)" || exit 1
+task_project_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)" || exit 1
 if [[ -z "$task_host" ]]; then
-    source "${task_project_dir}/scripts/detect_host.sh" || exit 1
+    source "${task_project_dir}/scripts/lib/detect_host.sh" || exit 1
     task_host="$(detect_atd_host "${ATD_SETUP_ROOT:-/}")" || exit 1
 fi
 task_log_dir="${ATD_LOG_DIR:-${task_project_dir}/logs/docker}/${task_host}"
@@ -177,7 +177,9 @@ run_checks() {
         else report FAIL Docker-daemon '接続不可: サービス・docker グループを確認し、必要なら再ログインしてください'; report SKIP NVIDIA-runtime 'Docker に接続できないため'; fi
     else report FAIL Docker-CLI '未導入: setup.sh の docker を実行してください'; report SKIP Docker-daemon 'Docker CLI 未導入'; report SKIP NVIDIA-runtime 'Docker CLI 未導入'; fi
     if command -v isaac-ros >/dev/null 2>&1; then
-        if task_cli="$(isaac-ros status --output json 2>/dev/null)" && $task_python_ok \
+        if ! task_cli="$(atd_check_isaac_cli 2>&1)"; then
+            report FAIL Isaac-CLI "$task_cli"
+        elif task_cli="$(isaac-ros status --output json 2>/dev/null)" && $task_python_ok \
             && printf '%s' "$task_cli" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("mode") == "docker" else 1)' 2>/dev/null; then
             report OK Isaac-CLI 'Docker mode'
         else report FAIL Isaac-CLI 'Docker mode を確認できません: setup.sh の isaac を実行してください'; fi
@@ -269,7 +271,8 @@ except (ValueError, KeyError, TypeError, IndexError):
 }
 
 # source 済みでない手動 --host の場合にも Jetson marker を診断できるようにする。
-source "${task_project_dir}/scripts/detect_host.sh" || exit 1
+source "${task_project_dir}/scripts/lib/detect_host.sh" || exit 1
+source "${task_project_dir}/scripts/lib/isaac_cli.sh" || exit 1
 umask 077
 mkdir -p -- "$task_log_dir" || { fail "結果保存先を作れません: $task_log_dir"; exit 1; }
 task_log="${task_log_dir}/$(date -u '+%Y%m%dT%H%M%SZ')-$$.log"
@@ -284,6 +287,6 @@ if [[ "$task_action" == start || "$task_action" == build ]]; then
     "${task_dev_command[@]}"
     task_exit=$?
     printf '\ndev.sh (%s) 終了値: %d\n' "$task_action" "$task_exit" | tee -a "$task_log"
-    printf 'CLI の終了値だけでは起動成功を判定しません。稼働中に別端末で docker.sh を実行して確認してください。\n' | tee -a "$task_log"
+    printf 'CLI の終了値だけでは起動成功を判定しません。稼働中に別端末で scripts/tools/docker.sh を実行して確認してください。\n' | tee -a "$task_log"
     exit "$task_exit"
 fi

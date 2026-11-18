@@ -59,7 +59,7 @@ class VglLauncherTests(unittest.TestCase):
         (self.project / 'scripts/lib').mkdir(parents=True)
         self.script = self.project / 'scripts/vgl.sh'
         shutil.copyfile(PROJECT / 'scripts/vgl.sh', self.script)
-        (self.project / 'scripts/detect_host.sh').write_text('detect_atd_host() { printf "pc\\n"; }\n')
+        (self.project / 'scripts/lib/detect_host.sh').write_text('detect_atd_host() { printf "pc\\n"; }\n')
         (self.project / 'scripts/lib/runtime.sh').write_text('atd_runtime_revision() { printf "revision\\n"; }\n')
         for name in ('transfer.py', 'bundle.py'):
             path = self.project / 'tools/vgl' / name

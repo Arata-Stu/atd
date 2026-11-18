@@ -51,7 +51,7 @@
 - 自作パッケージは `atd_<pkg_name>` と命名する。
 - C++ を基本とし、効率を重視して実装する。
 - ビルドは `CMakeLists.txt` と `ament_cmake_auto` を原則として用いる。
-- ROS package のビルドは `scripts/build.sh` / コンテナ内の `atd-build` に分離する。`scripts/python.sh` / `atd-python` は用途別 Python 環境の sync・check・shell・run を扱い、colcon のビルド処理を持たせない。
+- ROS package のビルドは `scripts/build.sh` / コンテナ内の `atd-build` に分離する。`scripts/tools/python.sh` / `atd-python` は用途別 Python 環境の sync・check・shell・run を扱い、colcon のビルド処理を持たせない。
 - composable node / component container の利用を推奨する。
 - 特に大容量データを交換する処理は、composable な構成を想定して実装する。
 - Python node を作成する場合も、CMake と `ament_cmake_auto` を基本とする。
@@ -77,7 +77,7 @@
 - clone の標準配置は `~/workspaces/atd`、未設定時の ROS workspace は実際の clone 配下の `ros2_ws` とする。標準配置なら `~/workspaces/atd/ros2_ws` となる。workspace 操作で対話的に指定し、`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存する。`--workspace` での直接指定にも対応する。Docker 内は `/workspaces/isaac_ros-dev` とし、両ホストの build / install は別々に扱う。
 - bag・地図・モデル等は clone 配下の `data/record`・`data/results` を未設定時の保存先とする。`data/` は Git 管理対象外の永続資産として保持する。既存の保存済み指定、引数・環境変数の上書きを優先し、旧設定の変更と既存データの移動は自動実行しない。新しい配置は setup の workspace / storage 操作で明示的に選び直す。
 - 自作 ROS package の編集元はリポジトリの `ros2_ws/src/atd_<module>/` とする。別の workspace を使う場合はコンテナの workspace `src/atd/` に rw で mount する。CLI 設定テンプレートは `docker/isaac_ros/`、生成 Dockerfile は Git 管理対象外の `.cache/docker/` に置く。配置の詳細は [構成規約](project_structure.md)に従う。
-- `scripts/docker.sh` でセットアップ状態を項目ごとの `OK` / `FAIL` / `SKIP` として表示する。結果は `logs/docker/<host>/` に保存し、後から対話的に確認できるようにする。診断だけではホストへの導入や Docker 起動を行わない。
+- `scripts/tools/docker.sh` でセットアップ状態を項目ごとの `OK` / `FAIL` / `SKIP` として表示する。結果は `logs/docker/<host>/` に保存し、後から対話的に確認できるようにする。診断だけではホストへの導入や Docker 起動を行わない。
 - Isaac ROS CLI は apt 版を採用する。
 - Docker のカスタムは Isaac ROS CLI の YAML と追加 Dockerfile で対応する。
 - RealSense は標準の `realsense` layer をローカルの `realsense455` layer に置き換え、`isaac_ros → realsense455 → atd` の順で構築する。librealsense SDK のみ CUDA 無効とし、ベースの CUDA や他の Isaac ROS GPU 処理は無効化しない。
@@ -119,6 +119,7 @@ bag の記録対象や各 bag の topic / frame は実データに合わせて�
 ### 2.7. シェルスクリプト・TUI・ブラウザ UI の操作方針
 
 - ノート PC と Jetson の日常操作では、シェルスクリプト（`.sh`）や UI を基本とし、ターミナルコマンドを繰り返し手入力する負担を減らす。
+- よく使う日常入口を `scripts/` 直下に置き、現在は `setup.sh`・`dev.sh`・`build.sh`・`vgl.sh`・`bringup.sh` の5本にまとめる。診断・Python 環境管理・Web のホスト側補助入口は `scripts/tools/`、ホスト判定等の共通関数は `scripts/lib/` に置く。
 - ユーザーは CUI であっても対話形式や TUI を好む。ユーザー向けの CLI・補助スクリプトでは、この操作方針を優先する。
 - `fzf` を用いた TUI を積極的に活用し、候補を検索・選択して対話的に実行できるようにする。
 - 対象となる操作の例は、実行する処理、bag、地図、設定の選択である。具体的な画面や操作は各機能の実装時に設計する。
@@ -127,7 +128,9 @@ bag の記録対象や各 bag の topic / frame は実データに合わせて�
 - Jetson では UI のブラウザ・frontend を起動しない。これは Jetson 側で必要なバックエンドや bridge を動かさないという意味ではない。
 - UI の追加でも、走行処理の Jetson 内完結、PC からの遠隔走行制御を行わないこと、車載 DDS の直接通信範囲の要件を維持する。
 - 基本機能は 2.9 節の地図・転送・ライブ表示・入力設定とする。UI サーバーは Notebook の Docker 内、Jetson との観測・設定接続は SSH 経由の loopback HTTP とし、操作・既定ポートは Web アプリの README に記録する。個別の観測 topic・周期等は実 bringup に合わせて設定する。
-- setup・Docker・Python・VGL に加えて Web UI と Jetson 入力の起動入口を実装した。UI のローカル検証と Docker / ROS / GPU / 実機での結合確認は分けて扱う。
+- Jetson のまとめ起動は `scripts/bringup.sh` に集約し、実装済みの `input`（Joy・Pico入力・役割処理・bridge）と `bridge`（bridgeのみ）を提供する。引数なしの対話端末では fzf、未導入なら番号で選び、非対話では profile を明示する。`--list` と `--dry-run` は Notebook でも使え、profile を省略した dry-run は `input` の予定を示す。実際の起動は Jetson の既存 Docker 内に限定し、車両出力・bag 記録を開始しない。
+- profile 一覧は `scripts/lib/bringup.sh` に置き、各 ROS package の実装済み launch と対応させる。センサ・自己位置推定・自律走行等の起動単位や専用 `atd_bringup` package は対象機能の実装時に検討し、未実装の profile・空 package は追加しない。[bringup の操作](bringup.md)に現在の対象と拡張方針を記録する。
+- setup・Docker・Python・VGL・Web UI・bringup のスクリプト実装と、Docker / ROS / GPU / 実機での結合確認は分けて扱う。
 
 ### 2.8. Docker 内の Python 環境
 
@@ -252,7 +255,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - Centerline の region と、独立した `raceline` 環境による mincurv / mincurv_iqp を実装した。旧 paired / local への fallback は設けない。単体テスト、小規模閉路で実 QP / IQP solver を使うテスト、frontend の型検査・build はローカルで確認した。
 - Jetson 側に C++ component の `atd_joy` と、観測・設定用の `atd_web_bridge` を追加した。Notebook API は SSH から Jetson loopback HTTP へアクセスし、車載 DDS に直接参加しない。
 - `atd_interfaces` に正規化運転要求と操作イベント、`atd_teleop` に設定可能な役割割り当てを追加した。Notebook の入力画面に物理配置と役割設定を統合し、保存済みと反映済みを区別する。操作要求の出力までで、最終走行許可・基板通信・rosbag の記録実行は未実装。仕様と検証境界は [atd_teleop](../ros2_ws/src/atd_teleop/README.md)を参照する。
-- Web UI は Notebook の Docker 内で `atd-web` を実行して起動し、ブラウザだけを Notebook ホストで開く。ホスト用の `scripts/webui.sh` は `docker exec` による補助入口とする。Jetson の入力起動は `scripts/input.sh`、手順・初期 schema・生成方式・制約は [Web アプリ](../apps/web/README.md)と package の README に記録する。
+- Web UI は Notebook の Docker 内で `atd-web` を実行して起動し、ブラウザだけを Notebook ホストで開く。ホスト用の `scripts/tools/webui.sh` は `docker exec` による補助入口とする。Jetson の入力起動は `scripts/bringup.sh input`、手順・初期 schema・生成方式・制約は [Web アプリ](../apps/web/README.md)と package の README に記録する。
 - Docker build、ROS build / install、実 bag / GPU での公式処理、実 SCP、Bluetooth / evdev、実走行は対象機で別に確認する。ローカルのコード検証だけでこれらを検証済みとはしない。
 
 ### 3.10. Rev6 Pico firmware の確認（2026-11-18）
@@ -334,18 +337,21 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 | [isaac_ros_build_strategy.md](isaac_ros_build_strategy.md) | CLI の apt / source 比較、以前の fork の確認結果、Docker・ROS のビルド範囲 |
 | [environment_setup_plan.md](environment_setup_plan.md) | `kart/docker` の比較、ホスト / Docker の分担、依存追加、TUI / UI 配置、段階的なセットアップの提案 |
 | [python_environments.md](python_environments.md) | uv による用途別 Python 環境、ROS 2 の ABI・依存管理、AI 学習環境との分離 |
+| [bringup.md](bringup.md) | Jetson の実装済み起動 profile、対話選択・引数・拡張方針 |
 | [vgl_models.md](vgl_models.md) | Notebook の ONNX export、SCP 転送、Jetson の engine build と検証・ログ |
 | [hardware_cad.md](hardware_cad.md) | 車体CAD・印刷用3MF・Rev6カメラ組立モデルの一覧と取り込み元。実物との一致は未検証 |
 | `../docker/` | 追加 Dockerfile とデータを毎回 mount する起動引数 |
 | `../docker/isaac_ros/` | 選択した workspace から参照する CLI 設定テンプレート |
 | `../ros2_ws/src/` | 自作 `atd_*` package の編集元。build 成果物はホスト別 workspace に作成する |
 | `../scripts/dev.sh` | PC / Jetson を自動判定する開発環境の起動スクリプト。必要に応じて手動上書き可能 |
-| `../scripts/docker.sh` | Docker 開発環境の診断、結果の保存・閲覧、起動・build の入口 |
+| `../scripts/bringup.sh` | 実装済みの `input` / `bridge` を選び、Jetson の既存 Docker 内で起動する入口 |
+| `../scripts/tools/docker.sh` | Docker 開発環境の診断、結果の保存・閲覧、起動・build の入口 |
 | `../config/workspace.env.example` | PC / Jetson ごとの ROS workspace 設定例 |
 | `../config/storage.env.example` | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
 
 ## 7. 更新履歴
 
+- 2026-11-18: 日常のスクリプト入口を setup・dev・build・vgl・bringup の5本へ整理し、診断・Python・Web補助を `scripts/tools/`、ホスト判定を `scripts/lib/` へ分けた。入力系の起動を `bringup.sh input` / `bringup.sh bridge` にまとめ、実在する profile だけを選択・実行する方針とした。
 - 2026-11-18: ユーザー指定のTT-02-v3の3MF 4件とD455／D435iのFCStd組立モデル2件を `hardware/cad/` に保管。元ファイルと既存v1モデルを保持し、SHA-256一致・ZIP CRC・XML／内部参照を確認した。寸法・組付け・機材採用の確定とは区別する。
 - 2026-11-18: ユーザーの指示でPico Rev6 firmwareと必要な共通通信コードを `atd_vehicle_interface/firmware/pico_rev6/` に同梱。制御・通信のC/Hを保持し、SDK／成果物をGitから除外、ROS buildとARM buildを分離し、移設先でのホストテストを確認した。
 - 2026-11-18: プロポ監視をrawとPWM相当µsの併記にし、既定6chから10／16chへ表示を切り替えられる構成に拡張。Jetsonの役割候補もCH4〜CH16へ広げ、Picoの固定走行CH・全16chの受信型・既存profile v1を維持した。µs表示は参照firmwareの既定校正による換算値で、実PWM出力の測定とは区別する。

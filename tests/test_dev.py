@@ -14,7 +14,7 @@ import unittest
 
 PROJECT = Path(__file__).resolve().parents[1]
 DEV_SCRIPT = PROJECT / "scripts" / "dev.sh"
-HOST_DETECTOR = PROJECT / "scripts" / "detect_host.sh"
+HOST_DETECTOR = PROJECT / "scripts" / "lib" / "detect_host.sh"
 
 
 FAKE_CLI = r'''
@@ -215,6 +215,7 @@ class DevScriptTests(unittest.TestCase):
         self.env = {
             "PATH": os.pathsep.join((str(self.bin), str(Path(sys.executable).parent), os.defpath)),
             "HOME": str(self.root),
+            "ATD_SETUP_ROOT": str(self.root),
             "ATD_STORAGE_CONFIG": str(self.config),
             "ATD_WORKSPACE_CONFIG": str(self.workspace_config),
             "ATD_TEST_LOG": str(self.log),
@@ -263,7 +264,7 @@ class DevScriptTests(unittest.TestCase):
         script = project / "scripts" / "dev.sh"
         script.write_text(DEV_SCRIPT.read_text())
         # 本体には test hook を入れず、コピー上で実 detector の root 引数を差し替える。
-        (project / "scripts" / "detect_host.sh").write_text(
+        (project / "scripts" / "lib" / "detect_host.sh").write_text(
             "detect_atd_host() {\n"
             "  /bin/bash -c 'source \"$1\"; detect_atd_host \"$2\"' atd-test "
             + shlex.quote(str(HOST_DETECTOR)) + " " + shlex.quote(str(fixture)) + "\n}\n")
@@ -469,6 +470,22 @@ class DevScriptTests(unittest.TestCase):
         self.assertIn("--build-local", result.stdout)
         self.assertIn("read-write", result.stdout)
         self.assertEqual(self.calls(), [])
+
+    def test_kart_launcher_blocks_new_build_and_allows_reconnect(self):
+        script = self.auto_project("atd-project", self.root)
+        launcher = self.root / "usr/lib/isaac-ros-cli/run_dev.py"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text('raise ValueError("ISAAC_ROS_WS must be <kart project>/ros2_ws beside packages.repos")\n')
+        result = self.invoke("pc", "--build", script=script)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("docs/setup/pc.md#kart-cli", result.stderr)
+        self.assertEqual(self.activations(), [])
+        self.assertFalse((script.parent.parent / ".cache/docker").exists())
+
+        result = self.invoke("pc", env={"ATD_TEST_CONTAINER": "matching"}, script=script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.activations(), [])
+        self.assertEqual(self.calls()[-1]["args"][-1], "/usr/local/bin/atd-shell")
 
     def test_existing_container_requires_matching_path_and_access(self):
         for state in ("different_path", "different_access"):

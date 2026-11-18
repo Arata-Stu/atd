@@ -53,7 +53,7 @@ Notebook 上で ROS workspace の場所を指定し、コンテナ内では標�
 workspace は対話入力した場所に CLI 設定を準備し、`config/workspace.env` の `ATD_PC_ROS_WS` に保存する。別の workspace を使う場合は `src/atd` の mount point も用意する。直接指定は `--workspace /absolute/path/atd_ws` を追加する。自作 package の編集元はリポジトリの `ros2_ws/src/` とする。
 リポジトリの `ros2_ws` を workspace に選ぶ場合は、その `src` がコンテナの `/workspaces/isaac_ros-dev/src` に対応し、追加 source mount は行わない。
 `ISAAC_ROS_WS` は `dev.sh` が設定するため、ホストの `.bashrc` へ export を追記しない。設定の詳細と既存 CLI 設定との衝突時の扱いは [共通手順](README.md#ros-workspace-のパス)を参照する。
-`./scripts/docker.sh` で項目別診断を保存し、`./scripts/docker.sh --action logs` で Notebook の過去の結果を確認できる。
+`./scripts/tools/docker.sh` で項目別診断を保存し、`./scripts/tools/docker.sh --action logs` で Notebook の過去の結果を確認できる。
 初回 build は `isaac_ros → realsense455 → atd` の順で行う。librealsense SDK だけ CUDA 無効とし、Isaac ROS の GPU 処理は維持する。
 verify は一般ユーザーから Docker に接続し、CLI の Docker モードと `--gpus all` による `/bin/true` のコンテナ起動を確認する。CUDA 演算成功は別に検証する。
 
@@ -68,10 +68,40 @@ ros2 pkg prefix rosbag2_storage_mcap
 期待する ROS / workspace / RMW は `lyrical` / `/workspaces/isaac_ros-dev` / `rmw_fastrtps_cpp`。
 ROS package が見つかることは、実 D455 の動作や bag 取得の成功を意味しない。
 
+<a id="kart-cli"></a>
+
+## `ISAAC_ROS_WS must be <kart project>/ros2_ws beside packages.repos` で止まる場合
+
+この例外は旧 kart 版 CLI がコンテナを起動する直前に出す。ATD の `packages.repos` や workspace パスを変更する必要はない。復旧では Notebook ホストの CLI を NVIDIA 配布版に切り替える。同じホストで旧 kart を使う場合は、次回の kart 起動にもこの切り替えが影響する。[kart 版の起動処理](https://github.com/carbuncle01/isaac-ros-cli/blob/dff97a3af51ec40f8d0a92e65220391ec735a041/scripts/run_dev/run_dev.py#L216-L224)
+
+Notebook ホストで、導入版と apt の配布元を確認する。`+kart1` が付いている版のほか、公式版と同じバージョンで `run_dev.py` だけを書き換えた場合も対象になる。
+
+```bash
+dpkg-query -W isaac-ros-cli
+grep -nF '<kart project>/ros2_ws beside packages.repos' /usr/lib/isaac-ros-cli/run_dev.py
+sudo apt-get update
+apt-cache madison isaac-ros-cli
+```
+
+`https://isaac.download.nvidia.com/isaac-ros/release-5.0` のうち、Notebook は `noble/main`（amd64）、Jetson で同じ例外が出た場合は `noble-jetpack/main`（arm64）の行にある版を選び、次の `<公式版>` に入れる。該当行がない場合は NVIDIA 公式手順で **x86 (Ubuntu 24.04 Noble)** または **Jetson (JetPack 7.2)** を選び、**US CDN / Specific Version (release-5.0)** の配布元を登録する。その後 `sudo apt-get update` と `apt-cache madison isaac-ros-cli` を再実行する。[NVIDIA の apt 配布元登録手順](https://nvidia-isaac-ros.github.io/v/release-5.0/getting_started/index.html#configure-isaac-ros-apt-repository)
+
+```bash
+sudo apt-get install --reinstall --allow-downgrades 'isaac-ros-cli=<公式版>'
+dpkg-query -W isaac-ros-cli
+dpkg --verify isaac-ros-cli
+```
+
+導入版が選んだ版と一致し、`dpkg --verify` で `/usr/lib/isaac-ros-cli/run_dev.py` に差異が出ないことを確認する。ATD の clone 直下で CLI の Docker モードを確認して、build を再開する。
+
+```bash
+./scripts/setup.sh --action isaac
+./scripts/dev.sh --build
+```
+
 ## 4. 通常の使い方
 
 通常は `./scripts/setup.sh --action start` または `./scripts/dev.sh` で入る。
-PC では受信した bag の offline 処理、地図作成・編集、解析、可視化を行う。共通 Web アプリは `./scripts/webui.sh` で起動し、Notebook ホストの Chrome から `http://127.0.0.1:8766` を開く。[Web アプリ](../../apps/web/README.md)を参照する。Jetson では UI を起動せず、入力・観測用の `./scripts/input.sh` を使用する。
+PC では受信した bag の offline 処理、地図作成・編集、解析、可視化を行う。共通 Web アプリは `./scripts/tools/webui.sh` で起動し、Notebook ホストの Chrome から `http://127.0.0.1:8766` を開く。[Web アプリ](../../apps/web/README.md)を参照する。Jetson では UI を起動せず、入力・観測用の `./scripts/bringup.sh input` を使用する。
 
 D455 を PC に直接接続する場合は devices のホスト準備も行い、[Jetson 手順の D455 確認](jetson.md#3-d455-と-dualsense)と同じ順に確認する。
 PC の Docker と Jetson の Docker は別々に build し、PC の `build/` / `install/` を Jetson 用として転送しない。
@@ -86,7 +116,7 @@ ssh -p 22 USER@JETSON_HOST true
 # パスフレーズ付き鍵は既存の SSH agent へ読み込んでおく。
 ssh-add ~/.ssh/id_ed25519
 ./scripts/dev.sh
-./scripts/webui.sh
+./scripts/tools/webui.sh
 ```
 
 `ssh-add` は agent を利用する場合だけ実行し、鍵ファイル名は利用中のものに合わせる。Web の「転送」で同じ接続先・ユーザー名・SSH portを保存する。ライブ・入力画面もこの接続設定を共用する。アプリは `BatchMode=yes` / `StrictHostKeyChecking=yes` を使うため、未登録のホスト鍵や未解除の鍵を接続成功扱いしない。

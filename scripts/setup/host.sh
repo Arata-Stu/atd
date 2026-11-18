@@ -104,6 +104,8 @@ add_group() {
     fi
 }
 
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/isaac_cli.sh"
+
 if [[ "$task_action" == check ]]; then
     printf 'host: %s\nOS: %s %s\nkernel: %s\narch: %s\n' "$task_host" "$task_os_id" "$task_os_version" "$(uname -s)" "$(uname -m)"
     for task_command in docker nvidia-ctk isaac-ros fzf rsync bluetoothctl; do
@@ -116,7 +118,7 @@ if [[ "$task_action" == check ]]; then
     if [[ -r "${task_root}/etc/nv_tegra_release" ]]; then cat "${task_root}/etc/nv_tegra_release"; fi
     if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi || true; fi
     if command -v docker >/dev/null 2>&1; then docker info --format '{{json .Runtimes}}' || true; fi
-    if command -v isaac-ros >/dev/null 2>&1; then isaac-ros status --output json || true; fi
+    if command -v isaac-ros >/dev/null 2>&1 && atd_check_isaac_cli; then isaac-ros status --output json || true; fi
     df -h "${task_root:-/}" || true
     if [[ "$(uname -s)" != Linux || "$task_os_id" != ubuntu || "$task_os_version" != 24.04 ]]; then
         printf '[要確認] 自動導入の対象は Ubuntu 24.04 ホストです。\n'
@@ -217,6 +219,7 @@ Signed-By: ${task_root}/etc/apt/keyrings/atd-docker.gpg"
                 exit 0
             fi
         fi
+        atd_check_isaac_cli || exit 1
         if ! task_status="$(isaac-ros status --output json)"; then
             fail 'CLI の状態を取得できません。既存設定を確認してください。初期化の上書きは行いません'
         fi

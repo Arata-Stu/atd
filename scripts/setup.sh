@@ -74,7 +74,7 @@ task_host_selection=auto
 if [[ -n "$task_host" ]]; then
     task_host_selection=manual
 else
-    source "${task_project_dir}/scripts/detect_host.sh"
+    source "${task_project_dir}/scripts/lib/detect_host.sh"
     task_host="$(detect_atd_host)"
 fi
 printf 'ATD setup — host: %s (%s)\n' "$task_host" "$task_host_selection"
@@ -241,6 +241,8 @@ verify_environment() {
     fi
     command -v docker >/dev/null 2>&1 || { fail '先に docker を実行してください'; return 1; }
     command -v isaac-ros >/dev/null 2>&1 || { fail '先に isaac を実行してください'; return 1; }
+    source "${task_project_dir}/scripts/lib/isaac_cli.sh" || return 1
+    atd_check_isaac_cli || return 1
     command -v python3 >/dev/null 2>&1 || { fail '先に tools を実行してください'; return 1; }
     if ! docker info --format 'Docker runtime: {{.DefaultRuntime}}'; then
         fail 'Docker に接続できません。サービスと docker グループの反映を確認し、必要なら再ログインしてください'

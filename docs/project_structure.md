@@ -31,8 +31,14 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 │       ├── atd_vehicle_interface/
 │       │   └── firmware/pico_rev6/ # Pico用ソース・テスト。SDK・生成物はGit管理外
 │       └── README.md          # package の配置ガイド
-├── scripts/                   # ユーザーが実行する短い .sh 入口
-│   ├── lib/                   # 複数の入口から使う関数
+├── scripts/                   # 日常入口は次の5本
+│   ├── setup.sh               # ホスト準備・workspace・保存先
+│   ├── dev.sh                 # Dockerのbuild・起動・再接続
+│   ├── build.sh               # ROS packageのbuild
+│   ├── vgl.sh                 # VGLモデルの準備・転送
+│   ├── bringup.sh             # 実装済みROS起動profileの選択・実行
+│   ├── tools/                 # docker.sh・python.sh・webui.shの補助入口
+│   ├── lib/                   # 共通関数・detect_host.sh・bringup.shのprofile一覧
 │   └── setup/                 # ホスト準備の内部処理
 ├── tools/
 │   └── vgl/                   # VGL export bundle・転送・engine build の処理
@@ -49,7 +55,7 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 | `hardware/cad/` | 車体・部品のFCStdと印刷用3MF。TT-02-v3とRev6カメラ組立モデルはディレクトリを分ける |
 | `hardware/<kind>/` | CAD 以外の回路・配線等の編集元資料 |
 
-共通 Web アプリは `apps/web/{frontend,backend,processing}/` に分ける。frontend は React / TypeScript / Vite、backend は FastAPI とジョブ・転送・公式処理 adapter、processing は Web 非依存の HDMap 幾何処理・ライン生成。UI を使うのは Notebook のみで、Jetson 側の入力・役割 node と `atd_web_bridge` は `scripts/input.sh` で明示起動する。プロポの役割設定は `/data/results/runs/input/propo.yaml` へ保存し、Pico の firmware と走行用 CH 設定は変更しない。操作は [Web アプリ](../apps/web/README.md)を参照する。
+共通 Web アプリは `apps/web/{frontend,backend,processing}/` に分ける。frontend は React / TypeScript / Vite、backend は FastAPI とジョブ・転送・公式処理 adapter、processing は Web 非依存の HDMap 幾何処理・ライン生成。UI を使うのは Notebook のみで、Jetson 側の入力・役割 node と `atd_web_bridge` は `scripts/bringup.sh input` で明示起動する。プロポの役割設定は `/data/results/runs/input/propo.yaml` へ保存し、Pico の firmware と走行用 CH 設定は変更しない。操作は [Web アプリ](../apps/web/README.md)を参照する。
 
 Pico firmware はユーザー提供の `/Users/at/project/tools/pcb/kart_bridge_board/firmware/pico_rev6/` と必要な共通通信コードを取り込み、以後の ATD 向け編集元を `atd_vehicle_interface/firmware/pico_rev6/` とする。元ディレクトリは保持し、自動同期・削除は行わない。SDK は同ディレクトリの `.cache/pico-sdk/`、生成物は `build/` に置き、Git 管理対象から外す。`firmware/COLCON_IGNORE` で独立した Pico CMake project を ROS workspace の探索から除外し、colcon から SDK の取得・ARM build・書き込みを実行しない。実基板へ書き込まれた版との一致は別途確認する。
 
@@ -74,7 +80,7 @@ ros2_ws/src/atd_example/
 
 Python node も CMake / `ament_cmake_auto` で build する。実行入口は package 内の `scripts/`、import する Python module は package 名のディレクトリに置き、必要に応じて `ament_cmake_python` で install する。直接実行するファイルは shebang・実行権限・`install(PROGRAMS ...)` を整える。
 
-package 固有の parameter、較正設定、launch はその package に置く。複数 package の起動をまとめる設定は、実装時に追加する `atd_bringup` 等の責務として扱う。root の `config/` はホストのパス・保存先等に使い、ROS parameter を集める場所にはしない。
+package 固有の parameter、較正設定、launch はその package に置く。現在の入力系の統合 launch は `atd_web_bridge/launch/input.launch.py` にあり、`scripts/bringup.sh input` から起動する。日常操作の profile 選択と ROS launch の責務を分け、profile 一覧は `scripts/lib/bringup.sh` に置く。センサ・自己位置推定・車両I/O等をまとめる実装が必要になった時点で、`atd_bringup` 等の専用 package の責務を決める。未実装の profile や空 package は用意しない。root の `config/` はホストのパス・保存先等に使い、ROS parameter を集める場所にはしない。
 
 ホストでの編集元は `<ATD checkout>/ros2_ws/src/` とする。
 
@@ -97,14 +103,14 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | 追加 Python 依存 | `docker/python/<purpose>/{pyproject.toml,uv.lock}`。用途別に管理する |
 | 初回 setup | `scripts/setup.sh` |
 | Docker 起動・build | `scripts/dev.sh` |
-| 診断と履歴 | `scripts/docker.sh` |
-| 用途別 Python 環境の管理・実行 | `scripts/python.sh` → コンテナ内の `atd-python`。sync / check / shell / run |
+| 診断と履歴 | `scripts/tools/docker.sh` |
+| 用途別 Python 環境の管理・実行 | `scripts/tools/python.sh` → コンテナ内の `atd-python`。sync / check / shell / run |
 | ROS package の build | `scripts/build.sh` → コンテナ内の `atd-build` |
 | VGL モデルの export・転送・build | `scripts/vgl.sh` |
-| Notebook 共通 Web UI | Docker 内の `atd-web`。ホストからの補助入口は `scripts/webui.sh` |
-| Jetson の入力・観測設定 bridge | `scripts/input.sh` |
+| Notebook 共通 Web UI | Docker 内の `atd-web`。ホストからの補助入口は `scripts/tools/webui.sh` |
+| Jetson の ROS 起動 | `scripts/bringup.sh`。`input` / `bridge` の実在 profile を選択 |
 
-ユーザー向けの操作は `scripts/` の短い入口から提供する。コンテナ内の処理は `docker/scripts/`、ホスト準備の内部処理は `scripts/setup/`、ホスト側の共通関数は `scripts/lib/` に置く。入口ごとに同じ設定読込みやホスト判定を実装し直さない。コンテナ内のビルド処理と Python 環境管理は独立したコマンドにし、共通の環境準備は `docker/scripts/lib/` から読み込む。
+日常操作の入口を `scripts/` 直下に置き、現在は setup・dev・build・vgl・bringup の5本にまとめる。診断・環境管理等の補助入口は `scripts/tools/` に置く。コンテナ内の処理は `docker/scripts/`、ホスト準備の内部処理は `scripts/setup/`、ホスト側の共通関数は `scripts/lib/` に置く。ホスト判定は `scripts/lib/detect_host.sh` を共用する。入口ごとに同じ設定読込みやホスト判定を実装し直さない。コンテナ内のビルド処理と Python 環境管理は独立したコマンドにし、共通の環境準備は `docker/scripts/lib/` から読み込む。
 
 新規のディレクトリ・文書・設定ファイルは、内容が分かる英語の `snake_case` を基本とする。`Dockerfile.<image_key>`、`CMakeLists.txt`、`package.xml` 等のツールが要求する名前と、既存の公開コマンド名はその規則を優先する。
 
@@ -117,6 +123,7 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | [要件](project_requirements.md) | 確定要件・提案・未決事項 |
 | この文書 | ディレクトリとファイルの置き場所 |
 | [セットアップ手順](setup/README.md) | 実際の導入・起動・診断操作 |
+| [bringup](bringup.md) | Jetson の起動 profile、選択・引数・拡張方針 |
 | [Python 環境](python_environments.md) | uv、用途別環境、ROS 2 Python との関係 |
 | [VGL モデル](vgl_models.md) | Notebook export、SCP 転送、Jetson engine build、検証・ログ |
 | [ビルド方針](isaac_ros_build_strategy.md) | CLI・Docker・ROS package の build 方針と技術的な根拠 |

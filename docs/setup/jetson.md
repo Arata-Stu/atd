@@ -79,7 +79,7 @@ Jetson 自身の ROS workspace の場所を指定する。未設定時は実際�
 workspace は対話入力した場所に CLI 設定を準備し、`config/workspace.env` の `ATD_JETSON_ROS_WS` に保存する。別の workspace を使う場合は `src/atd` の mount point も用意する。SSD 上へ置く場合は `--workspace /mnt/ssd/atd_ws` のように直接指定もできる。自作 package の編集元はリポジトリの `ros2_ws/src/` とする。
 リポジトリの `ros2_ws` を workspace に選ぶ場合は、その `src` がコンテナの `/workspaces/isaac_ros-dev/src` に対応し、追加 source mount は行わない。
 `ISAAC_ROS_WS` は `dev.sh` が設定するため、ホストの `.bashrc` へ手動 export しない。設定の詳細と既存 CLI 設定との衝突時の扱いは [共通手順](README.md#ros-workspace-のパス)を参照する。
-`./scripts/docker.sh` で項目別診断を保存し、`./scripts/docker.sh --action logs` で Jetson の過去の結果を確認できる。
+`./scripts/tools/docker.sh` で項目別診断を保存し、`./scripts/tools/docker.sh --action logs` で Jetson の過去の結果を確認できる。
 初回 build は `isaac_ros → realsense455 → atd` の順で行う。
 verify は Docker 接続、CLI の Docker モード、`--gpus all` による `/bin/true` のコンテナ起動までを確認する。CUDA 演算やセンサ取得は別途検証する。
 Docker 起動時には不足依存の導入と Fast DDS の loopback 設定を `.sh` で自動適用する。カメラ・録画・車両ノードは自動起動しない。
@@ -96,4 +96,14 @@ ros2 run joy joy_enumerate_devices
 列挙成功は、手動介入・実車停止の確認ではない。実機に応じて、一般ユーザーからの GPU・D455・入力アクセスを検証する。
 
 Jetson 自身では通常 Chrome を開かない。実走行の処理は Jetson 内で完結させ、PC 向けの観測情報は bridge 経由で提供する予定。
-bridge の公開設定と実通信の確認、PC のブラウザ UI は後工程である。
+
+入力・観測は起動済みコンテナに対して、Jetson ホストの別端末から明示的に起動する。
+
+```bash
+./scripts/build.sh --packages-up-to atd_web_bridge
+./scripts/bringup.sh input
+# 入力・役割nodeが別途起動済みならbridgeのみ
+./scripts/bringup.sh bridge
+```
+
+引数なしでは起動 profile を選べる。現在は `input` / `bridge` のみで、車両出力・bag 記録は開始しない。Pico が複数ある場合は `./scripts/bringup.sh input pico_serial:=<ID>` で選択する。Notebook の UI と SSH 接続、profile の操作は [Web アプリ](../../apps/web/README.md)と [bringup](../bringup.md)を参照する。実 DDS・USB・SSH の結合と実車確認は別途行う。

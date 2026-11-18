@@ -20,15 +20,15 @@ OS Python への `pip install`、`uv pip install --system`、`--break-system-pac
 
 ## 操作と保存先
 
-コンテナは先に `./scripts/dev.sh` で起動する。Python 環境の同期・確認・実行は、ホストから [`scripts/python.sh`](../scripts/python.sh)、コンテナ内では `atd-python` を使う。引数なしでは fzf で用途・操作を選べる。Python 環境の操作は `sync`・`check`・`shell`・`run` に限定する。
+コンテナは先に `./scripts/dev.sh` で起動する。Python 環境の同期・確認・実行は、ホストから [`scripts/tools/python.sh`](../scripts/tools/python.sh)、コンテナ内では `atd-python` を使う。引数なしでは fzf で用途・操作を選べる。Python 環境の操作は `sync`・`check`・`shell`・`run` に限定する。
 ROS package の build は独立した [`scripts/build.sh`](../scripts/build.sh) を入口とし、用途名や操作名を指定しない。
 
 ```bash
-./scripts/python.sh
-./scripts/python.sh ros sync
-./scripts/python.sh ros check
-./scripts/python.sh train shell
-./scripts/python.sh train run -- python -c 'import sys; print(sys.executable)'
+./scripts/tools/python.sh
+./scripts/tools/python.sh ros sync
+./scripts/tools/python.sh ros check
+./scripts/tools/python.sh train shell
+./scripts/tools/python.sh train run -- python -c 'import sys; print(sys.executable)'
 ./scripts/build.sh
 ./scripts/build.sh --packages-up-to atd_web_bridge
 ```
@@ -40,7 +40,7 @@ ROS package の build は独立した [`scripts/build.sh`](../scripts/build.sh) 
 | `shell` | 同期後、その用途の対話シェルを開く |
 | `run -- COMMAND ...` | 同期後、その用途の環境でコマンドを実行する |
 
-ホストの `python.sh` は `--host notebook|pc|jetson` と `--dry-run` に対応し、コンテナを自動起動しない。コンテナ内では、例えば `atd-python ros check` のように使用する。
+ホストの `scripts/tools/python.sh` は `--host notebook|pc|jetson` と `--dry-run` に対応し、コンテナを自動起動しない。コンテナ内では、例えば `atd-python ros check` のように使用する。
 `build.sh` も同じホスト指定・実行予定表示に対応し、コンテナ内の専用コマンド `atd-build` を呼ぶ。コンテナ内からは `atd-build --packages-up-to atd_web_bridge` と直接実行できる。`atd-build` がビルド対象 workspace への移動、`colcon build` の引数、CMake の Python interpreter 指定を扱い、`python.sh` / `atd-python` は呼び出さない。
 両コマンドは共通の環境準備処理を利用し、ROS 用 Python の ABI 確認・uv による同期・ROS 環境の有効化・DDS 設定の維持を共有する。従来の `python.sh ros build` / `atd-python ros build` は廃止し、ビルドには `build.sh` / `atd-build` を使用する。
 専用コマンドと共通処理を導入した構成へ更新するときは、利用中の処理を終了し、`./scripts/dev.sh --build` で Docker イメージを更新・コンテナを再作成する。
@@ -62,7 +62,7 @@ venv の architecture は `uname -m` の値を使う。workspace の bind mount 
 `ros` / `train` の追加 Python 依存は空であり、学習用ライブラリの導入・動作確認までは含まない。`vgl-export` は PyTorch / torchvision・ONNX 等を固定する Notebook 専用環境で、モデルからの export を選んだときに同期する。依存の版は project と lockfile を参照する。
 VGL export・既存 bundle の package・Jetson の engine build は [専用の操作手順](vgl_models.md)を使う。Jetson の engine build に Notebook の export 用 venv をコピーしない。
 
-共通 Web UI は Notebook の Docker 内で `atd-web` を実行し、`web` 環境を同期・選択して起動する。ホストの `scripts/webui.sh` は同じコンテナ内コマンドを呼ぶ補助入口である。ソースの backend / processing は readonly の checkout から読み、frontend の build と node_modules は workspace の `.atd-web/frontend/` へ作成する。`web` は Linux x86_64 の Notebook 専用で、ROS CLI を呼ぶ子プロセスでだけシステムの ROS 環境を読み込む。通常起動時に `atd-python raceline sync` で最小曲率 helper 用環境も同期し、`ATD_RACELINE_PYTHON` にその Python を設定して別プロセスを起動する。`raceline` は Python 3.12 と NumPy・SciPy・quadprog・固定 commit の trajectory-planning-helpers 等を独立した lock で管理する。`atd-web build` は frontend の build だけで、Python 環境の同期とは別である。`atd-web check` は `web` / `raceline` 環境と公式・自作 ROS package の導入状態を診断する。操作は [Web アプリ](../apps/web/README.md)を参照する。
+共通 Web UI は Notebook の Docker 内で `atd-web` を実行し、`web` 環境を同期・選択して起動する。ホストの `scripts/tools/webui.sh` は同じコンテナ内コマンドを呼ぶ補助入口である。ソースの backend / processing は readonly の checkout から読み、frontend の build と node_modules は workspace の `.atd-web/frontend/` へ作成する。`web` は Linux x86_64 の Notebook 専用で、ROS CLI を呼ぶ子プロセスでだけシステムの ROS 環境を読み込む。通常起動時に `atd-python raceline sync` で最小曲率 helper 用環境も同期し、`ATD_RACELINE_PYTHON` にその Python を設定して別プロセスを起動する。`raceline` は Python 3.12 と NumPy・SciPy・quadprog・固定 commit の trajectory-planning-helpers 等を独立した lock で管理する。`atd-web build` は frontend の build だけで、Python 環境の同期とは別である。`atd-web check` は `web` / `raceline` 環境と公式・自作 ROS package の導入状態を診断する。操作は [Web アプリ](../apps/web/README.md)を参照する。
 
 ## ROS 2 と Python interpreter
 

@@ -37,7 +37,7 @@ Notebook と Jetson は driver / BSP と CLI の apt suite が異なるため、
 # 変更せずに診断する
 ./scripts/setup.sh --action check
 # 項目ごとの OK / FAIL と、後から読める診断ログ
-./scripts/docker.sh
+./scripts/tools/docker.sh
 # 初回セットアップで実行する操作を確認する
 ./scripts/setup.sh --action all --dry-run
 # 初回イメージの build と起動
@@ -108,14 +108,14 @@ CLI 設定テンプレートは `docker/isaac_ros/`、Docker の生成物は `<A
 ## 状態の診断と履歴
 
 ```bash
-./scripts/docker.sh
-./scripts/docker.sh --host jetson --action check
-./scripts/docker.sh --action logs
+./scripts/tools/docker.sh
+./scripts/tools/docker.sh --host jetson --action check
+./scripts/tools/docker.sh --action logs
 # 選択せず、最新の結果だけを表示
-./scripts/docker.sh --latest
+./scripts/tools/docker.sh --latest
 ```
 
-`docker.sh` の既定操作は check。項目ごとに `OK` / `FAIL` / `SKIP` を表示し、最後に件数をまとめる。workspace、保存先、OS・アーキテクチャ、Docker 接続、NVIDIA runtime、CLI の Docker モード、DDS 設定等を確認する。
+`scripts/tools/docker.sh` の既定操作は check。項目ごとに `OK` / `FAIL` / `SKIP` を表示し、最後に件数をまとめる。workspace、保存先、OS・アーキテクチャ、Docker 接続、NVIDIA runtime、CLI の Docker モード、DDS 設定等を確認する。
 実行中のコンテナは、現在の起動スクリプト・依存の revision と初期化完了マーカー、workspace・データの mount、DDS 環境設定の一致も確認する。
 コンテナがまだない場合など、起動して初めて確認できる項目は `SKIP` として区別する。`FAIL` があれば終了コードは失敗になるが、後続の独立した項目も確認して結果を残す。
 
@@ -129,7 +129,7 @@ logs 操作は対話端末で `fzf` により過去ログを選び、非対話�
 [SKIP] Container ...
 ```
 
-表示例であり、実機の成功結果ではない。起動する場合は `./scripts/docker.sh --action start`、build する場合は `--action build` を使える。事前診断が通れば `dev.sh` へ渡し、その終了コードも記録する。CLI の終了コードだけをコンテナ起動成功の証拠にはせず、起動後は改めて check で初期化状態を確認する。
+表示例であり、実機の成功結果ではない。起動する場合は `./scripts/tools/docker.sh --action start`、build する場合は `--action build` を使える。事前診断が通れば `dev.sh` へ渡し、その終了コードも記録する。CLI の終了コードだけをコンテナ起動成功の証拠にはせず、起動後は改めて check で初期化状態を確認する。
 
 ## 保存先
 
@@ -178,23 +178,34 @@ Docker 起動時には root の `.sh` が追加依存の不足分を確認し、
 依存が揃っていれば apt 操作を省略する。再接続時は初期化を繰り返さず、設定の整合を確認して `atd-shell` を開く。
 詳細は [CLI・Docker のビルド方針](../isaac_ros_build_strategy.md)を参照する。
 
+Jetson の入力・監視を起動する場合は、別端末から次を実行する。Docker の起動だけでは ROS node は起動しない。
+
+```bash
+./scripts/build.sh --packages-up-to atd_web_bridge
+./scripts/bringup.sh input
+# 入力・役割nodeが別途起動済みならbridgeのみ
+./scripts/bringup.sh bridge
+```
+
+`bringup.sh` は引数なしの対話端末で profile を選択し、`--list` で一覧を表示する。Notebook では `./scripts/bringup.sh --dry-run input` による予定の確認を使う。操作と今後の拡張は [bringup](../bringup.md)を参照する。Notebook の Web はコンテナ内の `atd-web`、ホストからの補助起動は `./scripts/tools/webui.sh` を使う。
+
 ## Docker 内の用途別 Python 環境
 
 追加 Python 依存の管理は uv `0.13.8` を基盤とし、ROS 2 用の `ros` と AI 学習用の `train` を分ける。初回は変更を反映した Docker イメージを build し、`dev.sh` でコンテナを起動しておく。ホスト側に uv や同じ venv を導入する必要はない。
 
 ```bash
 # 起動済みコンテナの用途別操作を fzf で選択する
-./scripts/python.sh
+./scripts/tools/python.sh
 # ROS 2 用環境を再同期し、環境の状態を確認する
-./scripts/python.sh ros sync
-./scripts/python.sh ros check
+./scripts/tools/python.sh ros sync
+./scripts/tools/python.sh ros check
 # 学習用環境で Python を実行する
-./scripts/python.sh train run -- python -c 'import sys; print(sys.executable)'
+./scripts/tools/python.sh train run -- python -c 'import sys; print(sys.executable)'
 # ROS package を build する
 ./scripts/build.sh
 ```
 
-Notebook / Jetson の選択には通常の自動判定と `--host notebook|pc|jetson` を使う。`python.sh` は起動済みコンテナへ接続する入口であり、コンテナを起動していない場合は先に `dev.sh` を実行する。
+Notebook / Jetson の選択には通常の自動判定と `--host notebook|pc|jetson` を使う。`scripts/tools/python.sh` は起動済みコンテナへ接続する入口であり、コンテナを起動していない場合は先に `scripts/dev.sh` を実行する。
 コンテナ内の環境操作には `atd-python ros ...` / `atd-python train ...` を使用し、操作は sync / check / shell / run とする。ROS package のビルドは専用の `atd-build` で実行する。通常の対話シェル全体を自動で venv へ切り替えず、選んだ用途のプロセスへ環境を適用する。
 `atd-build` と共通の環境準備処理を追加した構成へ更新する場合は、利用中の処理を終了して `./scripts/dev.sh --build` で image を更新・コンテナを再作成する。旧 `atd-python ros build` は使用しない。
 
@@ -216,9 +227,9 @@ ROS 2 の apt 依存との関係、Python node の interpreter と CMake の注�
 | 保存先がない・書込みできない | mount 状態と保存先設定を確認し、storage を実行する |
 | ROS workspace の場所が分からない | workspace で保存済みパスを確認する。指定したホストの workspace とコンテナの `/workspaces/isaac_ros-dev` は同じソースを指す |
 | workspace の CLI 設定が既存設定と衝突する | 表示されたファイルを確認する。setup は別用途の設定を自動上書きしない |
-| 以前の診断結果を確認したい | `./scripts/docker.sh --action logs` でホスト別のログを選ぶ |
+| 以前の診断結果を確認したい | `./scripts/tools/docker.sh --action logs` でホスト別のログを選ぶ |
 | 起動中コンテナの設定が古い | 作業を終了してコンテナを再作成する。必要なら build を実行する |
-| Python 用途別環境を使えない | `dev.sh` でコンテナを起動し、`python.sh <ros|train> sync` と `check` を実行する。uv 未導入の旧 image は build して再作成する |
+| Python 用途別環境を使えない | `scripts/dev.sh` でコンテナを起動し、`./scripts/tools/python.sh ros sync` と `./scripts/tools/python.sh ros check` を実行する。学習用は `ros` を `train` に置き換える。uv 未導入の旧 image は build して再作成する |
 | D455 / DualSense が見えない | まずホスト認識、その後コンテナの device と非 root 権限を確認する。詳細は Jetson 手順を参照 |
 
 ## 検証の区別

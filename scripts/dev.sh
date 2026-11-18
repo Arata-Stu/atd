@@ -62,7 +62,7 @@ case "$task_project_dir" in
 esac
 task_host_selection="manual"
 if [[ -z "$task_host" ]]; then
-    source "${task_project_dir}/scripts/detect_host.sh"
+    source "${task_project_dir}/scripts/lib/detect_host.sh"
     task_host="$(detect_atd_host)"
     task_host_selection="auto"
 fi
@@ -304,6 +304,9 @@ if $task_attach; then
     exec docker "${task_exec_args[@]}" -u admin --workdir /workspaces/isaac_ros-dev \
         "$task_container_name" /usr/local/bin/atd-shell
 fi
+
+source "${task_project_dir}/scripts/lib/isaac_cli.sh"
+atd_check_isaac_cli || exit 1
 
 python3 - "$task_project_dir" "$ATD_GENERATED_DOCKER_DIR" "$ATD_RUNTIME_REV" "$DOCKER_ARGS_FILE" "$task_source_layout" <<'PY'
 import os

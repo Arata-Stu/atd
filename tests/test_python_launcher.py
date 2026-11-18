@@ -61,14 +61,14 @@ class PythonLauncherTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.project = self.root / 'project'
-        (self.project / 'scripts').mkdir(parents=True)
-        self.script = self.project / 'scripts/python.sh'
-        shutil.copyfile(PROJECT / 'scripts/python.sh', self.script)
+        (self.project / 'scripts/tools').mkdir(parents=True)
+        self.script = self.project / 'scripts/tools/python.sh'
+        shutil.copyfile(PROJECT / 'scripts/tools/python.sh', self.script)
         shutil.copytree(PROJECT / 'scripts/lib', self.project / 'scripts/lib')
         shutil.copytree(PROJECT / 'docker', self.project / 'docker', ignore=shutil.ignore_patterns('.venv', '__pycache__'))
         (self.project / 'ros2_ws/src').mkdir(parents=True)
         (self.project / 'ros2_ws/src/README.md').write_text('ROS package source fixture\n')
-        (self.project / 'scripts/detect_host.sh').write_text(
+        (self.project / 'scripts/lib/detect_host.sh').write_text(
             'detect_atd_host() { printf "%s\\n" "${ATD_TEST_HOST:-pc}"; }\n')
         self.bin = self.root / 'bin'
         self.bin.mkdir()

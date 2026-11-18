@@ -26,7 +26,7 @@ atd-web --port 8769                # 通常 UI / API の port を変更
 atd-web --dry-run                 # 起動予定を表示
 ```
 
-ホストから起動したい場合の補助入口として `./scripts/webui.sh` も用意している。これは既存コンテナへ `docker exec` で入って同じ `atd-web` を実行する。ホストに Web サーバーや Node / FastAPI を導入する経路ではない。
+ホストから起動したい場合の補助入口として `./scripts/tools/webui.sh` も用意している。これは既存コンテナへ `docker exec` で入って同じ `atd-web` を実行する。ホストに Web サーバーや Node / FastAPI を導入する経路ではない。
 
 コンテナ・センサ・車両・記録はこの入口では自動起動しない。API は loopback 待受。通常利用はビルド済み frontend と API を同じ origin で配信する。
 
@@ -80,11 +80,11 @@ Pico 対応を初めて取り込むときは、Jetson の利用中の処理を�
 ```bash
 # Jetson の起動済み ATD コンテナを利用
 ./scripts/build.sh --packages-up-to atd_web_bridge
-./scripts/input.sh
+./scripts/bringup.sh input
 ```
 
-入力 node が既に起動済みなら `./scripts/input.sh --bridge-only`。bridge の設定は [atd_web_bridge](../../ros2_ws/src/atd_web_bridge/README.md) を参照する。既定 topic は実際の bringup の topic・型へ合わせる必要がある。bridge の設定ファイルを用意して `./scripts/input.sh config:=/absolute/path/bridge.yaml` で指定できる。
-通常は Joy・teleop・Pico 受信・プロポ役割処理・bridge を起動する。`--bridge-only` は bridge だけ、`teleop:=false` は Joy の役割処理を除外、`propo:=false` は Pico とプロポ役割処理を除外する。通常起動でも基板出力・bag 記録は実行しない。
+入力 node が既に起動済みなら `./scripts/bringup.sh bridge`。bridge の設定は [atd_web_bridge](../../ros2_ws/src/atd_web_bridge/README.md) を参照する。既定 topic は実際の bringup の topic・型へ合わせる必要がある。bridge の設定ファイルを用意して `./scripts/bringup.sh input config:=/absolute/path/bridge.yaml` で指定できる。
+`input` profile は Joy・teleop・Pico 受信・プロポ役割処理・bridge、`bridge` profile は bridge だけを起動する。`input` では `teleop:=false` で Joy の役割処理、`propo:=false` で Pico とプロポ役割処理を除外できる。起動 profile は `./scripts/bringup.sh --list` で確認し、引数なしの対話端末でも選べる。Notebook では `./scripts/bringup.sh --dry-run input` による確認だけを行い、実際の起動は Jetson の既存 Docker 内で行う。いずれも基板出力・bag 記録は実行しない。[bringup の操作](../../docs/bringup.md)も参照する。
 
 Notebook backend は SSH 経由で Jetson の `127.0.0.1:8790` へ接続する。Notebook は車載 DDS に参加しない。Live では地図・pose・軌跡・速度の観測と ROS parameter の読書きを扱い、欠落・古いデータは表示で区別する。
 
@@ -92,7 +92,7 @@ parameter の閲覧は node prefix、変更は node と parameter 名の allowli
 
 Input は Jetson に Bluetooth 接続した DualSense の生入力・正規化入力・接続状態と、物理配置・操作の役割を同じ画面で扱う。Bluetooth のペアリングは Jetson ホスト側で行う。ブラウザの Gamepad API や Notebook 接続のコントローラは使わない。
 
-1. Jetson のホストでコントローラを Bluetooth 接続し、Docker 起動後に上記の build と `scripts/input.sh` を実行する。
+1. Jetson のホストでコントローラを Bluetooth 接続し、Docker 起動後に上記の build と `scripts/bringup.sh input` を実行する。
 2. Notebook の Docker で `atd-web` を実行し、Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。「データ転送」で Jetson の SSH 接続先を設定する。
 3. 「コントローラ」のモニターで Jetson が受け取った信号を確認する。「軸・ボタンの配置」は evdev 入力から標準軸・ボタンへの物理配置を設定する。設定開始 → 保存 → 再読込 → 全入力を離して Joy 出力を再開する。
 4. 同じ画面の操作割り当てで操舵・スロットル・操作要求の役割を設定する。こちらも設定開始 → 保存 → 再読込 → 全入力を離して操作要求の出力を再開する。二つの設定モードは独立しており、Joy 側が設定中なら teleop の要求も無効になる。
@@ -107,7 +107,7 @@ Input は Jetson に Bluetooth 接続した DualSense の生入力・正規化�
 
 Jetson 側の「記録の開始・停止」「予備1」「予備2」は CH4〜CH16 へ割り当てられ、初期値は全て未割り当て。低側・高側の raw 閾値、反転、位置の確認時間を設定できる。使用するプロポが送信できるCHを選ぶ。設定開始 → 保存 → 再読込 → 操作要求を再開の順で反映し、保存先は `/data/results/runs/input/propo.yaml`。既存の version 1 の設定も利用できる。設定開始は役割イベントだけを停止し、Pico の基本手動操作は継続する。再開には正常で新鮮な RC 入力が必要で、現在のスイッチ位置を基準に取り直す。通常は安定した低側→高側で記録開始要求、高側→低側で停止要求となる。中間位置とチャタリングでは要求を出さない。予備2枠は状態表示のみで、記録も `/rc/events` への要求発行まで。rosbag の実行処理は後続実装。
 
-`atd_vehicle_interface` は Rev6 の監視用 CDC1 / if02 を USB 属性と Pico 固有 serial で識別し、`INFO` と `STREAM ON` だけを送信する。複数 Pico があれば自動選択せず、`./scripts/input.sh pico_serial:=<ID>` で選ぶ。必要なら `pico_sensor_path:=/dev/serial/by-id/<CDC1>`・`pico_config:=<YAML>`・`rc_profile:=<YAML>` を指定できる。CDC0 と走行指令は使わず、firmware の制御処理は変更していない。firmware ソースは [Pico firmware](../../ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/README.md) として同じ ROS package 内で Git 管理する。詳細は [Pico 受信](../../ros2_ws/src/atd_vehicle_interface/README.md)、[プロポ役割](../../ros2_ws/src/atd_rc_input/README.md)、[要件3.10節](../../docs/project_requirements.md#310-rev6-pico-firmware-の確認2026-11-18)を参照する。ホスト検証と Jetson Docker・実 USB・実機の確認は別である。
+`atd_vehicle_interface` は Rev6 の監視用 CDC1 / if02 を USB 属性と Pico 固有 serial で識別し、`INFO` と `STREAM ON` だけを送信する。複数 Pico があれば自動選択せず、`./scripts/bringup.sh input pico_serial:=<ID>` で選ぶ。必要なら `pico_sensor_path:=/dev/serial/by-id/<CDC1>`・`pico_config:=<YAML>`・`rc_profile:=<YAML>` を指定できる。CDC0 と走行指令は使わず、firmware の制御処理は変更していない。firmware ソースは [Pico firmware](../../ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/README.md) として同じ ROS package 内で Git 管理する。詳細は [Pico 受信](../../ros2_ws/src/atd_vehicle_interface/README.md)、[プロポ役割](../../ros2_ws/src/atd_rc_input/README.md)、[要件3.10節](../../docs/project_requirements.md#310-rev6-pico-firmware-の確認2026-11-18)を参照する。ホスト検証と Jetson Docker・実 USB・実機の確認は別である。
 
 ## 構成と依存
 

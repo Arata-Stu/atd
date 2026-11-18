@@ -9,7 +9,7 @@ package / component は `atd_joy` / `atd_joy::JoyNode`、既定 node は `/atd_j
 ```bash
 ./scripts/build.sh --packages-up-to atd_web_bridge
 # Jetson の ROS 環境で。起動自体では車両制御・録画を開始しない。
-./scripts/input.sh
+./scripts/bringup.sh input
 ```
 
 初回の profile は `/data/results/runs/input/dualsense.yaml`。存在しなければ入力出力を無効にして待機する。Web の「入力」で設定開始、配置の保存、再読込、全入力解放後の入力出力再開を個別に行う。通常起動では保存済み profile と機器が有効なら入力取得が成立し、PC や Web UI の接続を必要としない。設定作業では明示的に設定モードへ入り、設定開始後に自動で入力出力を再開しない。起動時から設定モードにする場合は start_configuring=true を指定する。Joy の ready は物理入力の利用可否であり、車両の走行許可・停止確認ではない。設定モード中は raw のみ操作値を配信し、正規化 Joy は中立、ready は false。未接続・同期中・必要コード不足も ready は false。

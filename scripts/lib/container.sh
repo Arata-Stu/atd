@@ -7,7 +7,7 @@ atd_container_exec() {
     local -a task_exec_args
     shift 4
     if [[ -z "$task_host" ]]; then
-        source "${task_project_dir}/scripts/detect_host.sh"
+        source "${task_project_dir}/scripts/lib/detect_host.sh"
         task_host="$(detect_atd_host)"
     fi
     task_container="atd_${task_host}_dev"

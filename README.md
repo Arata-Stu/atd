@@ -8,23 +8,29 @@ RealSense D455 を初期センサとし、Jetson Orin Nano 8GB を搭載した R
 
 ## 操作の入口
 
-プロジェクト直下から通常ユーザーで実行する。対話操作には fzf を使い、setup の初回は番号選択も利用できる。
+プロジェクト直下から通常ユーザーで実行する。日常の入口は次の5本にまとめる。
+
+| 入口 | 用途 |
+| --- | --- |
+| `scripts/setup.sh` | ホスト準備、workspace・保存先の設定 |
+| `scripts/dev.sh` | Docker image の build、コンテナの起動・再接続 |
+| `scripts/build.sh` | 起動済みコンテナで ROS package を build |
+| `scripts/vgl.sh` | VGL export・SCP 転送・Jetson engine build |
+| `scripts/bringup.sh` | Jetson の実装済み起動 profile を選択・実行 |
 
 ```bash
-./scripts/setup.sh            # ホスト準備、workspace・保存先の対話設定
-./scripts/dev.sh --build      # 初回イメージを build して入室
-./scripts/dev.sh              # 通常起動・稼働中コンテナへの再接続
-./scripts/build.sh            # 起動済みコンテナで ROS package を build
-./scripts/docker.sh           # OK / FAIL / SKIP 診断とログ保存
-./scripts/docker.sh --logs    # 過去ログを選択
-./scripts/vgl.sh              # VGL export・SCP 転送・Jetson engine build を選択
-./scripts/webui.sh            # ホストからの補助入口。通常は Docker 内で atd-web
-./scripts/input.sh            # Jetson の Joy 入力・teleop 操作要求・観測設定 bridge を明示起動
+./scripts/setup.sh
+./scripts/dev.sh --build
+./scripts/build.sh --packages-up-to atd_web_bridge
+./scripts/bringup.sh input     # Joy・Pico入力、役割処理、観測設定bridge
+./scripts/bringup.sh bridge    # bridgeだけ。入力nodeが別途起動済みの場合
 ```
 
-Web UI は Notebook の Docker 内で `atd-web` を実行し、Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。FastAPI・frontend の build / 配信・地図作成ジョブはコンテナ内で動く。
+`bringup.sh` は引数なしの対話端末では profile を fzf で選択し、未導入時は番号選択を使う。`--list` は一覧、`--dry-run input` は Notebook からも実行予定だけを確認できる。実際の起動は Jetson の既存 Docker 内で行い、車両出力や bag 記録は開始しない。[bringup の操作と拡張方針](docs/bringup.md)を参照する。
 
-PC / Jetson は機種・BSP 情報から自動判定する。必要な場合だけ `--host notebook`（`pc` と同義）/ `--host jetson` で上書きする。実行予定の確認には `--dry-run` を使う。
+診断・Python 環境管理・Web のホスト側補助入口は `scripts/tools/{docker,python,webui}.sh` に置く。Web UI は通常 Notebook の Docker 内で `atd-web` を実行し、Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。ホストからは `./scripts/tools/webui.sh` でも同じ処理を呼べる。FastAPI・frontend の build / 配信・地図作成ジョブはコンテナ内で動く。
+
+setup・dev・build・vgl の PC / Jetson 判定は機種・BSP 情報を使い、必要な場合だけ `--host notebook`（`pc` と同義）/ `--host jetson` で上書きする。bringup の対象ホストは profile ごとに決める。実行予定の確認には `--dry-run` を使う。
 ホストのセットアップを最初から確認する場合は、[共通手順](docs/setup/README.md)、[Notebook](docs/setup/pc.md)、[Jetson](docs/setup/jetson.md)を参照する。
 
 Docker 起動時に共通 apt 依存、Fast DDS の UDPv4 / loopback 設定、ROS 用 uv 環境を準備する。カメラ・bag 記録・車両ノード・bridge は自動起動しない。構成更新時は利用中の処理を終了してコンテナを再作成する。
@@ -53,15 +59,15 @@ VGL モデルは Notebook で ONNX export し、SCP で bundle を渡して Jets
 ## 用途別 Python 環境
 
 Docker 内では uv `0.13.8` を使い、ROS 2 用 `ros`、AI 学習用 `train`、Notebook の VGL export 用 `vgl-export` を独立した project / lock / venv に分ける。
-ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用は必要時に同期する。通常の対話シェル全体は venv へ切り替えず、用途を選んだプロセスに適用する。Python 環境の管理・実行は `python.sh` / `atd-python`、ROS package のビルドは専用の `build.sh` / `atd-build` が担当する。
+ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用は必要時に同期する。通常の対話シェル全体は venv へ切り替えず、用途を選んだプロセスに適用する。Python 環境の管理・実行は `scripts/tools/python.sh` / `atd-python`、ROS package のビルドは専用の `scripts/build.sh` / `atd-build` が担当する。
 
 起動済みコンテナに対し、別端末から操作できる。
 
 ```bash
-./scripts/python.sh                   # 用途・操作を fzf で選択
-./scripts/python.sh ros check
+./scripts/tools/python.sh             # 用途・操作を fzf で選択
+./scripts/tools/python.sh ros check
 ./scripts/build.sh                    # ROS package を build
-./scripts/python.sh train shell
+./scripts/tools/python.sh train shell
 ```
 
 `ros` / `train` の追加 Python 依存は現時点では空。VGL export の PyTorch 等は専用 profile に固定し、AI 学習用 framework は今後選定する。詳しくは [Python 環境](docs/python_environments.md)を参照する。
@@ -74,6 +80,7 @@ ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用�
 | [開発規約](AGENTS.md) | 命名、C++ / ament、component、Python、検証 |
 | [構成規約](docs/project_structure.md) | ソース、設定、文書、生成物の配置 |
 | [セットアップ](docs/setup/README.md) | ホスト準備、workspace・保存先、Docker・診断操作 |
+| [bringup](docs/bringup.md) | Jetson の起動 profile、対話選択・引数・今後の拡張 |
 | [Python 環境](docs/python_environments.md) | uv、ROS 2 用・AI 学習用環境の操作と制約 |
 | [VGL モデル](docs/vgl_models.md) | Notebook の export、SCP 転送、Jetson engine build、検証・ログ |
 | [ビルド方針](docs/isaac_ros_build_strategy.md) | CLI / Docker / ROS の範囲、RealSense、DDS と技術的な根拠 |

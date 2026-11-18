@@ -90,8 +90,9 @@ Isaac ROS 5.0 / ROS 2 Lyrical / JetPack 7.2 を対象とし、上流に対して
 | --- | --- |
 | [`../scripts/dev.sh`](../scripts/dev.sh) | ホストを自動判定し、保存先・CLI の設定と起動引数を選択する。ホストの手動上書きも可能 |
 | [`../scripts/setup.sh`](../scripts/setup.sh) | workspace を対話的に指定し、ホスト別の設定と CLI テンプレートへの参照を準備する |
-| [`../scripts/docker.sh`](../scripts/docker.sh) | 項目別の診断結果をホストごとのログへ保存・再表示し、起動・build に進める |
-| [`../scripts/detect_host.sh`](../scripts/detect_host.sh) | Jetson / Tegra の機種情報・BSP マーカーを参照する判定関数 |
+| [`../scripts/bringup.sh`](../scripts/bringup.sh) と [`../scripts/lib/bringup.sh`](../scripts/lib/bringup.sh) | 起動 profile の選択と一覧。現在は Jetson の `input` / `bridge` を既存 ROS launch へ渡す。Docker起動・ROS buildとは分離する |
+| [`../scripts/tools/docker.sh`](../scripts/tools/docker.sh) | 項目別の診断結果をホストごとのログへ保存・再表示し、起動・build に進める |
+| [`../scripts/lib/detect_host.sh`](../scripts/lib/detect_host.sh) | Jetson / Tegra の機種情報・BSP マーカーを参照する判定関数 |
 | [`../config/storage.env.example`](../config/storage.env.example) | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
 | [`../config/workspace.env.example`](../config/workspace.env.example) | PC / Jetson ごとの ROS workspace の設定例。未設定時は実 clone 配下の `ros2_ws` |
 | [`../docker/Dockerfile.realsense455`](../docker/Dockerfile.realsense455) | 標準 RealSense layer の置換。librealsense SDK のみ CUDA 無効で構築する |
@@ -101,7 +102,7 @@ Isaac ROS 5.0 / ROS 2 Lyrical / JetPack 7.2 を対象とし、上流に対して
 | [`../docker/scripts/configure-dds.sh`](../docker/scripts/configure-dds.sh) | Fast DDS XML と環境ファイルを `/etc/atd` へ配置する |
 | [`../docker/scripts/10-atd-runtime.sh`](../docker/scripts/10-atd-runtime.sh) | 依存・DDS を順に準備し、成功後に `runtime.ready` を記録する root hook |
 | [`../docker/scripts/atd-shell.sh`](../docker/scripts/atd-shell.sh) | 専用 `atd-shell` の入口。ホストの旧 bashrc を読み込まず ATD 環境で対話シェルを開く |
-| `../docker/scripts/atd-python.sh` と [`../scripts/python.sh`](../scripts/python.sh) | 起動済みコンテナで、ROS 2 用・AI 学習用の独立した uv project / venv を選択・同期・実行する |
+| `../docker/scripts/atd-python.sh` と [`../scripts/tools/python.sh`](../scripts/tools/python.sh) | 起動済みコンテナで、ROS 2 用・AI 学習用の独立した uv project / venv を選択・同期・実行する |
 | `../docker/python/{ros,train,vgl-export}/` | 用途別の `pyproject.toml` と `uv.lock`。VGL export は Notebook 専用、個別の学習 framework は未選定 |
 | [`../scripts/vgl.sh`](../scripts/vgl.sh) と [`../tools/vgl/cli.py`](../tools/vgl/cli.py) | VGL の Notebook export、SCP 転送、Jetson engine build、資産・hash 検証。[操作手順](vgl_models.md)を参照 |
 | [`../docker/middleware_profiles/fastdds.xml`](../docker/middleware_profiles/fastdds.xml) | UDPv4 のインターフェース・探索・unicast locator を loopback に限定するプロファイル |

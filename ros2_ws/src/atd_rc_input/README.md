@@ -10,6 +10,6 @@ Pico の検査済み USB telemetry を受け、プロポの補助CHをJetson側�
 
 元の入力stampを保持し、USB stream/session・sequence・board時刻・S.BUSフレーム数の進行・flags・50msの受信期限を検査する。telemetryだけが再配信されても古いS.BUSを新しい操作にしない。USB受信は最大250msで失効する。steady clockの監視とROS時刻の元stampを区別する。スイッチの中間帯ではイベントを生成せず、最後の安定位置を保つ。
 
-通常は Jetson で `./scripts/build.sh --packages-up-to atd_web_bridge` 後、`./scripts/input.sh` でPico受信・Joy・役割設定・監視bridgeを起動する。単体は `ros2 launch atd_rc_input rc.launch.py`。component は `atd_rc_input::RcInputNode`、node/executable は `atd_rc_input_node`。
+通常は Jetson で `./scripts/build.sh --packages-up-to atd_web_bridge` 後、`./scripts/bringup.sh input` でPico受信・Joy・役割設定・監視bridgeを起動する。単体は `ros2 launch atd_rc_input rc.launch.py`。component は `atd_rc_input::RcInputNode`、node/executable は `atd_rc_input_node`。
 
 `test/test_core.cpp` はROS非依存で変化検出・debounce・再接続・入力失効・CH変更を検証し、`test/test_profile.py` はschemaと永続保存を検証する。ROS build・DDS/service結合・USB実機・プロポ実信号・実車は別途検証する。

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dev.sh から source する機種判定。引数は検証時に使うファイルシステムのルート。
+# ホスト用スクリプトで共有する機種判定。引数は検証時に使うファイルシステムのルート。
 # CPU アーキテクチャだけでは Jetson と判定しない。
 detect_atd_host() {
     local task_root="${1:-/}" task_path task_value

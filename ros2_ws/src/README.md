@@ -4,6 +4,8 @@
 パッケージごとに `package.xml` と `CMakeLists.txt` を持ち、C++ と `ament_cmake_auto` を基本とする。
 そのパッケージの `include/`・`src/`・`launch/`・`config/`・`test/` はパッケージ内に置く。
 
+Jetson の通常起動は `scripts/bringup.sh input`、入力 node が別途起動済みなら `scripts/bringup.sh bridge` を使う。profile は実装済みの launch と対応させ、一覧を `scripts/lib/bringup.sh` で管理する。将来の統合起動 package は対象機能の実装時に検討し、空の `atd_bringup` は先に作らない。[bringup の操作](../../docs/bringup.md)を参照する。
+
 ホストから編集する対象は、このリポジトリの `ros2_ws/src/`。
 別の ROS workspace を選択した場合、Docker ではこのディレクトリを workspace の `src/atd/` に読書き可能で mount する。
 そのホスト側 `src/atd/` は空の mount 先として扱い、ソースを手動コピーしない。

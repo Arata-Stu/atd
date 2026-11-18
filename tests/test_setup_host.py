@@ -255,6 +255,25 @@ class HostSetupTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(["isaac-ros", "init", "docker"], self.calls("isaac-ros"))
 
+    def test_kart_launcher_requires_explicit_replacement_before_init(self):
+        launcher = self.root / "usr/lib/isaac-ros-cli/run_dev.py"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text('raise ValueError("ISAAC_ROS_WS must be <kart project>/ros2_ws beside packages.repos")\n')
+        result = self.invoke("check")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("docs/setup/pc.md#kart-cli", result.stderr)
+        self.assertEqual(self.calls("sudo"), [])
+        result = self.invoke("isaac", env={"ATD_TEST_CLI_MODE": "uninitialized"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("apt-cache policy isaac-ros-cli", result.stderr)
+        self.assertEqual(self.calls("isaac-ros"), [])
+        self.assertEqual(self.calls("apt-get"), [])
+
+        launcher.write_text("# No kart workspace constraint\n")
+        result = self.invoke("isaac")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(["isaac-ros", "status", "--output", "json"], self.calls("isaac-ros"))
+
     def test_new_cli_uses_platform_suite_and_apt(self):
         for host, arch, suite in (("pc", "x86_64", "noble"), ("jetson", "aarch64", "noble-jetpack")):
             with self.subTest(host=host):

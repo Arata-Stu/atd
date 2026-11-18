@@ -52,7 +52,7 @@ Jetson のホストから、起動済み Docker 内の自作 package を build �
 ```bash
 ./scripts/build.sh --packages-up-to atd_web_bridge
 # ホスト側の入口。Joy / teleop / 監視・設定 bridge を起動。
-./scripts/input.sh
+./scripts/bringup.sh input
 ```
 
 単体では `ros2 launch atd_teleop teleop.launch.py profile:=/absolute/path/teleop.yaml`。launch の config / profile / namespace / composed は atd_joy と同形式。profile は config の値を上書きし、composed=false で standalone を起動する。

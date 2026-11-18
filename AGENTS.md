@@ -20,7 +20,7 @@
 
 - 配置は [構成規約](docs/project_structure.md) を基準とする。自作 ROS package は `ros2_ws/src/atd_<module>/`、共通 Web アプリは `apps/web/` に置く。Pico Rev6 firmware は関連する ROS package の `ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/` で Git 管理する。SDK・toolchain・生成バイナリをソースへ同梱せず、firmware の cross build は通常の colcon build と分ける。
 - ROS package の `launch/`・`config/`・`test/` は package 内に置く。root の `config/` はホストの workspace・保存先等、root の `tests/` は setup・Docker 等の共通基盤に使う。
-- ユーザー向け `.sh` は `scripts/`、共通関数は `scripts/lib/`、ホスト準備の内部処理は `scripts/setup/`、コンテナ内処理は `docker/scripts/` に置く。
+- よく使う日常操作の入口を `scripts/` 直下に置く。現在は `setup.sh`・`dev.sh`・`build.sh`・`vgl.sh`・`bringup.sh` の5本とする。診断・Python 環境管理・Web の補助入口は `scripts/tools/`、共通関数とホスト判定は `scripts/lib/`、ホスト準備の内部処理は `scripts/setup/`、コンテナ内処理は `docker/scripts/` に置く。
 - CLI 設定テンプレートは `docker/isaac_ros/`、生成 Dockerfile は Git 管理対象外の `.cache/docker/` に置く。ROS package の編集元は `ros2_ws/src/` とする。リポジトリの `ros2_ws` を workspace に選ぶ場合はその `src` を使い、別の workspace の場合はコンテナの `src/atd` に rw で mount する。
 - CAD 等の編集元は `hardware/`、説明文書は `docs/` に置く。clone の標準配置は `~/workspaces/atd` とし、bag・地図・モデル重み・engine・学習結果は clone 配下の `data/record`・`data/results` を既定とする。`data/` は Git 管理対象外の永続資産として保持する。
 - データは既存の記録先・結果先を使い、`/data/record/rosbags/` と `/data/results/{maps,models,runs}/` に整理する。NVIDIA の地図・モデル・exporter の内部構成は維持し、地図とモデルを混同しない。対象環境別 engine・run の checkpoint / log は保持する資産とし、cache として自動削除しない。詳細は [保存構成](docs/project_structure.md#データの保存構成)に従う。
@@ -39,7 +39,7 @@
 - DDS は Fast DDS の UDPv4 / loopback 設定を使う。生成先は `/etc/atd/fastdds.xml` と `/etc/atd/dds.env.sh` とし、起動時の root スクリプトで配置する。
 - 初回準備は `scripts/setup.sh` と [セットアップ手順](docs/setup/README.md) を入口とする。Notebook（x86_64 / amd64）と Jetson（aarch64 / arm64 と BSP）を区別し、既存 Docker・CLI 設定を不用意に置換しない。
 - ROS workspace は setup の workspace 操作で対話的に指定し、未設定時は実際の clone 配下の `ros2_ws` を使う。標準 clone 位置なら `~/workspaces/atd/ros2_ws` となる。`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存する。保存済み指定と引数・環境変数の上書きを優先し、旧設定や既存データを自動移行しない。コンテナでは `/workspaces/isaac_ros-dev` を使い、`ISAAC_ROS_WS` は `dev.sh` が設定する。Notebook / Jetson のホストパスやビルド成果物を同一視しない。別の workspace を使う場合、その `src/atd` はリポジトリの `ros2_ws/src/` を mount する予約先とし、編集元を別々に管理しない。
-- 環境の診断は `scripts/docker.sh` から項目ごとの `OK` / `FAIL` / `SKIP` を表示し、結果を `logs/docker/<host>/` に保存して後から確認できるようにする。導入状態の診断と、Docker 起動・GPU 演算・センサ・実走行の検証を区別する。
+- 環境の診断は `scripts/tools/docker.sh` から項目ごとの `OK` / `FAIL` / `SKIP` を表示し、結果を `logs/docker/<host>/` に保存して後から確認できるようにする。導入状態の診断と、Docker 起動・GPU 演算・センサ・実走行の検証を区別する。
 - 開発環境は `scripts/dev.sh` で起動し、PC / Jetson は機種情報・BSP のマーカーから自動判定する。必要な場合だけ `--host pc|jetson` で上書きする。保存先はホストごとに設定し、記録データと解析結果を毎回読書き可能で mount する。rosbag 記録や車両起動は自動実行しない。
 - 新規起動と稼働中コンテナへの再接続を区別する。再接続は `atd-shell` を使い、稼働中の依存・DDS 設定を更新しない。構成が変わった場合や旧コンテナは、処理を終了して再作成する。
 - コンテナ内の対話シェルは `atd-shell` を標準とし、ホストから共有された旧 DDS 設定を含む `.bashrc` に依存しない。
@@ -59,9 +59,10 @@
 - ユーザーが操作する CLI・補助スクリプトは、対話形式や TUI を優先して設計する。
 - 処理、bag、地図、設定等の候補を検索・選択する場面では、`fzf` を積極的に活用し、対話的に実行できるようにする。
 - 対話操作と、引数・環境変数による直接指定を併用できる構成にする。既存の PC / Jetson の自動判定など、確定済みの起動方針との整合を保つ。
+- ROS のまとめ起動は `scripts/bringup.sh` を入口とし、実在する `input`（Joy・Pico入力・役割処理・bridge）と `bridge`（bridgeのみ）を扱う。引数なしの対話端末では fzf、未導入なら番号で選択し、非対話では profile の明示を求める。実行は Jetson の既存 Docker 内に限定し、Notebook では `--list` と `--dry-run` による確認を使う。profile 一覧は `scripts/lib/bringup.sh` で管理し、追加時は実装済み launch・必要な引数・対象ホストを対応させる。未実装のセンサ・自律走行 profile や空の `atd_bringup` package を先に作らない。操作は [bringup](docs/bringup.md)を参照する。
 - 操作や可視化に役立つブラウザ UI も積極的に作成する。主な用途は地図の編集、自己位置の確認、PC / Jetson の操作・状態確認である。
 - ブラウザ UI はノート PC のみで使い、Chrome で `http://127.0.0.1:<port>` を開く。Jetson で UI のブラウザ・frontend を起動しない。観測・設定用の Jetson 側 ROS bridge は別に配置する。
-- 共通 Web アプリは React + TypeScript / Vite と FastAPI を採用する。`apps/web/` に frontend・backend・Web に依存しない processing を分け、通常は Notebook の Docker 内で `atd-web` を実行する。`scripts/webui.sh` はホストから同じコンテナ内コマンドへ委譲する補助入口。ブラウザだけを Notebook ホストで開く。Node / pnpm と `web` 用 uv 環境は Notebook 専用。実装・ホスト上の検証・Docker / ROS / 実機検証を区別する。
+- 共通 Web アプリは React + TypeScript / Vite と FastAPI を採用する。`apps/web/` に frontend・backend・Web に依存しない processing を分け、通常は Notebook の Docker 内で `atd-web` を実行する。`scripts/tools/webui.sh` はホストから同じコンテナ内コマンドへ委譲する補助入口。ブラウザだけを Notebook ホストで開く。Node / pnpm と `web` 用 uv 環境は Notebook 専用。実装・ホスト上の検証・Docker / ROS / 実機検証を区別する。
 - 共通 Web アプリは地図、Jetson との SCP 転送、bringup 中のライブ表示・ROS 2 parameter 動的調整、Joy 入力監視・軸ボタン配置調整を扱う。プロポは Pico の USB 入力と基板状態を監視し、CH1〜CH6を既定表示、6／10／16chで切り替えられるようにする。raw 値と PWM 相当の µs 換算値を併記し、実際の ESC・サーボ出力や波形の測定値とは区別する。CH4〜CH16 の記録・予備役割は初期設定を未割り当てとする。設定中は Jetson の役割イベントだけを止め、Pico の手動走行には介入しない。再接続・再開時のスイッチ位置は基準として取り直し、記録開始イベントを合成しない。記録の実行処理と USB 走行指令の送信は未実装。機能要件と実装・検証状態は [要件文書](docs/project_requirements.md) で区別する。
 - UI の追加でも、走行処理の Jetson 内完結と、PC から遠隔の走行制御を与えない要件を維持する。ブラウザの実行場所と、サーバー・Jetson 側バックエンドの配置は区別する。
 
@@ -88,7 +89,7 @@
 - `uv.lock` を管理対象とし、venv・cache・ダウンロード済み Python は各ホスト・コンテナで作成する。Notebook と Jetson の venv をコピーして共有しない。
 - 学習 framework、CUDA wheel、学習用 Python のバージョンと Jetson での学習対応は用途が決まった段階で選定する。Notebook と Jetson の GPU 依存を同一と仮定しない。
 - uv による依存管理と、ROS 2 package の CMake / `ament_cmake_auto` による build・install を区別する。Python node の interpreter・shebang・CMake の Python 検出先を確認する。
-- ROS package の build は `scripts/build.sh` / コンテナ内の `atd-build` に実装し、`scripts/python.sh` / `atd-python` は `sync`・`check`・`shell`・`run` に限定する。環境準備は共通関数を使い、ビルド処理を Python 環境管理のコマンドへ戻さない。
+- ROS package の build は `scripts/build.sh` / コンテナ内の `atd-build` に実装し、`scripts/tools/python.sh` / `atd-python` は `sync`・`check`・`shell`・`run` に限定する。環境準備は共通関数を使い、ビルド処理を Python 環境管理のコマンドへ戻さない。
 - 操作と制約は [Python 環境](docs/python_environments.md) を参照する。
 
 ## 検証と記録

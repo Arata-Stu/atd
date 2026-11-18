@@ -74,6 +74,26 @@ ROS package が見つかることは、実 D455 の動作や bag 取得の成功
 
 この例外は旧 kart 版 CLI がコンテナを起動する直前に出す。ATD の `packages.repos` や workspace パスを変更する必要はない。復旧では Notebook ホストの CLI を NVIDIA 配布版に切り替える。同じホストで旧 kart を使う場合は、次回の kart 起動にもこの切り替えが影響する。[kart 版の起動処理](https://github.com/carbuncle01/isaac-ros-cli/blob/dff97a3af51ec40f8d0a92e65220391ec735a041/scripts/run_dev/run_dev.py#L216-L224)
 
+### 旧版を purge 済みの場合
+
+Notebook ホストで apt の一覧を更新し、インストール候補と配布元を確認する。
+
+```bash
+sudo apt update && apt-cache policy isaac-ros-cli
+```
+
+Isaac ROS 5.x の最新マイナー版を使う場合、候補の配布元は NVIDIA の `release-5 noble/main`。ATD の標準セットアップが登録する `release-5.0 noble/main` は 5.0 系の更新を提供する。`release-5` が一覧にない場合は、公式手順の **x86 (Ubuntu 24.04 Noble) → Latest Minor Version (release-5)** で登録してから一覧を更新する。[NVIDIA の apt 配布元登録手順](https://nvidia-isaac-ros.github.io/v/release-5.0/getting_started/index.html#configure-isaac-ros-apt-repository)
+
+NVIDIA の候補を確認したら、ATD の clone 直下で実行する。
+
+```bash
+sudo apt install isaac-ros-cli &&
+  ./scripts/setup.sh --action isaac &&
+  ./scripts/dev.sh --build
+```
+
+### 旧版がインストールされている場合
+
 Notebook ホストで、導入版と apt の配布元を確認する。`+kart1` が付いている版のほか、公式版と同じバージョンで `run_dev.py` だけを書き換えた場合も対象になる。
 
 ```bash
@@ -83,12 +103,14 @@ sudo apt-get update
 apt-cache madison isaac-ros-cli
 ```
 
-`https://isaac.download.nvidia.com/isaac-ros/release-5.0` のうち、Notebook は `noble/main`（amd64）、Jetson で同じ例外が出た場合は `noble-jetpack/main`（arm64）の行にある版を選び、次の `<公式版>` に入れる。該当行がない場合は NVIDIA 公式手順で **x86 (Ubuntu 24.04 Noble)** または **Jetson (JetPack 7.2)** を選び、**US CDN / Specific Version (release-5.0)** の配布元を登録する。その後 `sudo apt-get update` と `apt-cache madison isaac-ros-cli` を再実行する。[NVIDIA の apt 配布元登録手順](https://nvidia-isaac-ros.github.io/v/release-5.0/getting_started/index.html#configure-isaac-ros-apt-repository)
+`https://isaac.download.nvidia.com/isaac-ros/release-5.0` のうち、Notebook は `noble/main`（amd64）、Jetson で同じ例外が出た場合は `noble-jetpack/main`（arm64）の行にある版を選び、次の入力欄に貼り付ける。該当行がない場合は NVIDIA 公式手順で **x86 (Ubuntu 24.04 Noble)** または **Jetson (JetPack 7.2)** を選び、**US CDN / Specific Version (release-5.0)** の配布元を登録する。その後 `sudo apt-get update` と `apt-cache madison isaac-ros-cli` を再実行する。[NVIDIA の apt 配布元登録手順](https://nvidia-isaac-ros.github.io/v/release-5.0/getting_started/index.html#configure-isaac-ros-apt-repository)
 
 ```bash
-sudo apt-get install --reinstall --allow-downgrades 'isaac-ros-cli=<公式版>'
-dpkg-query -W isaac-ros-cli
-dpkg --verify isaac-ros-cli
+read -r -p 'NVIDIA の行に表示された版番号: ' atd_cli_version &&
+  test -n "$atd_cli_version" &&
+  sudo apt-get install --reinstall --allow-downgrades "isaac-ros-cli=$atd_cli_version" &&
+  dpkg-query -W isaac-ros-cli &&
+  dpkg --verify isaac-ros-cli
 ```
 
 導入版が選んだ版と一致し、`dpkg --verify` で `/usr/lib/isaac-ros-cli/run_dev.py` に差異が出ないことを確認する。ATD の clone 直下で CLI の Docker モードを確認して、build を再開する。

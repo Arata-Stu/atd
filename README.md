@@ -78,7 +78,7 @@ ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用�
 | [VGL モデル](docs/vgl_models.md) | Notebook の export、SCP 転送、Jetson engine build、検証・ログ |
 | [ビルド方針](docs/isaac_ros_build_strategy.md) | CLI / Docker / ROS の範囲、RealSense、DDS と技術的な根拠 |
 | [環境セットアップ案](docs/environment_setup_plan.md) | Kart の比較調査、未実装部分の構成案 |
-| [車体 CAD](hardware/cad/tt02-v1.FCStd) | 保存する編集元データ。実物との一致は未検証 |
+| [CAD・3Dプリント資料](docs/hardware_cad.md) | TT-02-v1／v3、Rev6カメラ組立モデル、3MFと取り込み元 |
 
 現在は共通基盤の初期実装段階。スクリプト・設定の自動テストと、実 Docker build・ROS / GPU / D455 / Joy・車両 I/O・実走行の検証は区別する。対象機での通し導入・実機検証は未実施。
 

@@ -335,7 +335,7 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 | [environment_setup_plan.md](environment_setup_plan.md) | `kart/docker` の比較、ホスト / Docker の分担、依存追加、TUI / UI 配置、段階的なセットアップの提案 |
 | [python_environments.md](python_environments.md) | uv による用途別 Python 環境、ROS 2 の ABI・依存管理、AI 学習環境との分離 |
 | [vgl_models.md](vgl_models.md) | Notebook の ONNX export、SCP 転送、Jetson の engine build と検証・ログ |
-| [hardware/cad/tt02-v1.FCStd](../hardware/cad/tt02-v1.FCStd) | 保存する車体 CAD の編集元。実物との一致は未検証 |
+| [hardware_cad.md](hardware_cad.md) | 車体CAD・印刷用3MF・Rev6カメラ組立モデルの一覧と取り込み元。実物との一致は未検証 |
 | `../docker/` | 追加 Dockerfile とデータを毎回 mount する起動引数 |
 | `../docker/isaac_ros/` | 選択した workspace から参照する CLI 設定テンプレート |
 | `../ros2_ws/src/` | 自作 `atd_*` package の編集元。build 成果物はホスト別 workspace に作成する |
@@ -346,6 +346,7 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 
 ## 7. 更新履歴
 
+- 2026-11-18: ユーザー指定のTT-02-v3の3MF 4件とD455／D435iのFCStd組立モデル2件を `hardware/cad/` に保管。元ファイルと既存v1モデルを保持し、SHA-256一致・ZIP CRC・XML／内部参照を確認した。寸法・組付け・機材採用の確定とは区別する。
 - 2026-11-18: ユーザーの指示でPico Rev6 firmwareと必要な共通通信コードを `atd_vehicle_interface/firmware/pico_rev6/` に同梱。制御・通信のC/Hを保持し、SDK／成果物をGitから除外、ROS buildとARM buildを分離し、移設先でのホストテストを確認した。
 - 2026-11-18: プロポ監視をrawとPWM相当µsの併記にし、既定6chから10／16chへ表示を切り替えられる構成に拡張。Jetsonの役割候補もCH4〜CH16へ広げ、Picoの固定走行CH・全16chの受信型・既存profile v1を維持した。µs表示は参照firmwareの既定校正による換算値で、実PWM出力の測定とは区別する。
 - 2026-11-18: Pico CDC1 の受信、6ch・基板状態の監視、CH4〜CH6 の Jetson 側役割設定 UI と記録要求イベントを実装。Pico の走行用 CH1〜CH3 と firmware は変更しないことを確定。記録実行・走行指令送信・実機確認は後続工程とした。

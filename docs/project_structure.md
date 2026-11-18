@@ -25,7 +25,7 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 ├── docs/                      # 要件・構成・操作手順・技術的な判断
 │   └── setup/                 # 共通・Notebook・Jetson の導入手順
 ├── hardware/
-│   └── cad/                   # 編集元の車体 CAD
+│   └── cad/                   # 車体・部品CADと3Dプリント資料
 ├── ros2_ws/                   # リポジトリ内の ROS 2 workspace
 │   └── src/                   # 自作 package の編集元。atd_<module>/ を追加する
 │       ├── atd_vehicle_interface/
@@ -46,6 +46,7 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 | `apps/web/` | 地図・転送・ライブ表示等をまとめる共通 Web アプリ。frontend / backend はこの配下で分ける |
 | `ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/` | Pico Rev6 firmware の編集元・設定・ホストテスト。必要な JPB1 共通通信コードもこの中で管理する |
 | `tools/<purpose>/` | ROS node ではないデータ抽出・解析・学習等の実装 |
+| `hardware/cad/` | 車体・部品のFCStdと印刷用3MF。TT-02-v3とRev6カメラ組立モデルはディレクトリを分ける |
 | `hardware/<kind>/` | CAD 以外の回路・配線等の編集元資料 |
 
 共通 Web アプリは `apps/web/{frontend,backend,processing}/` に分ける。frontend は React / TypeScript / Vite、backend は FastAPI とジョブ・転送・公式処理 adapter、processing は Web 非依存の HDMap 幾何処理・ライン生成。UI を使うのは Notebook のみで、Jetson 側の入力・役割 node と `atd_web_bridge` は `scripts/input.sh` で明示起動する。プロポの役割設定は `/data/results/runs/input/propo.yaml` へ保存し、Pico の firmware と走行用 CH 設定は変更しない。操作は [Web アプリ](../apps/web/README.md)を参照する。
@@ -120,8 +121,9 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | [VGL モデル](vgl_models.md) | Notebook export、SCP 転送、Jetson engine build、検証・ログ |
 | [ビルド方針](isaac_ros_build_strategy.md) | CLI・Docker・ROS package の build 方針と技術的な根拠 |
 | [環境セットアップ案](environment_setup_plan.md) | Kart の比較調査、初期実装の状況と対象機での残りの検証 |
+| [CAD・3Dプリント資料](hardware_cad.md) | CAD・3MFの一覧、取り込み元、版と形式、確認範囲 |
 
-CAD 等の編集元データは `hardware/` に置き、文書から参照する。`docs/` は説明文書を置く場所とし、編集元 CAD と空の仕様書を混在させない。実測・確定した仕様が増えた時点で、対応する文書を追加する。
+CAD 等の編集元データと提供された印刷用3MFは `hardware/cad/` に置き、一覧と由来を [CAD・3Dプリント資料](hardware_cad.md) から参照する。FCStdと3MFは元の形式で保持し、FreeCADの自動バックアップはGit対象外にする。`docs/` は説明文書を置く場所とし、編集元 CAD と空の仕様書を混在させない。実測・確定した仕様が増えた時点で、対応する文書を追加する。
 
 ## 生成物・データ
 

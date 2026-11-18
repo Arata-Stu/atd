@@ -1,0 +1,3 @@
+# FreeCAD の自動バックアップ。編集元 .FCStd / .3mf は管理する。
+*.FCStd[0-9]*
+*.FCBak

@@ -75,14 +75,16 @@ Jetson の SSH host・user・port、bag root と map root を画面で設定す�
 
 Jetson で自作 ROS package を build し、入力・teleop 操作要求・bridge を明示的に起動する。
 
+Pico 対応を初めて取り込むときは、Jetson の利用中の処理を終了して `./scripts/dev.sh --build` で image とコンテナを更新する。USB の後付け・再接続用 mount と通常ユーザーの serial group を起動時に準備するため、旧コンテナへの再接続だけでは反映されない。
+
 ```bash
 # Jetson の起動済み ATD コンテナを利用
 ./scripts/build.sh --packages-up-to atd_web_bridge
 ./scripts/input.sh
 ```
 
-Joy が既に起動済みなら `./scripts/input.sh --bridge-only`。bridge の設定は [atd_web_bridge](../../ros2_ws/src/atd_web_bridge/README.md) を参照する。既定 topic は実際の bringup の topic・型へ合わせる必要がある。bridge の設定ファイルを用意して `./scripts/input.sh config:=/absolute/path/bridge.yaml` で指定できる。
-`--bridge-only` は teleop も起動しない。物理入力と bridge だけを起動する場合は `./scripts/input.sh teleop:=false`。通常起動でも基板出力・bag 記録は実行しない。
+入力 node が既に起動済みなら `./scripts/input.sh --bridge-only`。bridge の設定は [atd_web_bridge](../../ros2_ws/src/atd_web_bridge/README.md) を参照する。既定 topic は実際の bringup の topic・型へ合わせる必要がある。bridge の設定ファイルを用意して `./scripts/input.sh config:=/absolute/path/bridge.yaml` で指定できる。
+通常は Joy・teleop・Pico 受信・プロポ役割処理・bridge を起動する。`--bridge-only` は bridge だけ、`teleop:=false` は Joy の役割処理を除外、`propo:=false` は Pico とプロポ役割処理を除外する。通常起動でも基板出力・bag 記録は実行しない。
 
 Notebook backend は SSH 経由で Jetson の `127.0.0.1:8790` へ接続する。Notebook は車載 DDS に参加しない。Live では地図・pose・軌跡・速度の観測と ROS parameter の読書きを扱い、欠落・古いデータは表示で区別する。
 
@@ -92,12 +94,20 @@ Input は Jetson に Bluetooth 接続した DualSense の生入力・正規化�
 
 1. Jetson のホストでコントローラを Bluetooth 接続し、Docker 起動後に上記の build と `scripts/input.sh` を実行する。
 2. Notebook の Docker で `atd-web` を実行し、Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。「データ転送」で Jetson の SSH 接続先を設定する。
-3. 「入力」のモニターで Jetson が受け取った信号を確認する。「軸・ボタンの配置」は evdev 入力から標準軸・ボタンへの物理配置を設定する。設定開始 → 保存 → 再読込 → 全入力を離して Joy 出力を再開する。
+3. 「コントローラ」のモニターで Jetson が受け取った信号を確認する。「軸・ボタンの配置」は evdev 入力から標準軸・ボタンへの物理配置を設定する。設定開始 → 保存 → 再読込 → 全入力を離して Joy 出力を再開する。
 4. 同じ画面の操作割り当てで操舵・スロットル・操作要求の役割を設定する。こちらも設定開始 → 保存 → 再読込 → 全入力を離して操作要求の出力を再開する。二つの設定モードは独立しており、Joy 側が設定中なら teleop の要求も無効になる。
 
 物理配置は `/data/results/runs/input/dualsense.yaml`、役割設定は `/data/results/runs/input/teleop.yaml` に永続保存する。役割の初期値はすべて未割り当て。操舵・スロットルは標準軸と差し引く軸、倍率（負値で反転）を選択でき、ボタンは出力許可の要求・記録開始要求・記録終了要求へ割り当てる。保存済みと node への反映済みを区別し、未保存の編集中に監視更新で内容を置き換えない。接続先や bridge が変わった場合は設定を再取得してから操作する。
 
-`atd_teleop` が生成するのは正規化した運転要求と操作イベント。`valid` や `enable_requested` は最終的な走行許可ではない。記録ボタンも現段階では要求イベントの生成までで、rosbag は開始しない。出力許可判断・基板通信・パルス生成は後続実装。詳細は [atd_joy](../../ros2_ws/src/atd_joy/README.md)、[atd_teleop](../../ros2_ws/src/atd_teleop/README.md)、[atd_interfaces](../../ros2_ws/src/atd_interfaces/README.md)を参照する。プロポは機器・入力経路が未決定で、未実装。
+`atd_teleop` が生成するのは正規化した運転要求と操作イベント。`valid` や `enable_requested` は最終的な走行許可ではない。記録ボタンも現段階では要求イベントの生成までで、rosbag は開始しない。出力許可判断・ATD の基板通信は後続実装。詳細は [atd_joy](../../ros2_ws/src/atd_joy/README.md)、[atd_teleop](../../ros2_ws/src/atd_teleop/README.md)、[atd_interfaces](../../ros2_ws/src/atd_interfaces/README.md)を参照する。
+
+「コントローラ」→「プロポ・Pico」では、受信機 → S.BUS → Pico → USB → Jetson で受け取った入力の PWM 相当値（µs）と raw 値（0〜2047）、USB・S.BUS・操作経路・電源・異常・受信カウンタを監視する。CH1〜CH6を既定表示し、表示数を6／10／16chに切り替えられる。表示数は Notebook のブラウザに保持し、高いCHに役割があれば表示を自動で広げる。受信・ROS・APIでは常に全16chを保持するため、10chプロポへの変更で通信の型を作り直す必要はない。現在のUSB監視データから使用中のch数は判別できないため、表示数を送受信機の自動検出結果とは扱わない。Pico の CH1＝操舵・CH2＝スロットル・CH3＝操作権は固定で、この画面では変更しない。
+
+µs は参照 Rev6 firmware の既定換算に合わせた参考値で、raw 172／992／1811 を1000／1500／2000 µsに対応させ、区間ごとに補間・整数丸めし端点で制限する。受信入力を見やすくする換算表示であり、ESC・サーボへの実出力や実測波形ではない。役割の判定閾値は引き続き raw 単位を使う。未受信・期限切れの値を1500 µs等で補完しない。
+
+Jetson 側の「記録の開始・停止」「予備1」「予備2」は CH4〜CH16 へ割り当てられ、初期値は全て未割り当て。低側・高側の raw 閾値、反転、位置の確認時間を設定できる。使用するプロポが送信できるCHを選ぶ。設定開始 → 保存 → 再読込 → 操作要求を再開の順で反映し、保存先は `/data/results/runs/input/propo.yaml`。既存の version 1 の設定も利用できる。設定開始は役割イベントだけを停止し、Pico の基本手動操作は継続する。再開には正常で新鮮な RC 入力が必要で、現在のスイッチ位置を基準に取り直す。通常は安定した低側→高側で記録開始要求、高側→低側で停止要求となる。中間位置とチャタリングでは要求を出さない。予備2枠は状態表示のみで、記録も `/rc/events` への要求発行まで。rosbag の実行処理は後続実装。
+
+`atd_vehicle_interface` は Rev6 の監視用 CDC1 / if02 を USB 属性と Pico 固有 serial で識別し、`INFO` と `STREAM ON` だけを送信する。複数 Pico があれば自動選択せず、`./scripts/input.sh pico_serial:=<ID>` で選ぶ。必要なら `pico_sensor_path:=/dev/serial/by-id/<CDC1>`・`pico_config:=<YAML>`・`rc_profile:=<YAML>` を指定できる。CDC0 と走行指令は使わず、firmware の制御処理は変更していない。firmware ソースは [Pico firmware](../../ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/README.md) として同じ ROS package 内で Git 管理する。詳細は [Pico 受信](../../ros2_ws/src/atd_vehicle_interface/README.md)、[プロポ役割](../../ros2_ws/src/atd_rc_input/README.md)、[要件3.10節](../../docs/project_requirements.md#310-rev6-pico-firmware-の確認2026-11-18)を参照する。ホスト検証と Jetson Docker・実 USB・実機の確認は別である。
 
 ## 構成と依存
 
@@ -110,6 +120,8 @@ Input は Jetson に Bluetooth 接続した DualSense の生入力・正規化�
 | `../../ros2_ws/src/atd_web_bridge/` | Jetson の ROS 観測・設定と loopback HTTP |
 | `../../ros2_ws/src/atd_joy/` | evdev の入力取得・正規化を行う C++ component |
 | `../../ros2_ws/src/atd_teleop/` | 軸・ボタンの役割を設定し、運転要求と操作イベントを生成する C++ component |
+| `../../ros2_ws/src/atd_vehicle_interface/` | Pico の監視用 USB CDC を受信する C++ component |
+| `../../ros2_ws/src/atd_rc_input/` | CH4〜CH16 の Jetson 側役割と記録要求を処理する C++ component |
 | `../../ros2_ws/src/atd_interfaces/` | 正規化した運転要求・操作イベントの ROS message 定義 |
 
 Docker の追加 apt 依存は [dependencies.apt](../../docker/dependencies.apt)、追加処理は [Dockerfile.atd](../../docker/Dockerfile.atd)。cuVSLAM・公式 mapping・visual mapping・VGL の apt package を使う。Node / pnpm と Web 用 Python 環境は Notebook 専用で、Jetson の通常起動では Web 依存を同期しない。

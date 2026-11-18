@@ -14,6 +14,10 @@
     teleop_node: /atd_teleop_node
     teleop_status_topic: /teleop/status
     teleop_profile_path: /data/results/runs/input/teleop.yaml
+    pico_status_topic: /vehicle/pico/status
+    rc_status_topic: /rc/status
+    rc_node: /atd_rc_input_node
+    rc_profile_path: /data/results/runs/input/propo.yaml
     parameter_node_prefix: /atd_
     # 実際の対象nodeとparameter名を明示する。既定では変更を許可しない。
     parameter_allowlist_json: '{}'

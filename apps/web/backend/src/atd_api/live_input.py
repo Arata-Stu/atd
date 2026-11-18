@@ -16,6 +16,7 @@ def call(request: Request, path: str, method: str = 'GET', body: dict | None = N
             return {'connected': False, 'device_connected': False, 'ready': False,
                     'pose': None, 'velocity': None, 'raw': None, 'normalized': None,
                     'status': None, 'configuring': None,
+                    'board': None, 'input': None, 'rc_valid': False,
                     'message': str(exc), 'availability': {'bridge': 'disconnected'}}
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -89,3 +90,30 @@ def configure_teleop(request: Request, body: dict):
     if type(body.get('enabled')) is not bool:
         raise HTTPException(status_code=422, detail='enabled は true / false で指定してください')
     return call(request, '/teleop/configure', 'POST', body)
+
+
+@router.get('/propo/status')
+def propo_status(request: Request):
+    return call(request, '/propo/status')
+
+
+@router.get('/propo/profile')
+def propo_profile(request: Request):
+    return call(request, '/propo/profile')
+
+
+@router.put('/propo/profile')
+def save_propo_profile(request: Request, body: dict):
+    return call(request, '/propo/profile', 'PUT', body)
+
+
+@router.post('/propo/reload')
+def reload_propo_profile(request: Request, body: dict):
+    return call(request, '/propo/reload', 'POST', body)
+
+
+@router.post('/propo/configure')
+def configure_propo(request: Request, body: dict):
+    if type(body.get('enabled')) is not bool:
+        raise HTTPException(status_code=422, detail='enabled は true / false で指定してください')
+    return call(request, '/propo/configure', 'POST', body)

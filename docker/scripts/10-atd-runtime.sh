@@ -69,6 +69,10 @@ _atd_prepare_runtime() {
         printf 'ATD runtime: 依存関係の準備に失敗しました。\n' >&2
         return 1
     fi
+    if ! bash "${task_runtime_dir}/scripts/configure-serial-access.sh"; then
+        printf 'ATD runtime: USB serial のアクセス設定に失敗しました。\n' >&2
+        return 1
+    fi
     if ! bash "${task_runtime_dir}/scripts/configure-dds.sh"; then
         printf 'ATD runtime: DDS 設定に失敗しました。\n' >&2
         return 1

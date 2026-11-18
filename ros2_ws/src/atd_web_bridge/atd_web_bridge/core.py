@@ -11,6 +11,7 @@ import time
 
 from atd_joy_tools import profile as profiles
 from atd_teleop_tools import profile as teleop_profiles
+from atd_rc_tools import profile as rc_profiles
 
 
 class Cache:
@@ -55,6 +56,59 @@ class Cache:
         return {'status': status, 'ready': bool(fresh and status.get('ready')),
                 'configuring': status.get('configuring') if fresh else None,
                 'availability': {'status': 'missing' if status is None else 'fresh' if fresh else 'stale'}}
+
+    def propo_status(self):
+        """Keep source telemetry age separate from periodic node publications."""
+        board, inputs = self.get('pico_status'), self.get('rc_status')
+        valid_signal = False
+        if board:
+            board['connected'] = bool(not board['stale'] and board.get('connected') is True)
+            telemetry = board.get('telemetry')
+            if isinstance(telemetry, dict):
+                age = telemetry.get('age_s')
+                timeout = board.get('telemetry_timeout_s', .3)
+                age_valid = type(age) in (int, float) and math.isfinite(age) and age >= 0
+                timeout_valid = type(timeout) in (int, float) and math.isfinite(timeout) and .01 <= timeout <= 5
+                telemetry['age_s'] = age + board['age_s'] if age_valid else None
+                channels = telemetry.get('channels')
+                shape_valid = isinstance(channels, list) and len(channels) == 16 and all(
+                    type(v) is int and 0 <= v <= 2047 for v in channels)
+                same_session = bool(board.get('instance_id') and telemetry.get('instance_id') == board['instance_id']
+                                    and telemetry.get('serial') == board.get('serial'))
+                telemetry['stale'] = bool(telemetry.get('stale') is not False or not age_valid
+                    or not timeout_valid or telemetry['age_s'] > timeout or board['stale']
+                    or not same_session or not shape_valid or board.get('streaming') is not True
+                    or not board['connected'])
+                flags = telemetry.get('sbus_flags')
+                valid_signal = bool(not telemetry['stale'] and telemetry.get('rc_valid') is True
+                    and telemetry.get('sbus_fresh') is True and type(flags) is int and not flags & 12)
+                telemetry['rc_valid'] = valid_signal
+            else:
+                board['telemetry'] = None
+            board['streaming'] = bool(board['connected'] and isinstance(board['telemetry'], dict)
+                                      and not board['telemetry']['stale'])
+        same_input = bool(inputs and board and inputs.get('input_instance_id')
+            and inputs['input_instance_id'] == board.get('instance_id')
+            and inputs.get('serial') == board.get('serial'))
+        input_fresh = bool(inputs and not inputs['stale'])
+        if inputs:
+            source_age = inputs.get('input_age_s')
+            if type(source_age) in (int, float) and math.isfinite(source_age) and source_age >= 0:
+                inputs['input_age_s'] = source_age + inputs['age_s']
+                limit = board.get('telemetry_timeout_s', .3) if board else .3
+                input_fresh = input_fresh and type(limit) in (int, float) and math.isfinite(limit) \
+                    and .01 <= limit <= 5 and inputs['input_age_s'] <= limit
+            else:
+                input_fresh = False
+            inputs['ready'] = bool(input_fresh and same_input and valid_signal
+                                    and inputs.get('ready') is True and inputs.get('profile_valid') is True
+                                    and inputs.get('configuring') is False)
+        return {'board': board, 'input': inputs,
+                'ready': bool(inputs and inputs['ready']), 'rc_valid': valid_signal,
+                'input_current': bool(input_fresh and same_input and valid_signal),
+                'configuring': inputs.get('configuring') if inputs and not inputs['stale'] else None,
+                'availability': {key: 'missing' if value is None else 'stale' if value['stale'] else 'fresh'
+                                 for key, value in (('board', board), ('input', inputs))}}
 
 
 def revision(profile):
@@ -127,6 +181,48 @@ class TeleopProfileStore:
             teleop_profiles.save(self.path, value)
             return {**self.read(state), 'applied': False,
                     'message': '保存しました。再読込と操作出力の再開は個別に実行してください'}
+
+
+class PropoProfileStore:
+    """Only Jetson auxiliary roles are editable; Pico driving channels stay fixed."""
+    def __init__(self, path):
+        self.path = Path(path).expanduser()
+        self.lock = threading.RLock()
+
+    def matches_path(self, status):
+        path = status.get('profile_path')
+        return isinstance(path, str) and bool(path) and Path(path).expanduser().resolve() == self.path.resolve()
+
+    def read(self, state=None):
+        with self.lock:
+            saved = self.path.exists()
+            value = rc_profiles.load(self.path) if saved else rc_profiles.default_profile()
+            status = (state or {}).get('input')
+            applied = False
+            if saved and status and not status.get('stale') and status.get('profile_valid') is True and self.matches_path(status):
+                try:
+                    applied = rc_profiles.validate(status.get('profile')) == value
+                except (ValueError, TypeError):
+                    pass
+            return {'profile': value, 'revision': revision(value), 'saved': saved, 'path': str(self.path),
+                    'roles': list(rc_profiles.ROLES), 'channels': list(rc_profiles.CHANNELS),
+                    'fixed_roles': dict(rc_profiles.FIXED_ROLES), 'applied': applied}
+
+    def require_configuring(self, state):
+        status = state.get('input')
+        if not status or status.get('stale') or status.get('configuring') is not True:
+            raise ValueError('新鮮なプロポ役割の設定モード状態が必要です。先に設定開始を実行してください')
+        if not self.matches_path(status):
+            raise ValueError('プロポ node と bridge の profile_path が一致しません')
+
+    def write(self, value, expected, state):
+        with self.lock:
+            self.require_configuring(state)
+            if expected != self.read()['revision']:
+                raise ValueError('プロポの役割が変更されています。再取得してください')
+            rc_profiles.save(self.path, value)
+            return {**self.read(state), 'applied': False,
+                    'message': '保存しました。再読込とイベント出力再開は別々に実行してください'}
 
 
 def validate_range(value, descriptor):

@@ -18,7 +18,7 @@
 
 ## ディレクトリ・ファイルの配置
 
-- 配置は [構成規約](docs/project_structure.md) を基準とする。自作 ROS package は `ros2_ws/src/atd_<module>/`、共通 Web アプリは `apps/web/`、独自 firmware は対象確定後に `firmware/<target>/` へ置く。
+- 配置は [構成規約](docs/project_structure.md) を基準とする。自作 ROS package は `ros2_ws/src/atd_<module>/`、共通 Web アプリは `apps/web/` に置く。Pico Rev6 firmware は関連する ROS package の `ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/` で Git 管理する。SDK・toolchain・生成バイナリをソースへ同梱せず、firmware の cross build は通常の colcon build と分ける。
 - ROS package の `launch/`・`config/`・`test/` は package 内に置く。root の `config/` はホストの workspace・保存先等、root の `tests/` は setup・Docker 等の共通基盤に使う。
 - ユーザー向け `.sh` は `scripts/`、共通関数は `scripts/lib/`、ホスト準備の内部処理は `scripts/setup/`、コンテナ内処理は `docker/scripts/` に置く。
 - CLI 設定テンプレートは `docker/isaac_ros/`、生成 Dockerfile は Git 管理対象外の `.cache/docker/` に置く。ROS package の編集元は `ros2_ws/src/` とする。リポジトリの `ros2_ws` を workspace に選ぶ場合はその `src` を使い、別の workspace の場合はコンテナの `src/atd` に rw で mount する。
@@ -44,14 +44,14 @@
 - 新規起動と稼働中コンテナへの再接続を区別する。再接続は `atd-shell` を使い、稼働中の依存・DDS 設定を更新しない。構成が変わった場合や旧コンテナは、処理を終了して再作成する。
 - コンテナ内の対話シェルは `atd-shell` を標準とし、ホストから共有された旧 DDS 設定を含む `.bashrc` に依存しない。
 - 初期センサ構成は RealSense D455 のみとする。IR（infra）、RGB、IMU、Depth はいずれも利用候補として残し、RealSense driver で起動する方針とする。全ストリームの常時同時起動・記録を必須と解釈しない。
-- 実走行に必要な処理と制御は Jetson Orin Nano 8GB 内で完結させる。
+- 自動運転・DualSense 操作側に必要な処理と制御は Jetson Orin Nano 8GB 内で完結させる。プロポの基本手動操作は Pico 内で ESC・サーボ出力まで完結させ、Jetson の稼働を必要としない。
 - ノート PC は地図作成・編集・解析・走行情報の可視化を担当する。Foxglove Bridge 等による自己位置等の観測を想定する。ノート PC から遠隔の走行制御を与える構成にしない。
 - 地図作成は、手動走行中に Jetson で記録した bag を SCP で Notebook へ転送し、同じ Web UI で NVIDIA 公式 cuVSLAM / VGL 地図準備、保存地図への localize と点群 snapshot 取得、HDMap 編集・ライン生成まで進め、作成地図を Jetson へ SCP 転送する。NVIDIA 地図は点群取得後に編集可能とし、空の手動 HDMap は点群なしでも編集できる。駐車は対象に含めない。
 - Centerline は領域・等距離線の `region` のみ（初期格子 0.02 m、点数上限 800）。Raceline は `mincurv`（既定）と `mincurv_iqp` のみとし、保存済みの region Centerline を参照する。旧 `paired` / `local` の生成・fallback を追加しない。Customline は編集点列から生成する。生成成功と実車の性能・走行検証を区別する。
 - 点群取得は地図の作業コピーと元 bag、対応する VGL 地図・Notebook 用モデルを使う。地図内容・保存画像・モデルの対応や地図生成時の平面拘束設定を検査し、必要な metadata がない旧資産は再生成を案内する。原点・identity TF・推測した設定で補完せず、既存資産を自動移行しない。ROS package の build は `scripts/build.sh` を入口とし、Notebook の初回は Docker 内で `/workspaces/atd/scripts/build.sh --packages-up-to atd_mapping` を実行する。apt 導入や Web の起動だけで自作 package を build 済みと扱わない。
 - 車載系の ROS 2 / DDS の直接探索・データ通信は Jetson 内部に限定する。Foxglove Bridge 等を介した明示的な情報提供は許容する。必要なら `--network host` を維持し、DDS と bridge の通信設定を区別する。詳細は要件文書を参照する。
 - Joy は DualSense を Bluetooth で接続する予定とする。操作割り当て、切替条件、停止・再開条件は、決定前に固定しない。
-- ESC・ステアリングサーボの制御に PCA は使わず、独自 firmware で対応する予定とする。マイコン、通信方式、firmware の詳細は未決定である。
+- ESC・ステアリングサーボの制御に PCA は使わず、Pico ベースの独自 firmware で対応する。プロポは6chを基本とし、将来の10chにも対応できる構成にする。入力は受信機 → S.BUS → Pico、Jetson との接続は USB とし、全16chを保持する。Pico でプロポ／Jetson の操作権を切り替え、Jetson はプロポ値の監視と rosbag 開始／停止等に使う。Pico の走行用 CH1＝操舵・CH2＝スロットル・CH3＝操作権は固定し、CH4〜CH16 の Jetson 側役割を変更できる。校正値・USB 制御指令の採用と実機確認は別途行う。
 
 ## シェルスクリプト・TUI・ブラウザ UI の操作方針
 
@@ -62,7 +62,7 @@
 - 操作や可視化に役立つブラウザ UI も積極的に作成する。主な用途は地図の編集、自己位置の確認、PC / Jetson の操作・状態確認である。
 - ブラウザ UI はノート PC のみで使い、Chrome で `http://127.0.0.1:<port>` を開く。Jetson で UI のブラウザ・frontend を起動しない。観測・設定用の Jetson 側 ROS bridge は別に配置する。
 - 共通 Web アプリは React + TypeScript / Vite と FastAPI を採用する。`apps/web/` に frontend・backend・Web に依存しない processing を分け、通常は Notebook の Docker 内で `atd-web` を実行する。`scripts/webui.sh` はホストから同じコンテナ内コマンドへ委譲する補助入口。ブラウザだけを Notebook ホストで開く。Node / pnpm と `web` 用 uv 環境は Notebook 専用。実装・ホスト上の検証・Docker / ROS / 実機検証を区別する。
-- 共通 Web アプリは地図、Jetson との SCP 転送、bringup 中のライブ表示・ROS 2 parameter 動的調整、Joy 入力監視・軸ボタン配置調整を扱う。プロポ対応は将来検討とする。具体的な入力割り当てや設定の反映・再開条件は固定しない。機能要件と framework・実装構成案は [要件文書](docs/project_requirements.md) で区別する。
+- 共通 Web アプリは地図、Jetson との SCP 転送、bringup 中のライブ表示・ROS 2 parameter 動的調整、Joy 入力監視・軸ボタン配置調整を扱う。プロポは Pico の USB 入力と基板状態を監視し、CH1〜CH6を既定表示、6／10／16chで切り替えられるようにする。raw 値と PWM 相当の µs 換算値を併記し、実際の ESC・サーボ出力や波形の測定値とは区別する。CH4〜CH16 の記録・予備役割は初期設定を未割り当てとする。設定中は Jetson の役割イベントだけを止め、Pico の手動走行には介入しない。再接続・再開時のスイッチ位置は基準として取り直し、記録開始イベントを合成しない。記録の実行処理と USB 走行指令の送信は未実装。機能要件と実装・検証状態は [要件文書](docs/project_requirements.md) で区別する。
 - UI の追加でも、走行処理の Jetson 内完結と、PC から遠隔の走行制御を与えない要件を維持する。ブラウザの実行場所と、サーバー・Jetson 側バックエンドの配置は区別する。
 
 ## ROS 2 パッケージと実装

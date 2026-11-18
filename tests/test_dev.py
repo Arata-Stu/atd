@@ -81,6 +81,8 @@ source_root = os.path.join(os.environ['ATD_PROJECT_DIR'], 'ros2_ws', 'src')
 native = os.path.realpath(os.path.join(os.environ['ISAAC_ROS_WS'], 'src')) == os.path.realpath(source_root)
 if not native or state == 'stale_nested_source':
     expected.append(('/workspaces/isaac_ros-dev/src/atd', source_root, True))
+if os.environ.get('ATD_SERIAL_ACCESS') == '1' and state != 'missing_dev':
+    expected.append(('/dev', '/dev', True))
 if os.environ.get('ATD_HOST_SSH_DIR') and state != 'missing_ssh':
     expected.append(('/home/admin/.ssh', os.environ['ATD_HOST_SSH_DIR'], False))
 if os.environ.get('ATD_HOST_SSH_AGENT') and state != 'missing_agent':
@@ -108,6 +110,8 @@ environment = {
     "ROS_STATIC_PEERS": "",
     "RMW_FASTRTPS_USE_QOS_FROM_XML": "0",
 }
+if os.environ.get('ATD_SERIAL_ACCESS') == '1' and state != 'missing_serial_groups':
+    environment.update(ATD_SERIAL_ACCESS='1', ATD_HOST_SERIAL_GIDS=os.environ['ATD_HOST_SERIAL_GIDS'])
 if os.environ.get('ATD_HOST_SSH_DIR'):
     environment['ATD_HOST_SSH_SHARED'] = '1'
 if os.environ.get('ATD_HOST_SSH_AGENT'):
@@ -120,6 +124,7 @@ if state == "legacy":
     environment.clear()
 print(json.dumps([{
     "State": {"Running": state != "stopped"}, "Mounts": mounts,
+    "HostConfig": {"Privileged": state != 'unprivileged'},
     "Config": {"Env": [key + "=" + value for key, value in environment.items()]},
 }]))
 '''
@@ -329,13 +334,22 @@ class DevScriptTests(unittest.TestCase):
                     "activate", "--config", f"docker.run.container_name=atd_{host}_dev",
                 ])
                 self.assertEqual(activation["workspace"], str(self.workspaces[host]))
-                self.assertEqual(activation["mount_args"], [
+                expected_args = [
                     ["--mount", f"type=bind,src={PROJECT},dst=/workspaces/atd,readonly"],
                     ["--mount", f"type=bind,src={PROJECT / 'ros2_ws/src'},dst=/workspaces/isaac_ros-dev/src/atd"],
                     ["--mount", f"type=bind,src={self.paths[(host, 'record')]},dst=/data/record"],
                     ["--mount", f"type=bind,src={self.paths[(host, 'results')]},dst=/data/results"],
                     ["-e", "ATD_RUNTIME_REV=" + activation["runtime"]],
-                ])
+                ]
+                if host == 'jetson':
+                    serial_environment = [value for value in activation['mount_args']
+                                          if value[0] == '-e' and value[1].startswith('ATD_HOST_SERIAL_GIDS=')]
+                    self.assertEqual(len(serial_environment), 1)
+                    expected_args.extend([
+                        ['--mount', 'type=bind,src=/dev,dst=/dev'],
+                        ['-e', 'ATD_SERIAL_ACCESS=1'], serial_environment[0],
+                    ])
+                self.assertEqual(activation['mount_args'], expected_args)
                 self.assertRegex(activation["runtime"], r"^[a-f0-9]{64}$")
                 self.assertEqual(activation['generated_directory'], str(PROJECT / '.cache/docker' / activation['runtime']))
                 self.assertEqual(activation['docker_args_file'], str(PROJECT / '.cache/docker' / activation['runtime'] / f'dev.{host}.dockerargs'))
@@ -483,6 +497,20 @@ class DevScriptTests(unittest.TestCase):
                 self.assertEqual(self.activations(), [])
                 self.assertFalse(any(entry["tool"] == "docker" and entry["args"][0] == "exec"
                                      for entry in self.calls()))
+
+    def test_jetson_reconnect_requires_hotplug_mount_group_config_and_privileged(self):
+        for state in ('missing_dev', 'missing_serial_groups', 'unprivileged'):
+            with self.subTest(state=state):
+                self.reset_calls()
+                result = self.invoke('jetson', env={'ATD_TEST_CONTAINER': state})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.activations(), [])
+                self.assertFalse(any(entry['tool'] == 'docker' and entry['args'][0] == 'exec'
+                                     for entry in self.calls()))
+        self.reset_calls()
+        result = self.invoke('jetson', env={'ATD_TEST_CONTAINER': 'matching'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.activations(), [])
 
     def test_native_workspace_preserves_packages_and_uses_four_mounts(self):
         fixture = self.detector_fixture('native-fixture', [])

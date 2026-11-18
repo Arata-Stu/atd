@@ -1,0 +1,5 @@
+/**/atd_rc_input_node:
+  ros__parameters:
+    use_sim_time: false
+    profile_path: /data/results/runs/input/propo.yaml
+    start_configuring: false

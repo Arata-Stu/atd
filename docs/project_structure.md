@@ -28,6 +28,8 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 │   └── cad/                   # 編集元の車体 CAD
 ├── ros2_ws/                   # リポジトリ内の ROS 2 workspace
 │   └── src/                   # 自作 package の編集元。atd_<module>/ を追加する
+│       ├── atd_vehicle_interface/
+│       │   └── firmware/pico_rev6/ # Pico用ソース・テスト。SDK・生成物はGit管理外
 │       └── README.md          # package の配置ガイド
 ├── scripts/                   # ユーザーが実行する短い .sh 入口
 │   ├── lib/                   # 複数の入口から使う関数
@@ -37,16 +39,18 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 └── tests/                     # setup・Docker 等の共通基盤のテスト
 ```
 
-`apps/web/` と `atd_joy` / `atd_web_bridge`、運転要求型の `atd_interfaces` と操作割り当ての `atd_teleop`、保存地図の点群取得用 `atd_mapping` は初期実装を追加した。firmware 等は対応するコードを実装する時点でディレクトリを作成する。ソース実装と対象機での build・実機検証は区別する。
+`apps/web/` と `atd_joy` / `atd_web_bridge`、運転要求型の `atd_interfaces` と操作割り当ての `atd_teleop`、Pico USB 受信の `atd_vehicle_interface` とプロポ役割の `atd_rc_input`、保存地図の点群取得用 `atd_mapping` は初期実装を追加した。Pico firmware の編集元も関連する `atd_vehicle_interface` 内へまとめる。ソース実装と対象機での build・実機検証は区別する。
 
 | 配置 | 内容 |
 | --- | --- |
 | `apps/web/` | 地図・転送・ライブ表示等をまとめる共通 Web アプリ。frontend / backend はこの配下で分ける |
-| `firmware/<target>/` | ESC・サーボ制御用の独自 firmware。対象マイコン確定後に追加する |
+| `ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/` | Pico Rev6 firmware の編集元・設定・ホストテスト。必要な JPB1 共通通信コードもこの中で管理する |
 | `tools/<purpose>/` | ROS node ではないデータ抽出・解析・学習等の実装 |
 | `hardware/<kind>/` | CAD 以外の回路・配線等の編集元資料 |
 
-共通 Web アプリは `apps/web/{frontend,backend,processing}/` に分ける。frontend は React / TypeScript / Vite、backend は FastAPI とジョブ・転送・公式処理 adapter、processing は Web 非依存の HDMap 幾何処理・ライン生成。UI を使うのは Notebook のみで、Jetson 側は `atd_web_bridge` / `atd_joy` / `atd_teleop` を明示起動する。操作は [Web アプリ](../apps/web/README.md)を参照する。
+共通 Web アプリは `apps/web/{frontend,backend,processing}/` に分ける。frontend は React / TypeScript / Vite、backend は FastAPI とジョブ・転送・公式処理 adapter、processing は Web 非依存の HDMap 幾何処理・ライン生成。UI を使うのは Notebook のみで、Jetson 側の入力・役割 node と `atd_web_bridge` は `scripts/input.sh` で明示起動する。プロポの役割設定は `/data/results/runs/input/propo.yaml` へ保存し、Pico の firmware と走行用 CH 設定は変更しない。操作は [Web アプリ](../apps/web/README.md)を参照する。
+
+Pico firmware はユーザー提供の `/Users/at/project/tools/pcb/kart_bridge_board/firmware/pico_rev6/` と必要な共通通信コードを取り込み、以後の ATD 向け編集元を `atd_vehicle_interface/firmware/pico_rev6/` とする。元ディレクトリは保持し、自動同期・削除は行わない。SDK は同ディレクトリの `.cache/pico-sdk/`、生成物は `build/` に置き、Git 管理対象から外す。`firmware/COLCON_IGNORE` で独立した Pico CMake project を ROS workspace の探索から除外し、colcon から SDK の取得・ARM build・書き込みを実行しない。実基板へ書き込まれた版との一致は別途確認する。
 
 ## ROS 2 package
 
@@ -128,7 +132,7 @@ CAD 等の編集元データは `hardware/` に置き、文書から参照する
 | ROS build 成果物 | `<選択した workspace>/{build,install,log}/`。未設定時の workspace は `<ATD checkout>/ros2_ws` |
 | Python venv / cache | `<選択した workspace>/.atd-python/`。各ホスト・アーキテクチャで生成する |
 | Web の node_modules / frontend build | `<選択した workspace>/.atd-web/frontend/`。readonly の checkout と分け、Notebook 上で生成する |
-| Joy 物理配置・teleop 役割設定 | Jetson の `/data/results/runs/input/{dualsense,teleop}.yaml`。再生成用 cache ではなく永続設定として保持 |
+| Joy 物理配置・入力の役割設定 | Jetson の `/data/results/runs/input/{dualsense,teleop,propo}.yaml`。再生成用 cache ではなく永続設定として保持 |
 | bag | ホスト別設定の記録先。コンテナでは `/data/record` |
 | 地図・モデル・解析・学習結果 | ホスト別設定の結果先。コンテナでは `/data/results` |
 

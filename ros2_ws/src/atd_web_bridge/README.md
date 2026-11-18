@@ -1,6 +1,6 @@
 # atd_web_bridge
 
-Jetson 内だけで DDS に参加し、位置・速度・Jetson 接続 Joy・操作割り当て状態のキャッシュを loopback HTTP へ提供する。Notebook の共通 Web backend が SSH（鍵・known_hosts厳格）で Jetson の標準 Python/urllib を起動してアクセスする。Notebook は車載 DDS に参加せず、Jetson でブラウザを起動しない。HTTP は Python 標準ライブラリ、ROS service 仲介は rclpy。これは低頻度の監視・設定用であり、画像の大容量経路やリアルタイム制御を担わないため Python node を用いる。
+Jetson 内だけで DDS に参加し、位置・速度・Jetson 接続 Joy・Pico の USB 受信状態・入力の役割設定を loopback HTTP へ提供する。Notebook の共通 Web backend が SSH（鍵・known_hosts厳格）で Jetson の標準 Python/urllib を起動してアクセスする。Notebook は車載 DDS に参加せず、Jetson でブラウザを起動しない。HTTP は Python 標準ライブラリ、ROS service 仲介は rclpy。これは低頻度の監視・設定用であり、画像の大容量経路やリアルタイム制御を担わないため Python node を用いる。
 
 node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_auto / ament_cmake_python で install する。
 
@@ -8,13 +8,13 @@ node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_a
 ./scripts/build.sh --packages-up-to atd_web_bridge
 # Jetson: ROS と選択したworkspaceの install/setup.bash を source 後
 ./scripts/input.sh
-# Joyが別途起動済みなら bridge だけ
+# 入力・役割 node が別途起動済みなら bridge だけ
 ./scripts/input.sh --bridge-only
 ```
 
 `scripts/input.sh --dry-run` は Notebook でも予定する Jetson コマンドを確認できる。通常起動は Jetson 限定で、実行は既存の scripts/python.sh へ委譲する。
 
-両 launch は config（share/config/bridge.yaml）を受ける。input.launch.py は profile（`/data/results/runs/input/dualsense.yaml`）と teleop_profile（`/data/results/runs/input/teleop.yaml`）も受け、各 node と bridge に同じパスを渡す。入力の役割を運転要求・単発イベントへ変換する `atd_teleop` も起動するが、基板への出力や bag 記録は開始しない。Docker の host network を使い、HTTP もDDSも Jetson 内 loopback に限定する。
+両 launch は config（share/config/bridge.yaml）を受ける。input.launch.py は profile（`/data/results/runs/input/dualsense.yaml`）、teleop_profile（`/data/results/runs/input/teleop.yaml`）、rc_profile（`/data/results/runs/input/propo.yaml`）を各 node と bridge に渡す。Joy・teleop と Pico 受信・プロポ役割処理を起動し、`teleop:=false` / `propo:=false` で各経路を除外できる。Pico の選択は `pico_serial` / `pico_sensor_path`、各 node の設定は `joy_config` / `teleop_config` / `pico_config` / `rc_config` で指定する。子launchの引数はスコープを分け、bridge の config・profile と混在させない。基板への走行指令や bag 記録は開始しない。Docker の host network を使い、HTTP もDDSも Jetson 内 loopback に限定する。
 
 ## 入力と通信
 
@@ -29,12 +29,16 @@ node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_a
 | /joy/raw | sensor_msgs/msg/Joy | raw |
 | /joy/status | std_msgs/msg/String | YAMLの接続・設定・機器世代 |
 | /teleop/status | std_msgs/msg/String | YAMLの操作出力可否・設定モード・反映済み役割設定 |
+| /vehicle/pico/status | std_msgs/msg/String | YAMLのUSB接続・受信状態・元の受信時刻を持つ基板telemetry |
+| /rc/status | std_msgs/msg/String | YAMLのプロポ役割・設定モード・反映済み設定・入力世代 |
 
 HTTP は `127.0.0.1:8790` のみ。`GET /live/status`、`POST /live/parameters`（nodeだけで一覧取得、values追加でatomic変更）、`GET /input/status`、`GET/PUT /input/profile`、`POST /input/reload`、`POST /input/configure`。各要求は SSH adapter の nonce を header `X-ATD-Request` に持ち、応答に同じ nonce と schema/instance_id/hostname/node を返す。HTTP応答形式は `{identity,request_id,data}`、失敗は error。再試行による操作の二重送信はしない。
 
 役割設定は `GET /teleop/status`、`GET/PUT /teleop/profile`、`POST /teleop/reload`、`POST /teleop/configure`。Notebook の API では同じパスの先頭に `/api` を付ける。`status` は node の状態に `age_s` / `stale` を追加し、未受信なら null を返す。`profile` は物理配置と独立した `version: 1` YAML で、操舵・スロットルの入力軸／差し引く軸／倍率と、enable 要求・記録開始／終了のボタンを保存する。未割り当ては空文字、初期値は全て未割り当て。入力候補は `axes` / `buttons` 配列として応答する。全ての teleop 変更要求は、直前に取得した応答の `identity.instance_id` を `instance_id` として body に含める。省略・不一致なら変更せず拒否し、接続先や bridge が変わった場合は状態と設定を再取得する。
 
 pose は x/y/z/yaw/frame/stamp/age_s/stale、velocity は linear_mps/angular_rps/linear/frame/stamp/age_s/stale。input は bridge接続と device_connected/ready を分離し、status/raw の世代不一致・古さを成功と扱わない。Joy ready は車両の安全・停止確認ではない。
+
+プロポ用は `GET /propo/status`、`GET/PUT /propo/profile`、`POST /propo/reload`、`POST /propo/configure`。Notebook API は `/api` を付ける。`status` は `{board, input, ready, rc_valid, input_current, configuring, availability}` を返す。Notebook adapter が付ける最上位 `connected` は bridge への接続、`board.connected` は Pico の USB 接続、`board.streaming` は新鮮な telemetry の受信を表す。未受信は null のままとし、CH を 0 で埋めない。telemetry の元 `stamp` を保持し、receiver の `age_s` に bridge での経過時間を加算する。定期的な状態再配信だけで古い信号を新鮮に扱わず、Pico・役割 node の世代と serial が一致しない入力も利用可能とは表示しない。`rc_valid` は受信時点の RC 有効判定を telemetry の期限内だけ表示する観測値で、イベント出力時の厳密な鮮度判定は RC node が行う。
 
 ## 設定操作
 
@@ -44,7 +48,9 @@ Joy profile は物理入力配置専用。新鮮な設定モード状態とprofi
 
 Teleop profile も、新鮮な teleop 設定モード状態、profile_path 一致、revision 一致を要求して atomic 保存する。保存したファイルと node の反映済み設定を比較して `applied` を返し、保存だけで反映済みとは表示しない。UI は設定開始（`enabled: true`）、保存、再読込、入力を離して操作出力再開（`enabled: false`）の順に行う。保存内容が node に反映されていない場合は再開を拒否する。再開時の入力解放判定は teleop node が行う。service の失敗や timeout 後は観測状態を失効させ、新しい状態を受け取ってから次の設定操作を受け付ける。操作出力の再開は車両の走行許可を意味しない。
 
-消費する service は対象 node の `list_parameters` / `describe_parameters` / `get_parameters` / `set_parameters_atomically`（rcl_interfaces/srv）、および atd_joy / atd_teleop の configure（std_srvs/srv/SetBool）/reload_profile（std_srvs/srv/Trigger）。bridge 自身の提供ROS serviceは標準parameter serviceだけ。
+Propo profile は `recording`・`auxiliary_1`・`auxiliary_2` の役割を CH4〜CH16 または未割り当て（0）へ設定する。6chに限定せず、10chプロポにも同じprofile v1を使う。初期値は全て未割り当て、Pico の操舵 CH1・スロットル CH2・操作権切替 CH3 は変更しない。各役割の raw low/high 閾値・反転と共通 debounce を保存する。応答には `roles`・`channels`・`fixed_roles` を含め、UIはこの候補から設定する。PWM相当µsはUI内での監視用換算で、APIは元の全16ch rawを保持する。変更要求は teleop と同じく bridge の `instance_id` に結び付ける。設定開始、revision を付けた保存、再読込、イベント出力再開を別操作とし、`applied` は保存内容・反映済み設定・path と新鮮な RC node 状態を比較する。設定モード中の保存は Pico 未接続でも可能だが、再開には反映済み設定と同じ Pico の新鮮で正常な RC 入力が必要。再開時は RC node が入力を再検査し、スイッチの基準位置を取り直す。Pico の走行制御や firmware の CH 設定は変更しない。
+
+消費する service は対象 node の `list_parameters` / `describe_parameters` / `get_parameters` / `set_parameters_atomically`（rcl_interfaces/srv）、および atd_joy / atd_teleop / atd_rc_input の configure（std_srvs/srv/SetBool）/reload_profile（std_srvs/srv/Trigger）。bridge 自身の提供ROS serviceは標準parameter serviceだけ。
 
 ## parameter
 
@@ -66,9 +72,13 @@ Teleop profile も、新鮮な teleop 設定モード状態、profile_path 一�
 | teleop_status_topic | /teleop/status | 操作割り当て node の状態 |
 | teleop_node | /atd_teleop_node | Teleop service 対象 node |
 | teleop_profile_path | /data/results/runs/input/teleop.yaml | 操作の役割設定の永続配置 |
+| pico_status_topic | /vehicle/pico/status | USB receiver の基板状態 |
+| rc_status_topic | /rc/status | プロポ役割 node の状態 |
+| rc_node | /atd_rc_input_node | プロポ役割 service 対象 node |
+| rc_profile_path | /data/results/runs/input/propo.yaml | プロポの Jetson 側役割設定の永続配置 |
 | parameter_node_prefix | /atd_ | 閲覧対象nodeの完全名prefix |
 | parameter_allowlist_json | {} | 変更許可nodeとparameter名のJSON object |
 
 ## 検証
 
-`colcon test --packages-select atd_web_bridge` はキャッシュ鮮度・世代不一致・profile競合、操作割り当ての保存と反映の区別、設定 service の単発要求・timeout 後の状態失効を検証する。service の単体テストには in-process fake を用い、ROS 通信は行わない。Notebook単体でROSをimportせずWebを起動できる。ROS build/install・DDS/service結合・Jetson/実機は未検証であり、単体テスト通過をこれらの検証済みとは扱わない。
+`colcon test --packages-select atd_web_bridge` はキャッシュ鮮度・世代不一致・profile競合、操作割り当ての保存と反映の区別、設定 service の単発要求・timeout 後の状態失効を検証する。Pico は受信済み telemetry 自体の古さ、切断、S.BUS異常、役割 node との入力世代の不一致、固定 CH の編集拒否も検査する。service の単体テストには in-process fake を用い、ROS 通信は行わない。Notebook単体でROSをimportせずWebを起動できる。ROS build/install・DDS/service結合・Jetson/実機は未検証であり、単体テスト通過をこれらの検証済みとは扱わない。

@@ -1,0 +1,30 @@
+# JPBB Rev6 CDC1 / JPX1,T の受信値。制御指令・最終走行許可ではない。
+# stamp は受理した新しいフレームのホスト受信時刻。再配信で更新しない。
+std_msgs/Header header
+string instance_id
+string serial
+uint32 sequence_number
+uint64 board_us
+uint32 sbus_age_ms
+uint32 sbus_frames
+uint32 sbus_lost_frames
+uint32 sbus_failsafe_frames
+uint32 uart_errors
+uint8 sbus_flags
+uint16[16] channels
+uint32 rpm_edges
+uint32 rpm_last_us32
+uint32 rpm_period_us32
+bool rpm_period_recent
+bool rpm_seen
+uint16 vbec_mv
+bool power_ready
+bool sbus_fresh
+uint8 active_path
+uint32 fault_bits
+uint32 tx0_dropped
+uint32 tx1_dropped
+uint32 rx0_rejected
+uint32 rx1_rejected
+# 受信時点のRC利用可否。下流でもstampと受信期限を検査する。
+bool rc_valid

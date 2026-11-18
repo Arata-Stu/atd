@@ -147,6 +147,33 @@ export ISAAC_ROS_WS="$task_workspace"
 export ATD_RECORD_DIR="$task_record_dir"
 export ATD_RESULT_DIR="$task_result_dir"
 command -v python3 >/dev/null 2>&1 || fail "python3 が必要です"
+# 未接続起動でも後付け ttyACM の group を先に追加できるよう、ホストの実 GID を渡す。
+# device 個別の --device 指定は再接続で inode が変わるため使わない。
+export ATD_SERIAL_ACCESS=0
+export ATD_HOST_SERIAL_GIDS=''
+if [[ "$task_host" == jetson ]]; then
+    ATD_SERIAL_ACCESS=1
+    ATD_HOST_SERIAL_GIDS="$(python3 - <<'PY'
+import grp
+from pathlib import Path
+import stat
+
+gids = set()
+try:
+    gids.add(grp.getgrnam('dialout').gr_gid)
+except KeyError:
+    pass
+for path in Path('/dev').glob('ttyACM*'):
+    try:
+        info = path.stat()
+    except FileNotFoundError:  # hot-unplug during startup
+        continue
+    if stat.S_ISCHR(info.st_mode):
+        gids.add(info.st_gid)
+print(','.join(str(gid) for gid in sorted(gids) if gid > 0))
+PY
+)" || fail 'ホストの USB serial GID を取得できません'
+fi
 task_source_layout="$(python3 - "$task_project_dir" "$ISAAC_ROS_WS" <<'PY'
 from pathlib import Path
 import sys
@@ -215,6 +242,10 @@ if os.path.realpath(source_root) == os.path.realpath(os.path.join(os.environ["IS
         sys.exit("エラー: 起動済みコンテナに不要な入れ子の source mount があります。コンテナを再作成してください: " + sys.argv[1])
 else:
     expected[source_destination] = (source_root, True)
+if os.environ.get("ATD_SERIAL_ACCESS") == "1":
+    expected["/dev"] = ("/dev", True)
+    if not container.get("HostConfig", {}).get("Privileged"):
+        sys.exit("エラー: Jetson の USB hotplug には既定の privileged コンテナが必要です。コンテナを再作成してください")
 for destination, (source, writable) in expected.items():
     mount = mounts.get(destination)
     if (not mount or mount.get("Type") != "bind"
@@ -252,6 +283,9 @@ required = {
     "ROS_STATIC_PEERS": "",
     "RMW_FASTRTPS_USE_QOS_FROM_XML": "0",
 }
+if os.environ.get("ATD_SERIAL_ACCESS") == "1":
+    required["ATD_SERIAL_ACCESS"] = "1"
+    required["ATD_HOST_SERIAL_GIDS"] = os.environ["ATD_HOST_SERIAL_GIDS"]
 if any(environment.get(key) != value for key, value in required.items()):
     sys.exit("エラー: 起動済みコンテナの依存・DDS 設定が古いか異なります。処理を終了し、必要なら --build で再構築してコンテナを再作成してください: " + sys.argv[1])
 print("running")
@@ -281,6 +315,11 @@ root, destination, revision = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 source = (root / 'docker/Dockerfile.atd').read_bytes()
 dockerfile = source + ('\n# ATD runtime source revision: ' + revision + '\n').encode()
 arguments = (root / 'docker/dev.dockerargs').read_text().splitlines(keepends=True)
+if os.environ['ATD_SERIAL_ACCESS'] == '1':
+    # 上流 CLI は既定で privileged。devtmpfs を共有して起動後の ttyACM 追加も見せる。
+    arguments.extend(['--mount type=bind,src=/dev,dst=/dev\n',
+                      '-e ATD_SERIAL_ACCESS=1\n',
+                      '-e ATD_HOST_SERIAL_GIDS=' + os.environ['ATD_HOST_SERIAL_GIDS'] + '\n'])
 
 def add_ssh_mount(source, destination):
     # 上流の追加引数も加算される。標準のユーザー設定に同じ宛先がある場合は再利用する。

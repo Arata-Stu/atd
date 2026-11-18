@@ -1,0 +1,17 @@
+/.cache/
+/build/
+/cmake-build-*/
+__pycache__/
+*.pyc
+*.uf2
+*.elf
+*.hex
+*.bin
+*.map
+*.su
+*.o
+*.a
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json

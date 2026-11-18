@@ -1,6 +1,6 @@
 # ATD プロジェクト要件・決定事項
 
-最終更新: 2026-11-17
+最終更新: 2026-11-18
 
 この文書は、要件・規約と Docker 開発環境の初期実装方針をまとめたものである。
 「確定要件」はユーザーが明示した内容、「技術調査メモ」は会話中に確認した一次情報、「提案・候補」は採用未確定の内容を示す。
@@ -24,6 +24,8 @@
 | 項目 | 内容 | 補足 |
 | --- | --- | --- |
 | 車載計算機 | Jetson Orin Nano 8GB | 実走行の処理と制御を担当 |
+| 車両 I/O 基板 | Raspberry Pi Pico ベース。受信機の S.BUS を入力し、Jetson とは USB 接続 | 参照 firmware は JPBB Rev6 / RP2040 版 Pico 用。実基板での確認は別途必要 |
+| プロポ | 6 チャンネルを基本とし、将来の10ch導入も可能性あり | Pico の CH1＝操舵・CH2＝スロットル・CH3＝操作権は固定。全16chを受信・保持し、CH4〜CH16 は Jetson 側の記録・予備役割を変更可能。予備2枠の用途は未定 |
 | 初期センサ | RealSense D455 のみ | IR（infra）、RGB、IMU、Depth を利用候補として残す |
 | 作業用ノート PC | Ubuntu 24 系、NVIDIA RTX 4060 | 共通の OS 基準は Ubuntu 24.04。地図作成・編集・解析・可視化を担当 |
 | ストレージ | 1TB SSD を利用可能 | 搭載先、マウント先、空き容量は環境構築時に記録する |
@@ -35,7 +37,7 @@
 
 ### 2.2. 処理の配置と通信範囲
 
-- 認識、自己位置推定、計画、制御、車両 I/O など、実走行に必要な処理は Jetson 内で完結させる。
+- 自動運転・DualSense 操作側の認識、自己位置推定、計画、制御と ROS 車両 I/O は Jetson 内で完結させる。プロポの基本的な手動操作は Pico 内で ESC・サーボ出力まで完結し、Jetson の稼働を必要としない。
 - PC から遠隔で走行制御を与えない。走行制御に PC との通信を必須としない。
 - 車載系の ROS 2 / DDS の直接探索・topic・service・action 通信を Jetson 内部に限定し、外部ネットワークへの意図しない流出を防ぐ。
 - ノート PC から自己位置等の情報を観測するため、Foxglove Bridge 等を利用する予定である。bridge を介して明示的に提供する情報の外部通信は許容する。
@@ -61,11 +63,12 @@
 - 実際に使用するストリームの組み合わせ、解像度、周期、bag の記録対象は後から決める。全ストリームの常時同時起動・記録を必須とはしない。
 - Joy による手動介入を想定し、DualSense を Bluetooth で Jetson に接続する予定とする。
 - Joy の操作割り当て、手動・自律の切替条件、停止・再開条件は後から決める。
-- Joy の入力監視と軸・ボタン配置の調整は、地図・転送・ライブ表示と同じ Web アプリから行えるようにする。プロポへの対応も将来の検討対象とし、機種・入力経路・切替条件は固定しない。
+- Joy の入力監視と軸・ボタン配置の調整は、地図・転送・ライブ表示と同じ Web アプリから行えるようにする。プロポは受信機 → S.BUS → Pico → USB → Jetson の経路とし、Jetson では値の監視と rosbag の記録開始・停止等に利用する。Pico の走行用 CH1〜CH3 は固定し、Jetson 側の CH4〜CH16 の役割を設定できる。UIは既定でCH1〜CH6のrawとPWM相当µsを表示し、10／16ch表示へ切り替えられる構成とする。実際のPWM出力・波形測定値と入力換算値を区別する。送受信機種・スイッチ位置・校正値は実機で確認する。
+- プロポの基本操作は Pico 内で完結させ、プロポ／Jetson の最終的な操作権切替も Pico 側で行う。Jetson 内での DualSense／将来自律入力の許可判断とは別の層として扱う。6ch の用途は操舵、スロットル、操作権切替、rosbag 開始／停止、未定2枠とし、未定枠に役割を割り当てない。
 - 入力取得・正規化と、操舵・スロットル・操作要求への役割割り当てを分ける。役割は設定で変更し、Jetson で入力・teleop を起動した後、Notebook の同じ入力画面から受信情報の監視と設定を行う。具体的な割り当ては初期値で固定しない。
 - 初回実装は `atd_interfaces` の運転要求・操作イベント型と `atd_teleop` を対象とする。正規化した要求は最終的な走行許可・PWM・実速度ではなく、出力許可判断、パルス幅変換、基板通信、rosbag 記録処理は後続実装で接続する。
 - ESC・ステアリングサーボの制御に PCA は使わず、独自 firmware で対応する予定とする。
-- firmware を実行するマイコン、Jetson との通信方式、出力経路、異常時の動作等の詳細は未決定である。
+- マイコンは Pico ベース、Jetson との接続は USB とする。ユーザー提供の Rev6 firmware を `atd_vehicle_interface/firmware/pico_rev6/` で Git 管理する。USB 制御指令形式の採用、実際の CH 配置・端点、ESC／サーボへの適合、停止・再開条件の ATD への反映と実機確認は別途行う。実装と取り込み元は 3.10 節に記録する。
 
 ### 2.5. Isaac ROS CLI と Docker の導入方針
 
@@ -145,7 +148,7 @@ Notebook の VGL export は `vgl-export`、Web API は `web`、Raceline の最�
 | 地図 | rosbag から NVIDIA 公式処理で cuVSLAM / VGL 地図を準備し、保存地図の localize と点群取得後に HDMap を編集。centerline / raceline / 必要に応じた custom line を生成。駐車機能は不要 |
 | Jetson との転送 | SCP を簡単に実行する UI。Jetson → ノート PC の rosbag 受信、ノート PC → Jetson の作成地図送信 |
 | ライブ表示・調整 | bringup 実行中の観測。地図走行時の地図と自己位置推定の表示、ROS 2 parameter の動的調整、速度等の時系列プロット |
-| 入力監視・設定 | Jetson の Joy 入力監視、物理配置の調整、操舵・スロットル・操作要求への役割設定を共通アプリへ統合。プロポ対応は将来検討 |
+| 入力監視・設定 | Jetson の Joy 入力監視、物理配置の調整、操舵・スロットル・操作要求への役割設定を共通アプリへ統合。Pico USBのraw・PWM相当µs・基板状態を監視し、6／10／16ch表示とCH4〜CH16のJetson側役割設定を扱う |
 
 地図画面は cuVSLAM 地図作成、VGL 地図準備、保存地図からの点群取得、HDMap 編集を一つの流れとして提供する。元 bag と VGL 準備時の Notebook 用モデルを原則として自動選択し、前工程や資産対応に不備があれば理由と必要な操作を示す。NVIDIA 地図は点群取得前に編集・生成を開始せず、空の手動 HDMap は点群なしで編集できる。成功したジョブの表示は自動更新し、未保存編集は破棄しない。
 
@@ -252,6 +255,36 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - Web UI は Notebook の Docker 内で `atd-web` を実行して起動し、ブラウザだけを Notebook ホストで開く。ホスト用の `scripts/webui.sh` は `docker exec` による補助入口とする。Jetson の入力起動は `scripts/input.sh`、手順・初期 schema・生成方式・制約は [Web アプリ](../apps/web/README.md)と package の README に記録する。
 - Docker build、ROS build / install、実 bag / GPU での公式処理、実 SCP、Bluetooth / evdev、実走行は対象機で別に確認する。ローカルのコード検証だけでこれらを検証済みとはしない。
 
+### 3.10. Rev6 Pico firmware の確認（2026-11-18）
+
+現在の ATD 向け編集元は `ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/`。ユーザーの指示により `/Users/at/project/tools/pcb/kart_bridge_board/firmware/pico_rev6/` と必要な JPB1 共通通信コードを取り込んだ。実行用 C/H は取り込み元と同一に保ち、ビルド・テストの相対パスを package 内で完結させる。取り込み元のディレクトリは未追跡のローカル試作ソースであり、元のファイルは保持して自動同期・削除はしない。実基板へ書き込まれた版との一致は別途確認する。
+
+小さいソース・テスト・説明を Git 管理し、SDK・toolchain・bytecode・生成バイナリは含めない。Pico SDK 2.3.1／TinyUSB の固定commitは維持し、SDK取得とARM buildはfirmwareの明示的なスクリプト操作に分ける。`firmware/COLCON_IGNORE` により通常のROS workspace探索でPico projectを別packageとして扱わず、colconからSDK取得・ARM build・書き込みを実行しない。ROS packageのinstallには小さい編集元だけを同梱する。
+
+| 対象 | ソースで確認した実装 |
+| --- | --- |
+| 対象ボード | JPBB Rev6 の RP2040 版 Raspberry Pi Pico。Pico 2 等への対応を意味しない |
+| 手動操作 | Pico が S.BUS から操舵・ESC のパルスを生成し、プロポ／HOST の最終選択も実行。Jetson／USB がなくても手動処理を継続できる設計 |
+| チャンネル既定値 | CH1＝操舵、CH2＝ESC、CH3＝2位置の操作権。今回の ATD 実装もこの走行用 CH を固定して扱う。USB／ATD UI から Pico の配置を動的変更する処理は対象外 |
+| USB CDC0 / if00 | JPB1 制御・状態。状態は20 Hz、選択済み3chの µs 相当値と出力・操作権・異常を配信。制御 C フレームを受けてから状態配信を開始 |
+| USB CDC1 / if02 | `STREAM ON` で JPX1 の50 Hz監視を開始。全16chの raw 値・受信状態・時刻・基板状態等を含む。記録用を含む4つ目以降の CH の取得に利用可能 |
+| 入力品質 | 監視 raw は frame_lost 付きのフレームでも更新され得る。`sbus_fresh` だけでなく frame_lost / failsafe と受信の進行を検査し、同じ値の再配信を新しい押下として扱わない |
+| 制御値 | `JPB1,C` は操舵 −1000〜1000、前進／後退／brake 0〜1000 の正規化値を受け、Pico がパルス幅へ変換。µs を直接送る入口は別の `SET` / `STREAM` CLI。従来の「Jetson でパルス幅計算」との整合は、制御形式採用時に決める |
+| 応答の意味 | C ごとの ACK はない。S の seq は基板の状態送信カウンタであり、送った指令の seq の echo ではない。状態受信を各指令の受理確認と混同しない |
+| 異常・復帰 | 正常 S.BUS 値の期限50 ms、HOST 指令200 ms、heartbeat500 ms。HOST 再開には現在の許可条件と新しい厳密中立要求が必要。JPB1 C は heartbeat も更新する。これらは参照実装の値であり、実機の停止・制動を検証したものではない |
+
+原典は `include/rev6_core.h`、`src/rev6_core.c`、`src/main.c`、`README.md`、`BENCH_CHECK.md`。取り込み前の確認では、既存の C ホストテストを一時ディレクトリへ build し、制御・S.BUS・行処理／CRC・CH 入替／反転の4条件を確認した。元ディレクトリのファイルは変更していない。packageへの取り込み後の検証結果は以下のとおり。
+
+packageへの取り込み後もCホストテスト（core・S.BUS・transport・protocol・CH入替／反転）、UF2の4テスト、明示指定した元基板netlistとのGPIO 11信号照合が通過した。基板データを指定しない通常のホストテストではGPIO照合をSKIPと明示する。既存の固定版SDK・toolchainを使用した移設先でのRP2040向けRelease build、UF2生成とpayload照合も通過した。SDKの新規取得・実基板への書き込み・USB／S.BUS／PWM波形・実車の検証は行っていない。
+
+ATD 側に `atd_vehicle_interface` の CDC1 受信・状態配信と、`atd_rc_input` の Jetson 側役割処理、Notebook のプロポ監視・設定 UI を追加した。受信 node は USB 属性・固有 serial・if02 を照合し、`INFO` / `STREAM ON` のみを送信する。JPX1 の CRC・範囲・seq・時刻と S.BUS の進行を検査し、受信時刻を保った typed telemetry と監視状態を配信する。Pico が複数ある場合は明示選択が必要。CDC0 と走行制御指令は使わず、firmware は変更しない。
+
+UI はraw値（0〜2047）とPWM相当値（µs）、USB・S.BUS・操作経路・電源・異常・カウンタを表示する。既定はCH1〜CH6で、6／10／16ch表示を選択・Notebookのブラウザに保持する。役割が高いCHにあれば表示数を自動で広げる。受信・ROS・APIは全16chを保持し、10chへの変更で型定義を変えない。表示数は利用中の送受信機のch数を自動検出した結果ではない。PWM相当値は参照firmwareの既定値raw172／992／1811→1000／1500／2000µsを区間補間・整数丸め・端点制限した参考表示であり、ESC・サーボの実出力や波形の実測値ではない。役割閾値はraw単位を維持し、欠落・古い入力を中立値で埋めない。
+
+Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または未割り当てへ設定でき、閾値・反転・debounce を `/data/results/runs/input/propo.yaml` へ保存する。version 1の既存設定を維持する。初期値は全て未割り当てで、予備2枠は状態表示のみ。設定開始・保存・再読込・イベント再開を分け、設定中も Pico の手動走行は継続する。再接続・反映・再開時は現在位置を基準に取り直し、スイッチを保持しているだけでは要求を出さない。正常で新鮮な入力の安定した低→高で開始要求、高→低で停止要求を `/rc/events` に出す。実際の rosbag 記録処理は未実装。
+
+ホスト上でプロトコル、sysfs/PTY による USB 選択・排他・切断、役割判定、Web API・画面ロジックを検証した。ROS build/install・DDS/service 結合・Jetson Docker・実 USB・S.BUS・実基板の動作は未検証。Pico の選択状態と Jetson 内の HOST 要求の gate を分ける方針を維持する。
+
 ## 4. 提案・候補（未確定）
 
 | 対象 | 提案内容 | 状態 |
@@ -282,10 +315,10 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 
 以下は自動運転ソフトウェアや車両制御を具体化する段階で決める。現時点の環境整備を進めるための回答必須事項にはしない。
 
-1. 独自 firmware 用のマイコン、Jetson との通信方式、ESC・サーボへの出力経路、Jetson 停止・通信断時の動作。
+1. Pico firmware と ATD 間の USB 制御形式、実 CH 配置・校正、ESC・サーボへの適合、操作権・通信断時の停止と再開条件の結合確認。Pico／USB／S.BUS の方針は決定済みである。
 2. 初期の走行場所・路面・目標速度・到達目標、障害物に対する停止 / 回避の範囲。
 3. D455 の各ストリームの利用・記録設定、撮影モード、取付姿勢と較正。
-4. DualSense の操作割り当て、手動 / 自律の切替と停止・再開条件、UI からの配置変更の反映条件。将来のプロポ対応機器・入力経路。
+4. DualSense の操作割り当て、手動 / 自律の切替と停止・再開条件。プロポの実機種・スイッチ位置・校正、利用可能なCH4〜CH16の役割選択と実際の記録処理の結合。Pico の CH1〜CH3 を固定し、予備2枠の用途は未定。10chプロポの採用は候補であり、購入・実機対応確認済みとは扱わない。
 5. 採用済み cuVSLAM / VGL・点群取得・region / mincurv / mincurv_iqp の対象機・実 bag での結合確認、HDMap schema の拡張、実車の性能、走行開始時の自己位置推定。VGL モデルの GPU / SDK 互換性、SCP の実接続と転送後の利用、成果物の対応管理。
 6. 個別パッケージの責務、通信契約、性能目標と検証手順。
 7. ライブ表示の項目・周期・時刻と座標系、動的 parameter の対象・範囲・適用条件・永続化。
@@ -312,6 +345,11 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 | `../config/storage.env.example` | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
 
 ## 7. 更新履歴
+
+- 2026-11-18: ユーザーの指示でPico Rev6 firmwareと必要な共通通信コードを `atd_vehicle_interface/firmware/pico_rev6/` に同梱。制御・通信のC/Hを保持し、SDK／成果物をGitから除外、ROS buildとARM buildを分離し、移設先でのホストテストを確認した。
+- 2026-11-18: プロポ監視をrawとPWM相当µsの併記にし、既定6chから10／16chへ表示を切り替えられる構成に拡張。Jetsonの役割候補もCH4〜CH16へ広げ、Picoの固定走行CH・全16chの受信型・既存profile v1を維持した。µs表示は参照firmwareの既定校正による換算値で、実PWM出力の測定とは区別する。
+- 2026-11-18: Pico CDC1 の受信、6ch・基板状態の監視、CH4〜CH6 の Jetson 側役割設定 UI と記録要求イベントを実装。Pico の走行用 CH1〜CH3 と firmware は変更しないことを確定。記録実行・走行指令送信・実機確認は後続工程とした。
+- 2026-11-18: 6ch プロポの S.BUS → Pico → USB → Jetson 経路、Pico 単独での基本手動操作、Jetson による入力監視・rosbag 開始／停止を確定。提供された Rev6 firmware の2 CDC・既定 CH・操作権・正規化指令形式を調査し、ユーザー要件・参照実装・未実装の ATD 接続・実機未検証を区別した。
 
 - 2026-11-17: ROS package のビルドを専用の `build.sh` / `atd-build` へ分離し、`python.sh` / `atd-python` は環境管理・実行だけを担当する構成にした。ビルドの旧 `ros build` 操作は廃止し、環境準備の共通処理は共有する。対象 Docker 内のビルド検証とは区別する。
 

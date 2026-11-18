@@ -1,6 +1,6 @@
 # ROS 2 パッケージ
 
-自作パッケージを `ros2_ws/src/atd_<機能名>/` に配置する。現在の入力・操作要求の経路は `atd_joy` → `atd_teleop`。`atd_interfaces` に運転要求・操作イベント型、`atd_web_bridge` に Notebook UI 用の観測・設定接続を置く。基板出力・最終走行許可・記録実行は未実装。
+自作パッケージを `ros2_ws/src/atd_<機能名>/` に配置する。入力・操作要求の経路は `atd_joy` → `atd_teleop` と、Pico監視USBの `atd_vehicle_interface` → `atd_rc_input`。`atd_interfaces` に運転要求・操作イベント・Pico受信型、`atd_web_bridge` に Notebook UI 用の観測・設定接続を置く。基板への走行指令・最終走行許可・記録実行は未実装。
 パッケージごとに `package.xml` と `CMakeLists.txt` を持ち、C++ と `ament_cmake_auto` を基本とする。
 そのパッケージの `include/`・`src/`・`launch/`・`config/`・`test/` はパッケージ内に置く。
 

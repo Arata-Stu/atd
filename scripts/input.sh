@@ -7,7 +7,7 @@ task_launch_arguments=(ros2 launch atd_web_bridge input.launch.py)
 for task_argument in "$@"; do
     case "$task_argument" in
         -h|--help)
-            printf '使い方: scripts/input.sh [--bridge-only] [--dry-run] [name:=value ...]\nJetson の起動済み Docker で Joy 入力・teleop 操作要求・loopback bridge を起動します。基板出力・bag 記録は開始しません。teleop:=false で入力と bridge のみにできます。Notebook は --dry-run のみ利用できます。\n'
+            printf '使い方: scripts/input.sh [--bridge-only] [--dry-run] [name:=value ...]\nJetson の起動済み Docker で Joy・Pico USB 入力・役割処理・loopback bridge を起動します。基板出力・bag 記録は開始しません。\nteleop:=false / propo:=false で各役割処理または Pico 入力を無効化できます。複数 Pico では pico_serial:=<ID> で選択します。\n設定ファイル: profile:=<Joy YAML> teleop_profile:=<teleop YAML> rc_profile:=<propo YAML>。Notebook は --dry-run のみ利用できます。\n'
             exit 0 ;;
         --dry-run) task_dry_run=true ;;
         --bridge-only) task_launch_arguments[3]=bridge.launch.py ;;

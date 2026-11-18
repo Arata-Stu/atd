@@ -22,7 +22,7 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 import yaml
 
-from .core import Cache, ProfileStore, TeleopProfileStore, prepare_parameter_value
+from .core import Cache, ProfileStore, TeleopProfileStore, PropoProfileStore, prepare_parameter_value
 
 
 def stamp(header):
@@ -63,6 +63,8 @@ class BridgeNode(Node):
             'joy_node': '/atd_joy_node', 'profile_path': '/data/results/runs/input/dualsense.yaml',
             'teleop_node': '/atd_teleop_node', 'teleop_status_topic': '/teleop/status',
             'teleop_profile_path': '/data/results/runs/input/teleop.yaml',
+            'pico_status_topic': '/vehicle/pico/status', 'rc_status_topic': '/rc/status',
+            'rc_node': '/atd_rc_input_node', 'rc_profile_path': '/data/results/runs/input/propo.yaml',
             'parameter_node_prefix': '/atd_', 'parameter_allowlist_json': '{}'}
         self.settings = {key: self.declare_parameter(key, value, fixed).value for key, value in defaults.items()}
         if not 1024 <= self.settings['port'] <= 65535 or not .1 <= self.settings['freshness_s'] <= 30:
@@ -74,6 +76,7 @@ class BridgeNode(Node):
         self.cache = Cache(self.settings['freshness_s'])
         self.profiles = ProfileStore(self.settings['profile_path'])
         self.teleop_profiles = TeleopProfileStore(self.settings['teleop_profile_path'])
+        self.propo_profiles = PropoProfileStore(self.settings['rc_profile_path'])
         self.operation_lock = threading.RLock()
         self.identity = {'schema': 'atd.web_bridge.v1', 'instance_id': uuid.uuid4().hex,
                          'hostname': socket.gethostname(), 'node': self.get_fully_qualified_name()}
@@ -85,12 +88,17 @@ class BridgeNode(Node):
         self.subscribe(Joy, 'joy_raw_topic', lambda m: self.joy('raw', m))
         self.subscribe(String, 'joy_status_topic', self.status)
         self.subscribe(String, 'teleop_status_topic', self.teleop_status)
+        self.subscribe(String, 'pico_status_topic', self.pico_status)
+        self.subscribe(String, 'rc_status_topic', self.rc_status)
         self.joy_clients = {
             'configure': self.create_client(SetBool, self.settings['joy_node'] + '/configure'),
             'reload': self.create_client(Trigger, self.settings['joy_node'] + '/reload_profile')}
         self.teleop_clients = {
             'configure': self.create_client(SetBool, self.settings['teleop_node'] + '/configure'),
             'reload': self.create_client(Trigger, self.settings['teleop_node'] + '/reload_profile')}
+        self.propo_clients = {
+            'configure': self.create_client(SetBool, self.settings['rc_node'] + '/configure'),
+            'reload': self.create_client(Trigger, self.settings['rc_node'] + '/reload_profile')}
         self.parameter_clients = {}
 
     def subscribe(self, kind, setting, callback):
@@ -127,6 +135,60 @@ class BridgeNode(Node):
                 self.cache.put('teleop_status', value)
         except (ValueError, yaml.YAMLError):
             self.get_logger().warning('Invalid teleop/status YAML')
+
+    def pico_status(self, message):
+        try:
+            if len(message.data) > 65536:
+                raise ValueError('Pico status exceeds 64 KiB')
+            value = yaml.safe_load(message.data)
+            if isinstance(value, dict) and type(value.get('connected')) is bool and type(value.get('streaming')) is bool:
+                self.cache.put('pico_status', value)
+        except (ValueError, yaml.YAMLError):
+            self.get_logger().warning('Invalid vehicle/pico/status YAML')
+
+    def rc_status(self, message):
+        try:
+            if len(message.data) > 65536:
+                raise ValueError('RC status exceeds 64 KiB')
+            value = yaml.safe_load(message.data)
+            if isinstance(value, dict) and type(value.get('configuring')) is bool:
+                self.cache.put('rc_status', value)
+        except (ValueError, yaml.YAMLError):
+            self.get_logger().warning('Invalid rc/status YAML')
+
+    def configure_propo(self, path, body):
+        state = self.cache.propo_status()
+        status = state.get('input')
+        if not status or status['stale'] or not self.propo_profiles.matches_path(status):
+            raise ValueError('プロポ node の新鮮な状態と profile_path の一致が必要です')
+        reloading = path.endswith('/reload')
+        if reloading:
+            self.propo_profiles.require_configuring(state)
+            if not self.propo_profiles.read()['saved']:
+                raise ValueError('プロポの役割を保存してから再読込してください')
+            request = Trigger.Request()
+        else:
+            if type(body.get('enabled')) is not bool:
+                raise ValueError('enabled は bool で指定してください')
+            if body['enabled'] is False:
+                if not self.propo_profiles.read(state)['applied']:
+                    raise ValueError('保存したプロポの役割を再読込してからイベント出力を再開してください')
+                if not state.get('input_current') or not state.get('board') or not status.get('input_instance_id') \
+                        or status['input_instance_id'] != state['board'].get('instance_id') \
+                        or status.get('serial') != state['board'].get('serial'):
+                    raise ValueError('同じ Pico からの新鮮で正常なプロポ入力が必要です')
+            request = SetBool.Request(data=body['enabled'])
+        client = self.propo_clients['reload' if reloading else 'configure']
+        if not client.wait_for_service(timeout_sec=.5):
+            raise ValueError('プロポ service 未接続。成功とは扱いません')
+        try:
+            result = self.wait(client.call_async(request))
+            if not result.success:
+                raise ValueError(result.message or 'プロポ node が操作を拒否しました')
+            return {'applied': True, 'message': result.message,
+                    'output_resumed': not reloading and body['enabled'] is False}
+        finally:
+            self.cache.invalidate('rc_status')
 
     def configure_teleop(self, path, body):
         state = self.cache.teleop_status()
@@ -222,7 +284,7 @@ class BridgeNode(Node):
 
     def dispatch(self, path, method, body):
         with self.operation_lock:
-            if path.startswith('/teleop/') and method in ('PUT', 'POST'):
+            if path.startswith(('/teleop/', '/propo/')) and method in ('PUT', 'POST'):
                 if type(body.get('instance_id')) is not str or body['instance_id'] != self.identity['instance_id']:
                     raise ValueError('Jetson bridge の接続先が変更されています。状態と設定を再取得してください')
             if path == '/live/status' and method == 'GET':
@@ -240,6 +302,14 @@ class BridgeNode(Node):
                 return self.teleop_profiles.write(body.get('profile'), body.get('revision'), self.cache.teleop_status())
             if path in ('/teleop/reload', '/teleop/configure') and method == 'POST':
                 return self.configure_teleop(path, body)
+            if path == '/propo/status' and method == 'GET':
+                return self.cache.propo_status()
+            if path == '/propo/profile' and method == 'GET':
+                return self.propo_profiles.read(self.cache.propo_status())
+            if path == '/propo/profile' and method == 'PUT':
+                return self.propo_profiles.write(body.get('profile'), body.get('revision'), self.cache.propo_status())
+            if path in ('/propo/reload', '/propo/configure') and method == 'POST':
+                return self.configure_propo(path, body)
             if path == '/input/profile' and method == 'GET':
                 return self.profiles.read()
             if path == '/input/profile' and method == 'PUT':

@@ -10,8 +10,10 @@ install(FILES README.md DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(bridge_core test/test_core.py
-    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/../atd_joy:${CMAKE_CURRENT_SOURCE_DIR}/../atd_teleop)
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/../atd_joy:${CMAKE_CURRENT_SOURCE_DIR}/../atd_teleop:${CMAKE_CURRENT_SOURCE_DIR}/../atd_rc_input)
   ament_add_pytest_test(teleop_routes test/test_teleop_routes.py
-    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/../atd_joy:${CMAKE_CURRENT_SOURCE_DIR}/../atd_teleop)
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/../atd_joy:${CMAKE_CURRENT_SOURCE_DIR}/../atd_teleop:${CMAKE_CURRENT_SOURCE_DIR}/../atd_rc_input)
+  ament_add_pytest_test(propo_routes test/test_propo_routes.py
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/../atd_joy:${CMAKE_CURRENT_SOURCE_DIR}/../atd_teleop:${CMAKE_CURRENT_SOURCE_DIR}/../atd_rc_input)
 endif()
 ament_auto_package()

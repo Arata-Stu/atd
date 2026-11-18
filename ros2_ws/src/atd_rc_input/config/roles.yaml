@@ -1,0 +1,6 @@
+version: 1
+debounce_ms: 100
+roles:
+  recording: {channel: 0, low_threshold: 700, high_threshold: 1300, inverted: false}
+  auxiliary_1: {channel: 0, low_threshold: 700, high_threshold: 1300, inverted: false}
+  auxiliary_2: {channel: 0, low_threshold: 700, high_threshold: 1300, inverted: false}

@@ -68,6 +68,10 @@ class StartupTests(unittest.TestCase):
             '#!/bin/bash\nprintf "dependencies\\n" >> "$ATD_TEST_LOG"\n'
             '[[ ${ATD_TEST_FAIL:-} != dependencies ]] || exit 7\n'
         )
+        (self.runtime / "scripts/configure-serial-access.sh").write_text(
+            '#!/bin/bash\nprintf "serial\\n" >> "$ATD_TEST_LOG"\n'
+            '[[ ${ATD_TEST_FAIL:-} != serial ]] || exit 13\n'
+        )
         (self.runtime / "scripts/configure-dds.sh").write_text(
             '#!/bin/bash\nprintf "dds\\n" >> "$ATD_TEST_LOG"\n'
             '[[ ${ATD_TEST_FAIL:-} != dds ]] || exit 8\n'
@@ -106,14 +110,15 @@ class StartupTests(unittest.TestCase):
         (self.config / "runtime.ready").write_text("old\n")
         result = self.run_hook()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.log.read_text(), "dependencies\ndds\npython\n")
+        self.assertEqual(self.log.read_text(), "dependencies\nserial\ndds\npython\n")
         self.assertIn(f"result={self.baked_shell}|rmw_fastrtps_cpp|unset", result.stdout)
         self.assertEqual((self.config / "runtime.ready").read_text(), "fixture-v1\n")
 
     def test_failure_stops_entrypoint_and_removes_stale_marker(self):
-        for stage, expected in (("dependencies", "dependencies\n"), ("dds", "dependencies\ndds\n"),
-                                ("missing_env", "dependencies\ndds\n"), ("env", "dependencies\ndds\n"),
-                                ("python", "dependencies\ndds\npython\n")):
+        for stage, expected in (("dependencies", "dependencies\n"), ("serial", "dependencies\nserial\n"),
+                                ("dds", "dependencies\nserial\ndds\n"),
+                                ("missing_env", "dependencies\nserial\ndds\n"), ("env", "dependencies\nserial\ndds\n"),
+                                ("python", "dependencies\nserial\ndds\npython\n")):
             with self.subTest(stage=stage):
                 (self.config / "runtime.ready").write_text("stale\n")
                 self.log.unlink(missing_ok=True)

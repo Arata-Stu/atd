@@ -82,17 +82,35 @@ df -i  "$build_tmp" /tmp "$docker_root"
 
 ホームが満杯の場合は、空きのある別のファイルシステムに書込み可能なディレクトリを用意し、その絶対パスを `TMPDIR` に指定して build を再実行する。上流 CLI が一時ファイルのパスをシェルに渡すため、空白やシェルの特殊文字を含まないパスを使う。イメージと再ビルド用キャッシュは Docker が管理する。`docker system df` と `docker buildx du --builder default` で使用量を確認できる。[Docker のキャッシュ使用量](https://docs.docker.com/reference/cli/docker/buildx/du/)
 
-### 過去の Docker ビルドキャッシュを削除する
+### ローカル Docker を空にして作り直す
 
-Notebook ホストの ATD checkout で実行する。
+Notebook ホストの ATD checkout で実行する。削除の範囲はその Docker Engine 上の**全プロジェクト**。起動中のコンテナも停止するので、記録やビルドを終了し、残したいコンテナ内のファイルやボリュームのデータを先に退避する。
 
 ```bash
-./scripts/tools/clean-docker-cache.sh
+./scripts/tools/clean-docker-cache.sh --reset-all --dry-run
+./scripts/tools/clean-docker-cache.sh --reset-all
 ```
 
-`Reclaimable` は回収対象のキャッシュ量、`Total` はキャッシュの総量。Docker の確認で `y` を入力すると、ATD が使う `default` builder の未使用キャッシュを、同じ builder を使う他プロジェクト分も含めて削除する。削除後は Docker が回収量を表示する。使用量の確認だけなら `./scripts/tools/clean-docker-cache.sh --dry-run` を使う。[Docker の buildx prune](https://docs.docker.com/reference/cli/docker/buildx/prune/)
+2本目は対象を表示して入力を待つ。`RESET` と入力して Enter を押すと、コンテナ、Ubuntu・Isaac ROS を含む全イメージ、追加ネットワーク、ビルドキャッシュ、通常の名前付き・匿名ローカルボリュームを削除する。ボリュームに保存したデータベースなども消える。Docker は終了時の残量を表示し、使用中のデータや外部ドライバのボリュームなどが残った場合はスクリプトが報告する。[Docker の system prune](https://docs.docker.com/reference/cli/docker/system/prune/)・[名前付きボリュームの削除](https://docs.docker.com/reference/cli/docker/volume/prune/)
 
-ビルド済みイメージ、コンテナ、ボリューム、checkout 配下の bag・地図・モデルは保持する。イメージと共有するレイヤーはディスクに残るため、実際に空く容量は `Reclaimable` より少ない場合がある。次回の再ビルドでは削除したキャッシュを作り直す。[Docker のキャッシュ使用量](https://docs.docker.com/reference/cli/docker/buildx/du/)
+Docker Engine と CLI、認証・context 設定、標準ネットワークは次のビルドにも使える。ATD の checkout、workspace、bag・地図・モデルの保存先はホストからの bind mount なので保持される。同じ checkout で `./scripts/dev.sh --build` を実行すると、ベースイメージの取得から開発環境を作り直せる。
+
+### ビルドキャッシュと過去の ATD イメージだけを整理する
+
+Notebook ホストの ATD checkout で、まず使用量と削除候補を確認する。
+
+```bash
+./scripts/tools/clean-docker-cache.sh --dry-run
+```
+
+`docker system df` の `Images` は保存済みイメージ、Buildx の `Reclaimable` はビルドキャッシュの回収対象を示す。同じ ID の複数のタグは一つのイメージを指す。異なる ID でもレイヤーを共有するため、表示サイズは単純に合算できない。各イメージの共有サイズと固有サイズは `docker system df -v` の `SHARED SIZE`・`UNIQUE SIZE` で確認する。[Docker の容量表示](https://docs.docker.com/reference/cli/docker/system/df/)
+
+| 整理する対象 | ホストでの操作 |
+| --- | --- |
+| ビルドキャッシュ | `./scripts/tools/clean-docker-cache.sh` を実行し、Docker の確認で `y` と Enter を入力する。完了時に `Total` が表示される。対象は `default` builder を使う全プロジェクトの未使用キャッシュ。 |
+| 過去の ATD 完成イメージ | ビルド完了後に `./scripts/tools/clean-docker-cache.sh --old-images` を実行し、削除したい ID の先頭を空白区切りで入力する。`all` は表示中の候補をまとめて選ぶ。対象機種ごとに CLI のキャッシュ別名が指す ATD イメージを確認できない場合は、個別に ID を指定する。空のまま Enter で中止する。 |
+
+イメージの候補は `isaac_ros-realsense455-atd_<hash>` のタグを ID ごとにまとめて表示する。コンテナ（停止中を含む）が参照するイメージ、Isaac ROS CLI の `cached_isaac_run_dev_image_local:latest` が指すイメージ、別用途のタグが付いたイメージを保持する。Isaac ROS・RealSense の共通中間イメージ、Ubuntu、ボリューム、bag・地図・モデルはこの操作の対象外。整理後の使用量は再度 `--dry-run` で確認できる。[Docker のイメージ削除](https://docs.docker.com/reference/cli/docker/image/rm/)・[Docker のキャッシュ削除](https://docs.docker.com/reference/cli/docker/buildx/prune/)
 
 <a id="kart-cli"></a>
 

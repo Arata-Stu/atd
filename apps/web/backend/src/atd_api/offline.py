@@ -17,6 +17,7 @@ from .transfers import inventory
 
 TOPIC = re.compile(r'/[A-Za-z_][A-Za-z_0-9/]*$')
 FRAME = re.compile(r'[A-Za-z_][A-Za-z_0-9/]*$')
+ODOM_POSES = Path('nvidia/poses/odom_poses.tum')
 DEFAULT_INPUTS = dict(left_image='/camera/camera/infra1/image_rect_raw', right_image='/camera/camera/infra2/image_rect_raw',
     left_info='/camera/camera/infra1/camera_info', right_info='/camera/camera/infra2/camera_info',
     base_frame='base_link', left_frame='camera_infra1_optical_frame', right_frame='camera_infra2_optical_frame')
@@ -58,7 +59,8 @@ def map_build(store, task, payload):
         nvidia.mkdir()
         command = ['ros2', 'run', 'isaac_mapping_ros', 'create_map_offline.py', f'--sensor_data_bag={bag}',
             f'--base_output_folder={nvidia}', f'--camera_topic_config={config}', f"--base_link_name={payload['base_frame']}",
-            '--use_raw_image=False', '--override', 'cuvslam.cfg_planar=false', '--steps_to_run', 'edex', 'compute_poses']
+            '--use_raw_image=False', '--use_cusfm=False', '--use_cuvslam_opencv_compat=True',
+            '--override', 'cuvslam.cfg_planar=false', '--steps_to_run', 'edex', 'compute_poses']
         task.run(command, env=dict(os.environ, ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST', ROS_DOMAIN_ID='93'))
         candidates = sorted({p.resolve() for p in nvidia.rglob('cuvslam_map') if p.is_dir()})
         if len(candidates) != 1 or not candidates[0].is_relative_to(nvidia):
@@ -72,12 +74,17 @@ def map_build(store, task, payload):
             shutil.move(str(run), holder)
             shutil.rmtree(nvidia)
             os.rename(holder, nvidia)
-        inventory(nvidia)  # 外向き・壊れたリンクを配布成果物へ混ぜない。
+        files = inventory(nvidia, task.check)
         task.check()
         document = blank(key)
         document['source'] = dict(kind='nvidia_offline', bag=payload['bag'], frame='map', pointcloud_status='pending',
                                  metadata_sha256=hashlib.sha256((bag / 'metadata.yaml').read_bytes()).hexdigest(), inputs=payload,
                                  mapping_options=dict(ground_constraint=False))
+        # 標準 workflow の連続 VO は、指定した rig 基準の姿勢を ROS 軸で保存する。
+        poses = files.get(ODOM_POSES.relative_to('nvidia').as_posix())
+        if poses and poses['size'] > 0:
+            document['source']['odom_poses'] = dict(
+                path=ODOM_POSES.as_posix(), sha256=poses['sha256'], frame=payload['base_frame'])
         atomic_json(stage / 'hdmap/map.json', document)
         atomic_json(stage / 'mapping.json', dict(command=command, source=document['source'], completed=time.time()))
         target = confined(store.maps_root, key, exists=False)

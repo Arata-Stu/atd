@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from atd_vehicle_calibration.cli import main, source_info
+from atd_vehicle_calibration.cli import check_bag, main, source_info
 
 
 class CalibrationRunTests(unittest.TestCase):
@@ -67,6 +67,34 @@ class CalibrationRunTests(unittest.TestCase):
             source_info(self.bag, self.poses, 'base_link')
         with self.assertRaisesRegex(ValueError, 'odom_poses'):
             source_info(self.bag, self.poses.with_name('slam_poses.tum'), 'base_link')
+
+    def test_check_bag_before_vo(self):
+        from atd_vehicle_calibration.inputs import CAMERA_INFO_TOPICS, IMU_TOPICS, PICO_TOPIC, PICO_TYPE
+        types = {PICO_TOPIC: PICO_TYPE, '/tf_static': 'tf2_msgs/msg/TFMessage',
+                 **{name: 'sensor_msgs/msg/Imu' for name in IMU_TOPICS},
+                 **{name: 'sensor_msgs/msg/CameraInfo' for name in CAMERA_INFO_TOPICS}}
+        topics = [dict(topic_metadata=dict(name=name, type=kind), message_count=1) for name, kind in types.items()]
+        files = ['split.mcap']
+        def publish():
+            metadata = dict(storage_identifier='mcap', relative_file_paths=files, topics_with_message_count=topics)
+            (self.bag / 'metadata.yaml').write_text(json.dumps(dict(rosbag2_bagfile_information=metadata)))
+        publish()
+        (self.bag / files[0]).write_bytes(b'fixture')
+        args = ['--bag', str(self.bag)]
+        self.assertEqual(check_bag(args), 0)
+        self.assertEqual(check_bag(args + ['--require-stereo']), 3)
+        for name in ('infra1', 'infra2'):
+            topics.append(dict(topic_metadata=dict(name=f'/camera/camera/{name}/image_rect_raw',
+                               type='sensor_msgs/msg/Image'), message_count=1))
+        publish()
+        self.assertEqual(check_bag(args + ['--require-stereo']), 0)
+        topics[-1]['message_count'] = 0
+        publish()
+        self.assertEqual(check_bag(args + ['--require-stereo']), 3)
+        for unsafe in ('../meta.mcap', '/absolute.mcap', 'missing.mcap'):
+            files[0] = unsafe
+            publish()
+            self.assertEqual(check_bag(args), 3)
 
     @unittest.skipUnless(find_spec('rosbag2_py'), 'ROS 2 MCAP runtime required')
     def test_ros_serialized_pico_and_imu_to_report(self):

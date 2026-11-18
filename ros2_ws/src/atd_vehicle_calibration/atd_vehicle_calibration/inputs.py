@@ -332,13 +332,10 @@ def decode_records(records, *, pico_topic=PICO_TOPIC, imu_topics=IMU_TOPICS,
                                 pico_input='raw CH1 steering / CH2 throttle; no actual PWM or angle measurement'))
 
 
-def read_bag(bag_path, **options):
-    """Read rosbag2 using installed ROS types; importing this module needs no ROS."""
+def inspect_metadata(path, *, pico_topic=PICO_TOPIC, imu_topics=IMU_TOPICS, camera_info_topics=CAMERA_INFO_TOPICS,
+                     require_stereo=False):
+    """Check recorded topic types and counts without opening any message storage."""
     import yaml
-    import rosbag2_py
-    from rclpy.serialization import deserialize_message
-    from rosidl_runtime_py.utilities import get_message
-    path = Path(bag_path).expanduser().resolve(strict=True)
     document = yaml.safe_load((path / 'metadata.yaml').read_text())
     metadata = document.get('rosbag2_bagfile_information') if isinstance(document, dict) else None
     if not isinstance(metadata, dict) or not isinstance(metadata.get('storage_identifier'), str):
@@ -353,18 +350,30 @@ def read_bag(bag_path, **options):
             raise ValueError('invalid topic metadata entry')
         if info['name'] in names:
             raise ValueError('duplicate topic metadata')
-        names[info['name']] = info['type']
-    pico_topic = options.get('pico_topic', PICO_TOPIC)
-    imu_topics = options.get('imu_topics', IMU_TOPICS)
-    info_topics = options.get('camera_info_topics', CAMERA_INFO_TOPICS)
+        names[info['name']] = (info['type'], entry.get('message_count'))
     required = {pico_topic: PICO_TYPE, '/tf_static': TF_TYPE, **{topic: IMU_TYPE for topic in imu_topics},
-                **{topic: 'sensor_msgs/msg/CameraInfo' for topic in info_topics}}
+                **{topic: 'sensor_msgs/msg/CameraInfo' for topic in camera_info_topics}}
+    if require_stereo:
+        for stream in ('infra1', 'infra2'):
+            required[f'/camera/camera/{stream}/image_rect_raw'] = 'sensor_msgs/msg/Image'
     for topic, kind in required.items():
-        if names.get(topic) != kind:
+        recorded_type, count = names.get(topic, (None, None))
+        if recorded_type != kind:
             raise ValueError(f'missing/wrong required topic {topic}: {kind}')
-        count = next(entry.get('message_count') for entry in topics if entry['topic_metadata']['name'] == topic)
         if isinstance(count, bool) or not isinstance(count, Integral) or count < 1:
             raise ValueError('empty/invalid required topic count: ' + topic)
+    return metadata, required
+
+
+def read_bag(bag_path, **options):
+    """Read rosbag2 using installed ROS types; importing this module needs no ROS."""
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    from rosidl_runtime_py.utilities import get_message
+    path = Path(bag_path).expanduser().resolve(strict=True)
+    imu_topics = options.get('imu_topics', IMU_TOPICS)
+    metadata, required = inspect_metadata(path, pico_topic=options.get('pico_topic', PICO_TOPIC), imu_topics=imu_topics,
+                                          camera_info_topics=options.get('camera_info_topics', CAMERA_INFO_TOPICS))
     classes = {name: get_message(kind) for name, kind in required.items()}
     def records(selected):
         reader = rosbag2_py.SequentialReader()

@@ -18,6 +18,7 @@ from .offline import DEFAULT_INPUTS, build_payload, vgl_payload
 from .store import Store, atomic_json, confined, read_json
 from . import transfers
 from . import capture as capture_service
+from . import calibration
 
 
 class Strict(BaseModel):
@@ -60,6 +61,14 @@ class Capture(Strict):
     revision: int = Field(ge=1)
     bag: str | None = None
     model_dir: str | None = None
+
+
+class CalibrationRun(Strict):
+    bag: str
+    pose_frame: str | None = Field(default=None, min_length=1)
+    map_id: str | None = None
+    wheelbase_m: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    reference_run: str | None = None
 
 
 class Build(Strict):
@@ -133,6 +142,23 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     @app.get('/api/records')
     def records():
         return dict(items=store.records())
+
+    @app.get('/api/calibration/options')
+    def calibration_options(bag: str | None = None):
+        return calibration.options(store, bag)
+
+    @app.post('/api/calibration/runs')
+    def start_calibration(body: CalibrationRun):
+        payload = calibration.payload(store, body.model_dump(exclude_none=True))
+        return jobs.start('calibration', payload, calibration.resources(payload), '車両校正: ' + payload['bag'])
+
+    @app.get('/api/calibration/runs/{run_id}/{filename}')
+    def calibration_artifact(run_id: str, filename: str):
+        path = calibration.artifact(store, run_id, filename)
+        if filename == 'response.png':
+            return FileResponse(path, media_type='image/png')
+        media_type = 'application/json' if filename == 'summary.json' else 'text/csv'
+        return FileResponse(path, media_type=media_type, filename=filename)
 
     @app.get('/api/maps')
     def maps():

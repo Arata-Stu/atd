@@ -110,6 +110,35 @@ def positive(text):
     return value
 
 
+def check_bag(argv=None):
+    """Validate cheap inputs before the Web worker starts offline VO."""
+    from .inputs import inspect_metadata
+    import yaml
+    parser = argparse.ArgumentParser(description='校正に必要な bag の記録トピック・件数・データファイルを確認')
+    parser.add_argument('--bag', required=True, type=Path)
+    parser.add_argument('--require-stereo', action='store_true', help='新規 VO の左右 Infra 画像も検査')
+    args = parser.parse_args(argv)
+    try:
+        bag = args.bag.resolve(strict=True)
+        metadata, _ = inspect_metadata(bag, require_stereo=args.require_stereo)
+        paths = metadata.get('relative_file_paths')
+        if not isinstance(paths, list) or not paths:
+            raise ValueError('bag の relative_file_paths が空または不正です')
+        files = metadata.get('files', [])
+        if not isinstance(files, list) or any(not isinstance(file, dict) for file in files):
+            raise ValueError('bag の files が不正です')
+        for name in [*paths, *(file.get('path') for file in files)]:
+            if not isinstance(name, str) or not name or Path(name).is_absolute() or '..' in Path(name).parts:
+                raise ValueError('bag データファイルの相対パスが不正です')
+            path = bag / name
+            if path.resolve() != path or not path.is_file() or not path.stat().st_size:
+                raise ValueError('bag 内に非空の通常ファイルがありません: ' + name)
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        print(f'校正 bag の事前検査エラー: {error}', file=sys.stderr, flush=True)
+        return 3
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bag', type=Path, required=True, help='metadata.yaml を含む手動走行の bag')

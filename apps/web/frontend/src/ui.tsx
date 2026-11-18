@@ -4,6 +4,7 @@ export function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
     map: <><path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2z"/><path d="M9 3v16M15 5v16"/></>,
     transfer: <><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></>,
+    chart: <><path d="M3 3v17h18"/><path d="m6 15 4-5 4 2 6-8"/></>,
     live: <><path d="M3 12h4l3-8 4 16 3-8h4"/></>,
     controller: <><path d="M7 7h10a4 4 0 0 1 4 4l1 6a2 2 0 0 1-3 2l-4-3H9l-4 3a2 2 0 0 1-3-2l1-6a4 4 0 0 1 4-4Z"/><path d="M6 10v5m-2.5-2.5h5M16 11h.01M19 14h.01"/></>,
     arrow: <><path d="M5 12h14m-5-5 5 5-5 5"/></>,

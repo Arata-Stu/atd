@@ -60,8 +60,9 @@
 ### 2.4. センサ・手動介入・車両 I/O の方針
 
 - D455 の IR（infra）、RGB、IMU、Depth はいずれも使用する可能性を残し、RealSense driver で起動する方針とする。
-- `bringup.sh` のTUIで各ストリームのON／OFF・解像度・Hzを選ぶ。初期値は左右IR 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。実機の対応モードを列挙して同時構成を検査する。bag の記録対象は用途に合わせて記録 profile で選択する。
+- `bringup.sh` のTUIで各ストリームのON／OFF・解像度・Hzを選ぶ。初期値は左右IR 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。実機の対応モードを列挙して同時構成を検査し、非対応値を黙って代替しない。bag の記録対象は用途に合わせて記録 profile で選択する。
 - 車両モデルの初期校正にはプロポ手動走行の bag を使う。Notebook のオフライン VSLAM で得た pose から後輪車軸中央の前後速度を推定し、エンコーダのない車両の基準速度として、プロポ入力・IMU と突き合わせる。スロットルに対する加減速と操舵に対する旋回応答を実走行で同定する。[車両校正の手順](vehicle_calibration.md)
+- Notebook の共通 Web UI から受信済みの bag を選び、VO 軌跡の生成または再利用、校正解析、応答グラフの確認まで行えるようにする。記録操作は車載の Joy・プロポから行う。
 - 車体static TFは `atd_vehicle_description`、カメラ内部TFはRealSense driverが担当する。`base_link` を後輪回転軸中央（x前・y左・z上）とし、車体寸法とカメラ取付位置をNotebook UIから実測値で編集する。空欄は未計測として保持し、保存後のTF node再起動で適用する。CAD参考寸法と実測値、保存状態と適用中状態を区別する。
 - Joy による手動介入を想定し、DualSense を Bluetooth で Jetson に接続する予定とする。
 - Joy の操作割り当て、手動・自律の切替条件、停止・再開条件は後から決める。
@@ -254,7 +255,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - Map / Transfer / Live / Input を統合する。地図・転送処理は独立 worker で実行し、結果先の `runs/web/` に設定・ジョブ状態・ログを保持する。
 - 地図作成は公式 `create_map_offline.py`、VGL 地図は公式 builder / `create_cuvgl_map.py` を呼ぶ。自作 `atd_mapping` が保存地図の作業コピーと元 bag を使い、VGL hint・localize 成功後の非空点群・軌跡・TF を採取する。完了時だけ snapshot を公開して編集可能にする。apt 導入、モデル資産、GPU engine、地図成果物、点群取得成功を別に扱う。
 - map identity・VGL との対応 hash・地図生成時の平面拘束設定がない旧資産は再生成を案内し、推測で補完・自動移行しない。新規地図は平面拘束を無効と明示して記録し、取得側にも同じ値を適用する。
-- Notebook の初回は Docker 内で `atd-build --packages-up-to atd_mapping` が必要である。公式 apt や `web` / `raceline` の同期は自作 ROS package の build を代替しない。`atd-web check` で `atd_mapping` を含む導入状態を診断する。
+- Notebook で地図と車両校正の両方を利用する場合は、Docker 内で初回に `atd-build --packages-up-to atd_mapping atd_vehicle_calibration` を実行する。`atd-web check` で公式・自作 package の導入状態を診断する。
 - Centerline の region と、独立した `raceline` 環境による mincurv / mincurv_iqp を実装した。旧 paired / local への fallback は設けない。単体テスト、小規模閉路で実 QP / IQP solver を使うテスト、frontend の型検査・build はローカルで確認した。
 - Jetson 側に C++ component の `atd_joy` と、観測・設定用の `atd_web_bridge` を追加した。Notebook API は SSH から Jetson loopback HTTP へアクセスし、車載 DDS に直接参加しない。
 - `atd_interfaces` に正規化運転要求と操作イベント、`atd_teleop` に設定可能な役割割り当てを追加した。Notebook の入力画面に物理配置と役割設定を統合し、保存済みと反映済みを区別する。操作要求の出力までで、最終走行許可・基板通信は未実装。記録実行は `atd_recording` が担当し、操作イベントと記録結果を分ける。仕様と検証境界は [atd_teleop](../ros2_ws/src/atd_teleop/README.md)を参照する。

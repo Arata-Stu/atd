@@ -1,6 +1,6 @@
 # 車両モデル作成と校正
 
-プロポで手動走行した bag を Notebook へ移し、既存の offline VSLAM と `atd_vehicle_calibration analyze` で入力・車体運動の対応を確認する。最初は短い1 bag で記録・姿勢・解析・図の確認まで通し、別の走行で再現性を調べる。
+プロポで手動走行した bag を Notebook へ移し、ATD Studio の「車両校正」で速度・加速度・操舵応答を確認する。最初は短い1 bag で記録・姿勢・解析・図の確認まで通し、別の走行で再現性を調べる。
 
 今回作るのは**観測応答表**であり、車両の遅延・時定数や制御器を自動で確定するものではない。実車の校正値は未取得で、実測 bag・ROS/GPU 環境での校正と検証は未実施。エンコーダは使わず、RPM 換算も行わない。
 
@@ -50,40 +50,23 @@ ros2 bag info '/data/record/rosbags/<bag_id>'
 
 保存確定は、記録型・非ゼロ件数・保存ファイル等の確認結果である。TF の内容、画像同期、実効 FPS、元 stamp、RC の有効性まで合格した意味ではない。停止指令・ニュートラルと実際の停止も区別する。
 
-## 3. Notebook へ受信し、姿勢を作る
+## 3. Notebook の UI で解析する
 
-1. UI「データ転送」で、保存完了した bag ディレクトリ全体を Notebook の記録先へ SCP 受信する。元 bag は保持する。
-2. Notebook の ROS／CUDA Docker 内で `atd-web` を起動する。初回の `atd_mapping` build 等は [Web アプリの準備](../apps/web/README.md)に従う。
-3. UI「地図とライン」→「cuVSLAM 地図を作成」で、この bag と新しい地図 ID を選ぶ。左右画像・CameraInfo・optical frame と base frame を実 bag に合わせる。
-4. `/data/results/maps/<map_id>/mapping.json` と `nvidia/` 以下のログ・姿勢ファイルを確認する。解析には同じ走行の連続した `odom_poses.tum` を使い、出力が表す子フレームを導入版の設定・ログで確かめる。
+Notebook の Docker 内で初回・自作 package 更新時に `atd-build --packages-up-to atd_mapping atd_vehicle_calibration` を実行する。通常は同じ Docker 内で `atd-web` を起動し、Notebook の Chrome で [ATD Studio の車両校正](http://127.0.0.1:8766/#calibration)を開く。[Web アプリの準備](../apps/web/README.md)
 
-現在の [offline 実装](../apps/web/backend/src/atd_api/offline.py)は rectified stereo、平面拘束なしで `edex`・`compute_poses` を実行する。IMU を記録しても自動で VIO にはならない。VGL 準備・点群取得は解析の前提ではなく、表示用 snapshot や間引いた keyframe を連続速度の代わりにしない。
+1. Jetson にある bag は「データ転送」で保存確定後のディレクトリ全体を受信し、「この bag を車両校正へ」を押す。すでに Notebook にあれば「車両校正」で直接選ぶ。同名の走行は親フォルダを含むパスで識別できる。
+2. 「解析を開始」を押す。Notebook が必須 topic・記録件数・データファイルを検査し、標準 D455 のステレオ画像から軌跡を生成して解析する。対応する保存済み軌跡があれば自動で再利用する。候補が複数あるときは生成元の地図を選ぶ。
+3. 実行完了後、同じ画面で速度・加速度・操舵応答のグラフを開く。等価舵角も求めたい場合は開始前に実測ホイールベースを **mm** で入力する。空欄でも速度・加速度・yaw rate・曲率を解析できる。
 
-## 4. 解析を実行する
+標準の新規生成では、カメラの取付変換を渡した車体フレームと、ROS 座標系に変換済みの odometry ファイルの SHA-256 を記録する。再利用時には元 bag のパス・metadata の SHA-256 と軌跡の SHA-256 を照合する。フレームの記録がない旧軌跡は、導入版の設定・ログで確認した TF 名を画面で指定する。[NVIDIA の地図生成処理](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_mapping_and_localization/blob/v5.0-0/isaac_mapping_ros/scripts/create_map_offline.py)・[cuVSLAM の rig 姿勢出力](https://github.com/nvidia-isaac/cuVSLAM/blob/main/tools/cuvslam_api_launcher/cuvslam_api_launcher.cpp#L540-L553)
 
-Notebook Docker 内で実行する。`<...>` は実在する入力に置き換え、`--pose-frame` を推測で埋めない。
+「ジョブ」で進捗・ログを確認できる。解析中にページを閉じても、Notebook の Docker が稼働していれば処理は継続する。生成した公式成果物は `/data/results/maps/<map_id>/nvidia/`、解析結果は `/data/results/runs/vehicle_calibration/<run_id>/` に保存する。解析条件を変えてやり直すときは同じ bag の軌跡を再利用できる。
 
-```bash
-/workspaces/atd/scripts/build.sh --packages-up-to atd_vehicle_calibration
-source /workspaces/isaac_ros-dev/install/setup.bash
+標準の姿勢生成は rectified stereo で平面拘束を無効にし、`edex`・`compute_poses` を実行する。IMU は校正解析で VO と照合する。独自の地図作成設定が必要な場合は「地図とライン」で事前に軌跡を作成できる。VGL 準備や点群取得は不要。[姿勢の生成処理](../apps/web/backend/src/atd_api/offline.py)
 
-ros2 run atd_vehicle_calibration analyze \
-  --bag '/data/record/rosbags/<bag_id>' \
-  --poses '/data/results/maps/<map_id>/nvidia/poses/odom_poses.tum' \
-  --pose-frame '<確認したframe>'
-```
+## 4. 結果を読む
 
-`build.sh` は子プロセスなので、build 後の同じシェルにも `install/setup.bash` を読み込む。解析は VSLAM を再実行せず、上で用意した姿勢を使う。
-
-| 任意指定 | 使う場合・省略時 |
-| --- | --- |
-| `--wheelbase-m '<実測m>'` | 指定すると等価舵角も算出。省略時も曲率は出るが舵角は空欄 |
-| `--gravity-world-mps2 GX GY GZ` | VSLAM 親座標での重力方向を確認した場合だけ指定。未指定時も VO 加速度・IMU 比力・gyro は出るが、IMU 重力補正加速度は空欄 |
-| `--output '/data/results/runs/vehicle_calibration/<run>'` | 新規保存先。省略時も同 root 以下に新しい run を作り、既存結果を上書きしない |
-
-微分窓、時刻差・速度の閾値、TF 検査、CSV の列は [package README](../ros2_ws/src/atd_vehicle_calibration/README.md)を参照する。時計のずれやカメラ取付不足を、ゼロ・identity・自動の時間ずらしで補完しない。
-
-## 5. 図と要約を確認する
+「車両校正」の結果から応答グラフを開き、時系列と要約を保存できる。有効なプロポ手動試料が 0 件の場合も診断用の結果を開き、記録と除外理由を確認できる。
 
 | 生成物 | 最初に見るもの |
 | --- | --- |
@@ -95,10 +78,12 @@ VSLAM の運動量は推定値であり真値ではない。静止・既知距�
 
 応答表は CH2 と加速度・定常速度、CH1 と yaw rate・曲率を raw・速度帯・前後方向で集計する。未観測セルは未知のままで、入力の物理符号・PWM 端点や遅延・時定数を fit 済みとはしない。終了コード0も実車モデルの合格ではなく、有効なプロポ手動試料なしの場合は2になる。
 
-## 6. 別の走行で確かめる
+## 5. 別の走行で確かめる
 
-別の bag・姿勢を指定した解析に `--reference-summary '/data/results/runs/vehicle_calibration/<基準run>/summary.json'` を追加すると、過去の応答表との再現性を比較できる。同じ bag は参照に使えない。比較可能な点・範囲外・評価点数・誤差を分け、評価点なしを誤差0としない。
+「車両校正」で別走行の解析結果を比較元に指定すると、過去の応答表との再現性を比較できる。同じ bag は参照に使えない。比較可能な点・範囲外・評価点数・誤差を分け、評価点なしを誤差0としない。
 
 次の試行では加速・惰行・制動・後退を分け、操舵量・左右・入力の往復・速度別に条件を広げる。加速だけで走行抵抗や制動を確定せず、低速の実効舵角をサーボ角・タイヤ実測角と同一視しない。電池・路面・取付を変えた場合は条件差を残す。
 
 raw bag・公式成果物・実測設定を保持し、推定値で上書きしない。単体テスト、ROS build/install、実 GPU の offline 処理、実 bag の解析、別走行での車両モデル検証をそれぞれの完了条件として扱う。
+
+時刻差・微分窓を変更する場合や、世界座標で確認した重力ベクトルを指定して IMU 加速度を補正する場合は CLI を使う。既定値と各列の定義、実行例は [解析 package の README](../ros2_ws/src/atd_vehicle_calibration/README.md) を参照する。

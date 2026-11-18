@@ -15,7 +15,7 @@ import uuid
 from .store import atomic_json, read_json, identifier
 
 ACTIVE = {'starting', 'running', 'queued'}
-ACTIONS = {'generate', 'map_build', 'vgl', 'capture', 'pull', 'push'}
+ACTIONS = {'generate', 'map_build', 'vgl', 'capture', 'pull', 'push', 'calibration'}
 
 
 class Cancelled(Exception):
@@ -158,10 +158,16 @@ class Task:
         self.state['message'] = text
         self.persist()
 
-    def run(self, argv, env=None, ros=False):
+    def run(self, argv, env=None, ros=False, allowed_exit_codes=(0,)):
         self.check()
         self.log('実行: ' + ' '.join(map(str, argv)))
         if ros or argv[0] == 'ros2':
+            env = dict(os.environ if env is None else env)
+            web_venv = env.pop('VIRTUAL_ENV', None)
+            if web_venv:
+                web_bin = Path(web_venv) / 'bin'
+                env['PATH'] = os.pathsep.join(entry for entry in os.get_exec_path(env) if Path(entry) != web_bin)
+                env.pop('PYTHONPATH', None)
             argv = ['bash', '-c', 'set -e; source /opt/ros/lyrical/setup.bash; if [ -n "${ISAAC_ROS_WS:-}" ] && [ -f "$ISAAC_ROS_WS/install/setup.bash" ]; then source "$ISAAC_ROS_WS/install/setup.bash"; fi; exec "$@"', 'atd-ros-worker', *argv]
         process = subprocess.Popen(list(map(str, argv)), stdin=subprocess.DEVNULL, start_new_session=True, env=env)
         self.state.update(process_pid=process.pid, process_identity=identity(process.pid))
@@ -170,7 +176,7 @@ class Task:
             while process.poll() is None:
                 self.check()
                 time.sleep(0.15)
-            if process.returncode:
+            if process.returncode not in allowed_exit_codes:
                 raise ValueError(f'外部処理が終了コード {process.returncode} で失敗しました。ログを確認してください')
         finally:
             if process.poll() is None:
@@ -183,3 +189,4 @@ class Task:
             self.state.update(process_pid=None, process_identity=None)
             self.persist()
         self.check()
+        return process.returncode

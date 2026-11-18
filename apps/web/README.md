@@ -1,6 +1,6 @@
 # ATD 共通 Web アプリ
 
-Notebook の Chrome から使う React + TypeScript / Vite と FastAPI のローカルアプリ。Map・Transfer・Live・Input・車両設定を同じ画面構成で扱う。Jetson ではブラウザ・Web frontend を起動せず、観測・設定用の ROS bridge と入力ノードを実行する。
+Notebook の Chrome から使う React + TypeScript / Vite と FastAPI のローカルアプリ。地図・転送・車両校正・ライブ・コントローラ・車両設定を扱う。Jetson では観測・設定用の ROS bridge と入力ノードを実行する。
 
 ## 起動
 
@@ -11,7 +11,7 @@ Docker 設定を更新した場合は、利用中の処理を終了してイメ�
 # Notebook のホスト: Docker を起動・入室（初回・設定変更時は --build）
 ./scripts/dev.sh --build
 # ここから Notebook の Docker 内。初回・自作package更新時に実行
-atd-build --packages-up-to atd_mapping
+atd-build --packages-up-to atd_mapping atd_vehicle_calibration
 atd-web
 ```
 
@@ -19,7 +19,7 @@ atd-web
 
 ```bash
 # Notebook の Docker 内
-atd-web check                     # Web / Raceline環境、公式ROS packageとatd_mappingを確認
+atd-web check                     # Web / Raceline 環境と、地図作成・車両校正用の ROS package を確認
 atd-web build                     # frontend を明示的に再build
 atd-web dev                       # 開発用 UI: http://127.0.0.1:5173
 atd-web --port 8769                # 通常 UI / API の port を変更
@@ -30,7 +30,11 @@ atd-web --dry-run                 # 起動予定を表示
 
 コンテナ・センサ・車両・記録はこの入口では自動起動しない。API は loopback 待受。通常利用はビルド済み frontend と API を同じ origin で配信する。
 
-公式 package の apt 導入だけでは、自作の `atd_mapping` は build されない。上記の ROS build は Notebook の workspace で初回に必要で、`atd-web` が自動で代替する処理ではない。`atd-web check` は ROS と workspace の setup を読み込んで package の導入状態を確認する。環境や package が未準備なら `FAIL` と表示する。
+初回は上記の ROS build で Notebook の workspace に `atd_mapping` と `atd_vehicle_calibration` を準備する。`atd-web check` は ROS と workspace の setup を読み込んで package の導入状態を確認する。環境や package が未準備なら `FAIL` と表示する。
+
+## 車両校正
+
+「データ転送」で手動走行の bag を受信したら、「この bag を車両校正へ」→「解析を開始」と進む。Notebook が連続した VO 軌跡を準備し、プロポ入力・IMU と同期して速度、加速度、操舵応答を求める。同じ走行から作成した軌跡を再利用できる。進行中のログ、過去の解析、応答グラフと CSV／JSON をこの画面から確認できる。[記録から解析までの操作](../../docs/vehicle_calibration.md)
 
 ## Map
 
@@ -142,6 +146,7 @@ Jetson で `./scripts/build.sh --packages-up-to atd_bringup` 後、`./scripts/br
 | `../../ros2_ws/src/atd_sensors/` | D455の実機対応モード照会・TUI・検査付き起動 |
 | `../../ros2_ws/src/atd_bringup/` | D455・車体TF・入力監視の統合起動 |
 | `../../ros2_ws/src/atd_recording/` | Joy・プロポのイベントから共通のrosbag2 recorderを管理し、MCAPと終了結果を確認 |
+| `../../ros2_ws/src/atd_vehicle_calibration/` | Notebook の bag・VO 軌跡から速度・加速度・操舵応答を解析 |
 | `../../ros2_ws/src/atd_interfaces/` | 正規化した運転要求・操作イベントの ROS message 定義 |
 
 Docker の追加 apt 依存は [dependencies.apt](../../docker/dependencies.apt)、追加処理は [Dockerfile.atd](../../docker/Dockerfile.atd)。cuVSLAM・公式 mapping・visual mapping・VGL の apt package を使う。Node / pnpm と Web 用 Python 環境は Notebook 専用で、Jetson の通常起動では Web 依存を同期しない。

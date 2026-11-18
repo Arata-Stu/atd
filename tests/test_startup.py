@@ -227,6 +227,26 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ATD_RESULT=rmw_fastrtps_cpp|read|unset", result.stdout)
 
+    def test_interactive_rc_does_not_repeat_system_initialization(self):
+        self.assertEqual(self.run_hook().returncode, 0)
+        system_rc = self.root / 'system.bashrc'
+        system_rc.write_text('printf "SYSTEM_GUIDANCE\\n"\n')
+        # Ubuntu Bash のシステムrc→--rcfileという順序を再現する。
+        # ホストの /etc は変更せず、ATD側の明示sourceだけをfixtureへ向ける。
+        (self.config / 'bashrc').write_text(
+            BASHRC.read_text().replace('/etc/bash.bashrc', str(system_rc)))
+        startup = self.root / 'ubuntu-startup.bash'
+        startup.write_text('source "$ATD_TEST_SYSTEM_RC"\nsource "$ATD_DDS_CONFIG_DIR/bashrc"\n')
+        result = subprocess.run(
+            ['/bin/bash', '--noprofile', '--rcfile', str(startup), '-i'],
+            input='printf "ATD_RESULT=%s\\n" "$RMW_IMPLEMENTATION"\nexit\n',
+            env={**self.env, 'ATD_TEST_SYSTEM_RC': str(system_rc)},
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count('SYSTEM_GUIDANCE'), 1)
+        self.assertIn('ATD_RESULT=rmw_fastrtps_cpp', result.stdout)
+
     def test_shell_without_runtime_configuration_fails(self):
         result = subprocess.run(["/bin/bash", str(SHELL), "true"], env=self.env,
                                 capture_output=True, text=True)

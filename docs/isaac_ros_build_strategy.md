@@ -162,6 +162,7 @@ Fast DDS は `rmw_fastrtps_cpp` とし、独自 UDPv4 transport の interface、
 既定 transport を無効にし、XML を使うため `ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT` とする。
 Docker ENV は `docker exec` にも既定値を渡し、`BASH_ENV=/etc/atd/dds.env.sh` と専用シェルで ATD 環境を読み込む。
 対話用の `atd-shell` はホストから共有される旧 `.bashrc` を読み込まない。追加ターミナルにも通常の `/bin/bash` ではなく `atd-shell` を使用する。
+Ubuntu の対話 Bash が先に読む `/etc/bash.bashrc` は、ATD の専用 rc から重ねて source しない。sudo 案内などのシステム初期化の二重実行を防ぐ。[Ubuntu Bash の起動処理](https://git.launchpad.net/ubuntu/+source/bash/plain/shell.c?h=ubuntu/noble)と [SYS_BASHRC の設定](https://git.launchpad.net/ubuntu/+source/bash/plain/debian/patches/deb-bash-config.diff?h=ubuntu/noble)を参照する。
 
 上流 CLI の host network は維持する。XML による制限の実装と、実機での DDS 通信範囲の検証完了は区別する。
 Foxglove Bridge は導入のみで、公開 topic・待受・書込み機能の設定と接続検証は後工程で行う。

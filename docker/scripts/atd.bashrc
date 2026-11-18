@@ -1,8 +1,7 @@
 # ATD 専用の対話 Bash 設定。ホストの ~/.bashrc / ~/.profile は source しない。
 if [[ $- == *i* ]]; then
-    if [[ -r /etc/bash.bashrc ]]; then
-        source /etc/bash.bashrc
-    fi
+    # Ubuntu の対話 Bash は --rcfile より先に /etc/bash.bashrc を読む。
+    # ここで再度 source すると sudo 案内などのシステム初期化が重複する。
     if [[ -r /usr/share/bash-completion/bash_completion ]]; then
         source /usr/share/bash-completion/bash_completion
     fi

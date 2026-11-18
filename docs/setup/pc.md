@@ -76,20 +76,34 @@ ROS package が見つかることは、実 D455 の動作や bag 取得の成功
 
 ### 旧版を purge 済みの場合
 
-Notebook ホストで apt の一覧を更新し、インストール候補と配布元を確認する。
+Ubuntu 24.04 / amd64 の Notebook で `Unable to locate package isaac-ros-cli` が出たときは、apt の索引にパッケージが見えていない。NVIDIA 公式の署名鍵と `release-5 noble main` を登録し、索引を更新して 5.x 系の最新 CLI をインストールする。ATD の標準セットアップが登録する `release-5.0` は 5.0 系を対象とする。[NVIDIA の apt 配布元登録手順](https://nvidia-isaac-ros.github.io/v/release-5.0/getting_started/index.html#configure-isaac-ros-apt-repository)
 
 ```bash
-sudo apt update && apt-cache policy isaac-ros-cli
+(
+  set -e -o pipefail
+  sudo apt-get install -y ca-certificates curl gnupg
+
+  repo=https://isaac.download.nvidia.com/isaac-ros
+  keyring=/usr/share/keyrings/nvidia-isaac-ros.gpg
+  tmp_key=$(mktemp)
+  trap 'rm -f -- "$tmp_key"' EXIT
+  curl -fsSL "$repo/repos.key" | gpg --batch --dearmor > "$tmp_key"
+  sudo install -m 0644 "$tmp_key" "$keyring"
+
+  sources=/etc/apt/sources.list.d/nvidia-isaac-ros.list
+  entry="deb [signed-by=$keyring] $repo/release-5 noble main"
+  grep -Fxq "$entry" "$sources" 2>/dev/null || printf '%s\n' "$entry" | sudo tee -a "$sources"
+
+  sudo apt-get --error-on=any update
+  apt-cache policy isaac-ros-cli
+  sudo apt-get install isaac-ros-cli
+)
 ```
 
-Isaac ROS 5.x の最新マイナー版を使う場合、候補の配布元は NVIDIA の `release-5 noble/main`。ATD の標準セットアップが登録する `release-5.0 noble/main` は 5.0 系の更新を提供する。`release-5` が一覧にない場合は、公式手順の **x86 (Ubuntu 24.04 Noble) → Latest Minor Version (release-5)** で登録してから一覧を更新する。[NVIDIA の apt 配布元登録手順](https://nvidia-isaac-ros.github.io/v/release-5.0/getting_started/index.html#configure-isaac-ros-apt-repository)
-
-NVIDIA の候補を確認したら、ATD の clone 直下で実行する。
+`apt-cache policy` で NVIDIA の `release-5 noble/main` と候補版を確認できる。インストール成功後、Notebook の ATD の clone 直下で実行する。
 
 ```bash
-sudo apt install isaac-ros-cli &&
-  ./scripts/setup.sh --action isaac &&
-  ./scripts/dev.sh --build
+./scripts/setup.sh --action isaac && ./scripts/dev.sh --build
 ```
 
 ### 旧版がインストールされている場合

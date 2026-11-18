@@ -71,6 +71,13 @@ class CalibrationRun(Strict):
     reference_run: str | None = None
 
 
+class AdoptCalibration(Strict):
+    revision: int = Field(ge=1)
+    run_id: str
+    proposal_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    fields: list[str] = Field(min_length=1, max_length=4)
+
+
 class Build(Strict):
     id: str
     bag: str
@@ -152,6 +159,20 @@ def create_app(record_root=None, result_root=None, static_dir=None):
         payload = calibration.payload(store, body.model_dump(exclude_none=True))
         return jobs.start('calibration', payload, calibration.resources(payload), '車両校正: ' + payload['bag'])
 
+    @app.get('/api/calibration/runs/{run_id}/candidates')
+    def calibration_candidates(run_id: str):
+        return calibration.candidates(store, run_id)
+
+    @app.get('/api/calibration/runs/{run_id}/feedforward.json')
+    def calibration_feedforward(run_id: str, proposal_sha256: str):
+        proposal = calibration.reviewed_candidates(store, run_id, proposal_sha256)
+        table = proposal['feedforward']
+        if not table['usable']:
+            raise ValueError(table['reason'])
+        return JSONResponse(content=dict(schema='atd.throttle_feedforward.v1', run_id=run_id, bag=proposal['bag'],
+                                         proposal_sha256=proposal_sha256, source=proposal['source'], **table),
+                            headers={'Content-Disposition': f'attachment; filename="throttle-ff-{run_id}.json"'})
+
     @app.get('/api/calibration/runs/{run_id}/{filename}')
     def calibration_artifact(run_id: str, filename: str):
         path = calibration.artifact(store, run_id, filename)
@@ -182,6 +203,20 @@ def create_app(record_root=None, result_root=None, static_dir=None):
         with jobs.registry():
             jobs.require_available(['map:' + key])
             return store.save_map(key, body)
+
+    @app.post('/api/maps/{key}/raceline-calibration')
+    def adopt_calibration(key: str, body: AdoptCalibration):
+        proposal = calibration.reviewed_candidates(store, body.run_id, body.proposal_sha256)
+        adoption = calibration.selected_limits(proposal, body.fields)
+        with jobs.registry():
+            jobs.require_available(['map:' + key])
+            return store.apply_raceline_calibration(key, body.revision, adoption)
+
+    @app.delete('/api/maps/{key}/raceline-calibration')
+    def remove_calibration(key: str, revision: int):
+        with jobs.registry():
+            jobs.require_available(['map:' + key])
+            return store.apply_raceline_calibration(key, revision, None)
 
     @app.post('/api/maps/{key}/generate')
     def generate(key: str, body: Generate):

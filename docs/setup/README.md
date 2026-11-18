@@ -109,7 +109,14 @@ CLI 設定テンプレートは `docker/isaac_ros/`、Docker の生成物は `<A
 
 ### ホストとコンテナからの Git 更新
 
-通常の `git clone` で作った checkout をホストとコンテナの両方から更新できる。新規起動・再接続時の対話シェルは `/workspaces/atd` で開く。そこで `git pull --ff-only` を実行する。他の場所で作業中なら `git -C /workspaces/atd pull --ff-only` を使う。どちらで pull しても同じ作業ツリーに反映される。ROS package の更新後は必要な package を build し、イメージや起動設定の更新後はホストで `./scripts/dev.sh --build` してコンテナを再作成する。
+通常の `git clone` で作った checkout をホストとコンテナの両方から更新できる。新規起動・再接続時の対話シェルは `/workspaces/atd` で開く。そこで `git pull --ff-only` を実行する。他の場所で作業中なら `git -C /workspaces/atd pull --ff-only` を使う。どちらで pull しても同じ作業ツリーに反映される。
+
+| 更新したもの | 反映方法 |
+| --- | --- |
+| `docker/scripts/atd-{web,build,vgl,shell}.sh`、`atd.bashrc` | 次にそのコマンドやシェルを開くと反映される。例として、実行中の Web サーバーは終了して `atd-web` を再実行する。 |
+| 起動 hook、USB serial の初期化、起動時の ROS 用 Python 同期 | 利用中の処理を終了してコンテナを停止し、ホストで `./scripts/dev.sh` を実行する。同じイメージで初期化が走る。 |
+| Dockerfile、apt 依存・導入スクリプト、ビルド時にも使う DDS 設定、固定入口 | コンテナを停止し、ホストで `./scripts/dev.sh --build` を実行する。以前のイメージから今回の固定入口へ移るときも各ホストで一度必要。 |
+| ROS package | コンテナ内で `./scripts/build.sh --packages-up-to <package>` を実行する。 |
 
 ホストで `unable to access '~/.gitconfig': Is a directory` が出た場合は、ログインユーザーで次を実行する。上流の既定引数は `~/.gitconfig` を `-v` で共有するため、元ファイルがない状態で起動すると Docker が同名のディレクトリを作る場合がある。次の例は既存のディレクトリを内容ごと退避し、所有者だけが読み書きできる空の設定ファイルを用意する。[Docker の bind mount](https://docs.docker.com/engine/storage/bind-mounts/#syntax)
 

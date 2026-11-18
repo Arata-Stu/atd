@@ -35,6 +35,20 @@ test('Restored settings retain the two allowed optimizers and fixed region metho
   assert.equal(restoredSettings({ ...blank, lines: { raceline: { points: [], settings: { optimizer: 'mincurv_iqp' } } } }, 'raceline').optimizer, 'mincurv_iqp');
   assert.equal(restoredSettings(blank, 'centerline').centerline_method, 'region');
 });
+test('only Raceline restores adopted fields, including before its first generation', () => {
+  const selection = { run_id: 'drive', limits: { curvature_limit: .81, accel: .56 } };
+  const map = { ...blank, raceline_calibration: selection, lines: {
+    raceline: { settings: { accel: 1.5, decel: .4, optimizer: 'mincurv_iqp' } },
+    centerline: { settings: { accel: .7 } },
+  } };
+  assert.equal(restoredSettings(map, 'raceline').curvature_limit, .81);
+  assert.equal(restoredSettings(map, 'raceline').accel, .56);
+  assert.equal(restoredSettings(map, 'raceline').decel, .4);
+  assert.equal(restoredSettings(map, 'raceline').optimizer, 'mincurv_iqp');
+  assert.equal(restoredSettings({ ...map, lines: {} }, 'raceline').accel, .56);
+  assert.equal(restoredSettings(map, 'centerline').accel, .7);
+  assert.equal(restoredSettings(map, 'custom').accel, restoredSettings(blank, 'custom').accel);
+});
 test('Visualization pointcloud reports its scope and only a valid out-of-tolerance tail age', () => {
   const notes = captureCloudNotes({ point_scope: 'last_nonempty_visualization_cloud_not_guaranteed_full_map', cloud_within_tail_tolerance: false, cloud_tail_age_s: 2.346 });
   assert.equal(notes.scope, '可視化点群（全地図の網羅性は未確認）');

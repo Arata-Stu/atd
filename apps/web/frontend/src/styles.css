@@ -54,3 +54,27 @@
 }
 .calibration-pull-link { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
 .calibration-pull-link span { overflow-wrap: anywhere; }
+.calibration-candidates { margin: 16px 0; border: 1px solid var(--line); border-radius: 7px; }
+.calibration-candidates > summary { padding: 12px 15px; cursor: pointer; color: #24543c; background: #f2f7f1; font-size: 14px; font-weight: 600; }
+.calibration-candidates > p, .calibration-candidates > .inline-note { margin: 12px 15px; }
+.candidate-section { min-width: 0; padding: 14px 15px; border-top: 1px solid var(--line); }
+.candidate-section h4 { margin: 0 0 12px; font-size: 14px; color: #284d37; }
+.candidate-section p, .candidate-section small { margin: 6px 0; line-height: 1.6; font-size: 12px; color: #475c4d; }
+.candidate-section .field { max-width: 38rem; }
+.candidate-limits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 10px 0 14px; gap: 10px; }
+.candidate-limit { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 5px; }
+.candidate-limit > label { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.candidate-limit > label > strong { margin-left: auto; font-variant-numeric: tabular-nums; }
+.candidate-limit input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px; }
+.candidate-limit small { display: block; font-size: 11px; }
+.interval-evidence > summary { color: #315e43; cursor: pointer; font-size: 12px; }
+.candidate-table-wrap { overflow: auto; max-height: 18rem; margin: 8px 0; }
+.candidate-table-wrap table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.candidate-table-wrap th, .candidate-table-wrap td { padding: 6px 9px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+.candidate-table-wrap th { position: sticky; top: 0; background: #f3f7f1; color: #354f3e; font-weight: 600; }
+@media (max-width: 900px) { .candidate-limits { grid-template-columns: minmax(0, 1fr); } }
+.adopted-limits { margin: 12px 0; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: #f5f8f4; overflow-wrap: anywhere; }
+.adopted-limits h4 { margin: 0; font-size: 12px; }
+.adopted-limits dl { margin: 8px 0; font-size: 11px; }
+.adopted-limits dl div { display: flex; justify-content: space-between; gap: 6px; }
+.adopted-limits dd { margin: 0; font-variant-numeric: tabular-nums; }

@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,12 +11,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "docker/scripts/10-atd-runtime.sh"
+ENTRYPOINT = ROOT / "docker/scripts/atd-entrypoint.sh"
+DISPATCH = ROOT / "docker/scripts/atd-dispatch.sh"
 SHELL = ROOT / "docker/scripts/atd-shell.sh"
 BASHRC = ROOT / "docker/scripts/atd.bashrc"
-PYTHON_HELPER = ROOT / "docker/scripts/atd-python.sh"
-BUILD_HELPER = ROOT / "docker/scripts/atd-build.sh"
-PYTHON_ENV_LIBRARY = ROOT / "docker/scripts/lib/python-environment.sh"
-VGL_HELPER = ROOT / "docker/scripts/atd-vgl.sh"
 
 
 class StartupTests(unittest.TestCase):
@@ -26,10 +25,6 @@ class StartupTests(unittest.TestCase):
         self.runtime = self.root / "runtime with spaces"
         self.config = self.root / "config with spaces"
         self.image = self.root / "image with spaces"
-        self.baked_shell = self.root / "image shell"
-        self.baked_python = self.root / "image python helper"
-        self.baked_build = self.root / "image build helper"
-        self.baked_vgl = self.root / 'image vgl helper'
         self.bin = self.root / "bin"
         self.bin.mkdir()
         (self.runtime / "scripts").mkdir(parents=True)
@@ -37,20 +32,15 @@ class StartupTests(unittest.TestCase):
         self.image.mkdir()
         (self.runtime / "Dockerfile.atd").write_text("ARG BASE_IMAGE\n")
         (self.image / "Dockerfile.atd").write_text("ARG BASE_IMAGE\n")
+        (self.image / "scripts").mkdir()
+        for launcher in (DISPATCH, ENTRYPOINT):
+            for directory in (self.runtime, self.image):
+                shutil.copy2(launcher, directory / "scripts" / launcher.name)
         (self.runtime / "scripts/10-atd-runtime.sh").write_text(HOOK.read_text())
-        (self.runtime / "scripts/atd-shell.sh").write_text(SHELL.read_text())
+        shutil.copy2(SHELL, self.runtime / "scripts/atd-shell.sh")
         (self.runtime / "scripts/atd.bashrc").write_text(BASHRC.read_text())
-        (self.runtime / "scripts/atd-python.sh").write_text(PYTHON_HELPER.read_text())
-        (self.runtime / "scripts/atd-build.sh").write_text(BUILD_HELPER.read_text())
-        (self.runtime / "scripts/lib").mkdir()
-        (self.runtime / "scripts/lib/python-environment.sh").write_text(PYTHON_ENV_LIBRARY.read_text())
-        (self.image / "scripts/lib").mkdir(parents=True)
-        (self.image / "scripts/lib/python-environment.sh").write_text(PYTHON_ENV_LIBRARY.read_text())
-        (self.runtime / 'scripts/atd-vgl.sh').write_text(VGL_HELPER.read_text())
-        self.baked_shell.write_text(SHELL.read_text())
-        self.baked_python.write_text(PYTHON_HELPER.read_text())
-        self.baked_build.write_text(BUILD_HELPER.read_text())
-        self.baked_vgl.write_text(VGL_HELPER.read_text())
+        for command in ('atd-python', 'atd-shell', 'atd-web'):
+            (self.bin / command).symlink_to(DISPATCH)
         (self.config / "bashrc").write_text(BASHRC.read_text())
         self.log = self.root / "calls"
         (self.bin / "id").write_text('#!/bin/sh\nprintf "%s\\n" "${ATD_TEST_UID:-0}"\n')
@@ -86,10 +76,8 @@ class StartupTests(unittest.TestCase):
             "ATD_RUNTIME_DIR": str(self.runtime),
             "ATD_DDS_CONFIG_DIR": str(self.config),
             "ATD_IMAGE_DIR": str(self.image),
-            "ATD_SHELL_PATH": str(self.baked_shell),
-            "ATD_PYTHON_PATH": str(self.baked_python),
-            "ATD_BUILD_PATH": str(self.baked_build),
-            "ATD_VGL_PATH": str(self.baked_vgl),
+            "ATD_SHELL_PATH": str(self.bin / "atd-shell"),
+            "ATD_PYTHON_PATH": str(self.bin / "atd-python"),
             "ATD_RUNTIME_REV": "fixture-v1",
             "ATD_TEST_LOG": str(self.log),
             "RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
@@ -101,7 +89,7 @@ class StartupTests(unittest.TestCase):
             ["/bin/bash", "-c", command or
              'task_hook=$1; set -- /bin/bash; source "$task_hook"; printf "result=%s|%s|%s\\n" '
              '"$1" "$RMW_IMPLEMENTATION" "${CYCLONEDDS_URI-unset}"',
-             "startup-test", str(HOOK)],
+             "startup-test", str(ENTRYPOINT)],
             env={**self.env, **(env or {})}, capture_output=True, text=True,
         )
 
@@ -111,7 +99,7 @@ class StartupTests(unittest.TestCase):
         result = self.run_hook()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text(), "dependencies\nserial\ndds\npython\n")
-        self.assertIn(f"result={self.baked_shell}|rmw_fastrtps_cpp|unset", result.stdout)
+        self.assertIn(f"result={self.bin / 'atd-shell'}|rmw_fastrtps_cpp|unset", result.stdout)
         self.assertEqual((self.config / "runtime.ready").read_text(), "fixture-v1\n")
 
     def test_failure_stops_entrypoint_and_removes_stale_marker(self):
@@ -135,10 +123,8 @@ class StartupTests(unittest.TestCase):
         self.assertFalse(self.log.exists())
 
     def test_image_specific_changes_require_rebuild_before_tasks(self):
-        for relative in ("Dockerfile.atd", "scripts/10-atd-runtime.sh", "scripts/atd-shell.sh",
-                         "scripts/atd.bashrc", "scripts/atd-python.sh", "scripts/atd-build.sh",
-                         "scripts/lib/python-environment.sh", "scripts/atd-vgl.sh"):
-            with self.subTest(path=relative):
+        for relative in ("Dockerfile.atd", "scripts/atd-entrypoint.sh", "scripts/atd-dispatch.sh"):
+            with self.subTest(file=relative):
                 path = self.runtime / relative
                 original = path.read_text()
                 path.write_text(original + "\n# changed since image build\n")
@@ -150,12 +136,44 @@ class StartupTests(unittest.TestCase):
                 self.assertFalse((self.config / "runtime.ready").exists())
                 path.write_text(original)
 
-    def test_runtime_dependency_helper_can_change_without_rebuild(self):
-        helper = self.runtime / "scripts/install-dependencies.sh"
-        helper.write_text(helper.read_text() + 'printf "new dependency helper\\n"\n')
+    def test_next_start_reads_updated_hook_from_checkout(self):
+        helper = self.runtime / "scripts/10-atd-runtime.sh"
+        with helper.open("a") as stream:
+            stream.write('printf "updated mounted startup\\n"\n')
         result = self.run_hook()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("new dependency helper", result.stdout)
+        self.assertIn("updated mounted startup", result.stdout)
+
+    def test_installed_command_runs_edited_checkout_with_original_arguments(self):
+        command = self.runtime / "scripts/atd-web.sh"
+        for version in ("first", "second"):
+            command.write_text(f'#!/bin/bash\nprintf "%s|%s|%s\\n" {version} "$1" "$2"\n')
+            command.chmod(0o755)
+            result = subprocess.run([str(self.bin / "atd-web"), "serve", "value with spaces"],
+                                    env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, f"{version}|serve|value with spaces\n")
+
+    def test_missing_mounted_command_fails_even_if_snapshot_has_a_copy(self):
+        fallback = self.image / "scripts/atd-web.sh"
+        fallback.write_text('#!/bin/bash\nprintf "image snapshot\\n"\n')
+        result = subprocess.run([str(self.bin / "atd-web")], env=self.env,
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("image snapshot", result.stdout)
+
+    @unittest.skipIf(Path("/workspaces/atd").is_dir(), "実際の checkout がマウントされている")
+    def test_entrypoint_and_commands_use_image_snapshot_without_a_checkout(self):
+        shutil.copytree(self.runtime, self.image, dirs_exist_ok=True)
+        (self.image / "scripts/atd-web.sh").write_text('printf "image snapshot\\n"\n')
+        environment = {"ATD_RUNTIME_DIR": "", "ATD_RUNTIME_REV": ""}
+        result = self.run_hook(environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.config / "runtime.ready").read_text(), "image\n")
+        command = subprocess.run([str(self.bin / "atd-web")], env={**self.env, **environment},
+                                 capture_output=True, text=True)
+        self.assertEqual(command.returncode, 0, command.stderr)
+        self.assertEqual(command.stdout, "image snapshot\n")
 
     def test_wrong_uv_version_stops_before_dependencies_and_ready(self):
         (self.config / 'runtime.ready').write_text('stale\n')

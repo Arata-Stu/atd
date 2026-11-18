@@ -7,12 +7,16 @@ export interface GenerationSettings {
   vehicle_length: number; rear_axle_to_rear: number; curvature_limit: number;
   max_speed: number; lateral_accel: number; accel: number; decel: number;
 }
-export interface Line { points: Point[]; speeds?: number[]; method?: string; settings?: Partial<GenerationSettings>; [key: string]: unknown }
+export type RacelineLimitKey = 'curvature_limit' | 'accel' | 'decel' | 'lateral_accel';
+export interface RacelineCalibration {
+  run_id: string; bag: string; proposal_sha256: string; limits: Partial<Record<RacelineLimitKey, number>>; applied_at: number;
+}
+export interface Line { points: Point[]; speeds?: number[]; method?: string; settings?: Partial<GenerationSettings>; raceline_calibration?: RacelineCalibration; [key: string]: unknown }
 export interface MapSource { kind?: string; bag?: string; pointcloud_status?: string; [key: string]: unknown }
 export interface MapDocument {
   id: string; title: string; revision: number; frame: string; closed: boolean;
   left: Point[]; right: Point[]; custom: Point[]; lines: Record<string, Line>;
-  source?: MapSource;
+  source?: MapSource; raceline_calibration?: RacelineCalibration;
   [key: string]: unknown;
 }
 export interface Cloud { points: [number, number, number][]; frame: string; source_count: number; truncated: boolean; status?: string; message?: string; trajectory?: unknown; provenance?: unknown }

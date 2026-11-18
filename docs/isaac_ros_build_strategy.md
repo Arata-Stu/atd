@@ -143,20 +143,19 @@ D455 の IR・RGB・IMU・Depth の利用候補は維持し、実際の起動、
 
 Dockerfile は既知の共通依存を同じ `install-dependencies.sh` で事前導入し、Fast DDS の設定と root hook を配置する。
 上流 CLI の `--rm` により終了後に新規コンテナを作成する場合でも、既知の依存を毎回インストールし直さないためである。
-root 起動 hook `10-atd-runtime.sh` は、mount された `/workspaces/atd/docker` を優先する。イメージ内の起動スクリプトと固定版 uv `0.13.8` を確認し、次の処理を実行する。
+イメージの固定入口 `atd-entrypoint.sh` が、mount された `/workspaces/atd/docker/scripts/10-atd-runtime.sh` を root のシェルで読み込む。hook はイメージの Dockerfile・固定入口との整合と uv `0.13.8` を確認する。
 
 1. `install-dependencies.sh` が依存一覧を検査し、`dpkg-query` で不足を調べる。不足時だけ `apt-get update` と `apt-get install` を実行する。
-2. `configure-dds.sh` が `/etc/atd/fastdds.xml` と `/etc/atd/dds.env.sh` を配置する。
+2. `configure-serial-access.sh` が Jetson の USB serial アクセスを準備し、`configure-dds.sh` が `/etc/atd/fastdds.xml` と `/etc/atd/dds.env.sh` を配置する。
 3. `gosu admin` 経由で ROS 2 用の追加 Python 依存を同期する。学習用環境は明示操作で準備する。
 4. 環境を読み込み、すべての処理の成功後に `/etc/atd/runtime.ready` へ起動時の構成識別子を記録する。
 
 依存導入や DDS 設定に失敗した場合は起動を失敗させる。毎回の apt upgrade は実行しない。
 依存一覧のイベントカメラ関連名は拒否する。現行 ATD にはこれらの導入処理はなく、参照先 kart の関連 SDK・driver を移植しない。
 
-上流 CLI で Dockerfile の `COPY` 元の変更がイメージ識別へ反映されない経路にも対応する。
-`dev.sh` は Dockerfile、依存一覧、`docker/scripts/`、`docker/middleware_profiles/`、`docker/python/` の入力を hash し、`.cache/docker/<revision>/Dockerfile.atd` に revision コメントを加えた生成版を配置する。
-このディレクトリを検索先の先頭に置き、`context_overrides.atd: ../../../docker` で元の `docker/` を build context として維持する。生成物は Git 管理対象外とする。
-起動 hook は Dockerfile・hook・専用シェル・bashrc のプロジェクト側とイメージ内実体も比較し、不一致なら `--build` での再構築を要求する。
+`dev.sh` が生成する `.cache/docker/<runtime revision>/Dockerfile.atd` には、Dockerfile、apt の依存一覧と導入スクリプト、DDS の生成スクリプトと XML、固定入口2本の内容を hash したコメントを付ける。上流 CLI はこの Dockerfile を使ってイメージを識別する。build context は `context_overrides.atd: ../../../docker` で元の `docker/` を指定する。
+
+`atd-shell`、`atd-build`、`atd-web`、`atd-vgl`、`atd-python` は、固定入口 `atd-dispatch.sh` からマウント中の checkout の実装を呼ぶ。checkout を付けずにイメージを使う場合は、ビルド時点で `/opt/atd` に保存した実装を使う。起動時の構成検査には別の `ATD_RUNTIME_REV` を使う。例えば `atd-web.sh` の編集は次回実行で反映され、USB serial の初期化や `atd-python` を使う ROS 環境同期の変更はコンテナを再作成すると反映される。操作別の手順は[セットアップ手順](setup/README.md#git-pull)を参照する。
 
 Fast DDS は `rmw_fastrtps_cpp` とし、独自 UDPv4 transport の interface、探索 peer、unicast locator を `127.0.0.1` に限定する。
 既定 transport を無効にし、XML を使うため `ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT` とする。
@@ -215,6 +214,7 @@ source build の具体例として、Isaac ROS 5 の `isaac_ros_cuvslam` は cuV
 - 起動・依存・DDS の検証済み: 自動テストで CLI・Docker・apt を偽物に置き換え、初期化の順序、失敗時停止、不足分導入、再接続・revision / ready の検査、生成 Dockerfile、ホスト rc の回避、ROS 環境と DDS の読込みを確認した。テストは [tests/](../tests/) を参照する。
 - XML の検証済み: `ATD_FASTDDS_XSD` に Fast DDS v3.6.2 の公式 `fastdds_profiles.xsd` を指定し、公式 XSD による受理を確認した。未指定の場合は XSD 検証を skip する。XML の受理確認と、実 ROS の探索・データ通信・外部パケット確認は区別する。
 - 生成 Dockerfile の模擬検証済み: 上流の `Config.load_shell_common_config` / `load_yaml`、`resolve_dockerfiles`、`generate_bake_dict` を使用し、生成版の優先探索、元 `docker/` への context 解決、DDS helper 更新による ATD 層・最終イメージ hash の変化、Isaac ROS / RealSense 層の選択・hash の維持を確認した。表示と YAML parser、Linux の CLI 探索先をローカルで代替した検証であり、実 Docker build ではない。
+- 公式 apt 版 CLI 2.7.0 のイメージ名計算に、テスト用 checkout で生成した Dockerfile を渡して確認した。`atd-web.sh` の編集ではイメージ・起動構成の hash とも維持し、USB serial 初期化の編集では起動構成のみ、`dependencies.apt` の編集では両方が変化した。実機での export 時間は未計測。
 - 現在の Mac ホストでは、保存先を一時ディレクトリに指定した `--dry-run` で `host: pc (auto)` と設定選択を確認した。Ubuntu PC / Jetson の実起動検証とは区別する。
 - 未実施: 対象ホストへの CLI 導入、実際の Docker build、ROS build / bag 再生、D455・Joy・車両 I/O、bridge 接続、実走行。
 - 現在の Mac では Docker デーモンへ接続できず、今回の Docker build・実コンテナ検証は実行できなかった。

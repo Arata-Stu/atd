@@ -31,21 +31,19 @@ RUN --mount=type=bind,from=atd_web_node,source=/usr/local,target=/mnt/atd-node,r
         npm install --global --ignore-scripts pnpm@11.25.0; \
     fi
 
-# 起動設定や Python lock の変更時にも、上の apt と Node の層を再利用する。
+# checkout をマウントせずに使う場合は、ビルド時のスクリプト・設定を使う。
 COPY Dockerfile.atd /opt/atd/Dockerfile.atd
 COPY scripts/ /opt/atd/scripts/
 COPY middleware_profiles/fastdds.xml /opt/atd/middleware_profiles/fastdds.xml
 COPY python/ /opt/atd/python/
 RUN bash /opt/atd/scripts/configure-dds.sh
 
-# 公式 workspace-entrypoint が root で source する hook。CLI 本体は変更しない。
-COPY --chmod=0755 scripts/10-atd-runtime.sh /usr/local/bin/scripts/entrypoint_additions/10-atd-runtime.sh
-COPY --chmod=0755 scripts/atd-shell.sh /usr/local/bin/atd-shell
-COPY --chmod=0755 scripts/atd-python.sh /usr/local/bin/atd-python
-COPY --chmod=0755 scripts/atd-build.sh /usr/local/bin/atd-build
-COPY --chmod=0755 scripts/atd-vgl.sh /usr/local/bin/atd-vgl
-COPY --chmod=0755 scripts/atd-web.sh /usr/local/bin/atd-web
-COPY scripts/atd.bashrc /etc/atd/bashrc
+# 通常の dev 環境では、固定入口からマウント中の checkout にある実装を呼ぶ。
+COPY --chmod=0755 scripts/atd-entrypoint.sh /usr/local/bin/scripts/entrypoint_additions/10-atd-runtime.sh
+RUN for command in atd-shell atd-python atd-build atd-vgl atd-web; do \
+        ln -s /opt/atd/scripts/atd-dispatch.sh "/usr/local/bin/$command" || exit 1; \
+    done \
+    && ln -s /opt/atd/scripts/atd.bashrc /etc/atd/bashrc
 
 # entrypoint での export だけでは docker exec へ継承されないため、既定値も記録する。
 # ATD 専用 shell ではホストの .bashrc を読み込まず、旧 Cyclone 設定との混在を防ぐ。

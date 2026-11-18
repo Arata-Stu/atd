@@ -36,7 +36,8 @@ export function completionUpdate(job: Job, previous: string | undefined, tracked
 }
 export function restoredSettings(doc: MapDocument, kind: LineKind): GenerationSettings {
   const saved = doc.lines[kind]?.settings;
-  const result = { ...DEFAULT_GENERATION_SETTINGS, ...saved, centerline_method: 'region' as const };
+  const adopted = kind === 'raceline' ? doc.raceline_calibration?.limits : undefined;
+  const result = { ...DEFAULT_GENERATION_SETTINGS, ...saved, ...adopted, centerline_method: 'region' as const };
   if (result.optimizer !== 'mincurv' && result.optimizer !== 'mincurv_iqp') result.optimizer = 'mincurv';
   return result;
 }

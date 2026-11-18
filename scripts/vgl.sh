@@ -331,7 +331,7 @@ try:
         sys.exit("VGL: ATD コンテナは停止中です")
     env = dict(item.split("=", 1) for item in container.get("Config", {}).get("Env", []) if "=" in item)
     if env.get("ATD_RUNTIME_API") != "1" or env.get("ATD_RUNTIME_REV") != sys.argv[1]:
-        sys.exit("VGL: コンテナの起動構成が古いか異なります。処理を終了後に dev.sh --build で再作成してください")
+        sys.exit("VGL: コンテナの起動構成が古いか異なります。処理を終了してコンテナを停止し、scripts/dev.sh で再作成してください。イメージの依存や固定入口も更新した場合は --build を指定してください")
     mounts = {mount["Destination"]: mount for mount in container.get("Mounts", [])}
     for destination, source in [("/workspaces/atd", sys.argv[2]), ("/data/results", sys.argv[3])]:
         mount = mounts.get(destination, {})

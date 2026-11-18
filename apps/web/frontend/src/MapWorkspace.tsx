@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, bytes } from './api';
-import type { Bag, CaptureOptions, Cloud, EditTarget, GenerationSettings, Job, LineKind, MapDocument } from './types';
+import type { Bag, CaptureOptions, Cloud, EditTarget, GenerationSettings, Job, LineKind, MapDocument, RacelineLimitKey } from './types';
 import { MapCanvas } from './MapCanvas';
 import { Field, Icon, Modal, Tag } from './workspace_ui';
 import { CaptureModal, PreparationPanel } from './MapPreparation';
@@ -13,12 +13,14 @@ interface Props { notify: Notice; onDirty: (value: boolean) => void; onJob: () =
 const BUILD_DEFAULTS = { id: '', bag: '', left_image: '/camera/camera/infra1/image_rect_raw', right_image: '/camera/camera/infra2/image_rect_raw', left_info: '/camera/camera/infra1/camera_info', right_info: '/camera/camera/infra2/camera_info', base_frame: 'base_link', left_frame: 'camera_infra1_optical_frame', right_frame: 'camera_infra2_optical_frame' };
 
 export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props) {
+  const [entry] = useState(() => new URLSearchParams(window.location.hash.split('?')[1]));
   const [maps, setMaps] = useState<MapDocument[]>([]), [bags, setBags] = useState<Bag[]>([]);
   const [doc, setDoc] = useState<MapDocument | null>(null), [cloud, setCloud] = useState<Cloud | null>(null);
   const [dirty, setDirty] = useState(false), [busy, setBusy] = useState(false), [target, setTarget] = useState<EditTarget>('left');
   const [mode, setMode] = useState<'select' | 'add' | 'pan'>('select'), [fitKey, setFitKey] = useState(0);
   const [visible, setVisible] = useState<Record<string, boolean>>({ centerline: true, raceline: true, custom: true, cloud: true });
-  const [settings, setSettings] = useState<GenerationSettings>(DEFAULT_GENERATION_SETTINGS), [kind, setKind] = useState<LineKind>('centerline');
+  const [settings, setSettings] = useState<GenerationSettings>(DEFAULT_GENERATION_SETTINGS);
+  const [kind, setKind] = useState<LineKind>(() => entry.get('line') === 'raceline' ? 'raceline' : entry.get('line') === 'custom' ? 'custom' : 'centerline');
   const [newId, setNewId] = useState(''), [showCreate, setShowCreate] = useState(false), [showBuild, setShowBuild] = useState(false), [showVgl, setShowVgl] = useState(false), [showCapture, setShowCapture] = useState(false);
   const [build, setBuild] = useState(BUILD_DEFAULTS), [modelDir, setModelDir] = useState('');
   const [capture, setCapture] = useState<CaptureOptions | null>(null), [captureLoading, setCaptureLoading] = useState(false), [captureError, setCaptureError] = useState('');
@@ -49,6 +51,14 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
     if (refit) setFitKey(value => value + 1);
   }, []);
   useEffect(() => { void refresh().catch(e => notify(e.message, true)); }, [refresh, notify]);
+  useEffect(() => {
+    const id = entry.get('map');
+    if (id) void reload(id, true).catch(e => notify(e.message, true));
+    return () => { ++loadSequence.current; };
+  }, [entry, reload, notify]);
+  useEffect(() => {
+    if (doc?.id) window.history.replaceState(null, '', '#map?' + new URLSearchParams({ map: doc.id, line: kind }));
+  }, [doc?.id, kind]);
   useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
   useEffect(() => { setCaptureBag(''); setCaptureModel(''); setCapture(null); setCaptureError(''); setShowCapture(false); }, [doc?.id]);
   useEffect(() => {
@@ -109,7 +119,8 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
     if (!doc || locked || editIssue) return;
     const from = forward ? redo.current : undo.current, to = forward ? undo.current : redo.current;
     const next = from.pop(); if (!next) return; to.push(doc); dirtyRef.current = true;
-    setDoc({ ...next, revision: doc.revision }); setDirty(true); setHistory([undo.current.length, redo.current.length]);
+    setDoc({ ...next, revision: doc.revision, raceline_calibration: doc.raceline_calibration });
+    setDirty(true); setHistory([undo.current.length, redo.current.length]);
   }
   async function save(): Promise<MapDocument> {
     if (!doc) throw Error('地図を選択してください');
@@ -125,9 +136,27 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
   function generate(nextKind: LineKind) {
     void run(async () => {
       const issue = generationIssue(doc, nextKind, cloud); if (issue) throw Error(issue);
-      const saved = await save(); setKind(nextKind);
-      await queue(`maps/${encodeURIComponent(saved.id)}/generate`, { kind: nextKind, revision: saved.revision, settings }, saved.id);
+      const saved = await save();
+      const nextSettings = kind === nextKind ? settings : restoredSettings(saved, nextKind);
+      setKind(nextKind); setSettings(nextSettings);
+      await queue(`maps/${encodeURIComponent(saved.id)}/generate`, { kind: nextKind, revision: saved.revision, settings: nextSettings }, saved.id);
       notify('ライン生成を開始しました。完了すると表示を更新します');
+    });
+  }
+  function clearCalibration() {
+    if (!doc || dirty || !doc.raceline_calibration) return;
+    const freed = Object.keys(doc.raceline_calibration.limits) as RacelineLimitKey[];
+    void run(async () => {
+      const saved = await api<MapDocument>(`maps/${encodeURIComponent(doc.id)}/raceline-calibration?revision=${doc.revision}`, undefined, 'DELETE');
+      docRef.current = saved; setDoc(saved);
+      const restored = restoredSettings(saved, 'raceline');
+      setSettings(current => {
+        const next = { ...current };
+        for (const key of freed) next[key] = restored[key];
+        return next;
+      });
+      await refresh();
+      notify('この地図の校正制限を解除しました');
     });
   }
   function startCapture() {
@@ -176,7 +205,7 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
           {nvidia && !!cloud?.points.length && <div className="cloud-scope-note"><p className="small-note">{cloudNotes.scope}</p>{cloudNotes.tail && <p className="small-note">{cloudNotes.tail}</p>}</div>}
           {!nvidia && <details><summary>背景点群をJSONから読み込む</summary><label className="button full file-button"><Icon name="upload" size={15}/>点群JSONを選択<input type="file" accept="application/json,.json" disabled={locked} onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void run(() => importCloud(file)); }}/></label><p className="small-note">map座標・メートル単位の [x,y,z] 点群を使います。</p></details>}
         </div>
-        <LineSettingsPanel doc={doc} kind={kind} settings={settings} busy={locked || !!editIssue} issue={generationIssue(doc, kind, cloud)} onKind={value => { setKind(value); setSettings(restoredSettings(doc, value)); }} onSettings={setSettings} onGenerate={generate} dirty={dirty}/>
+        <LineSettingsPanel doc={doc} kind={kind} settings={settings} busy={locked || !!editIssue} issue={generationIssue(doc, kind, cloud)} onKind={value => { setKind(value); setSettings(restoredSettings(doc, value)); }} onSettings={setSettings} onGenerate={generate} onClearCalibration={clearCalibration} dirty={dirty}/>
       </> : <div className="properties-empty"><Icon name="settings" size={28}/><p>地図を選択すると<br/>準備状態と編集設定が表示されます。</p><div className="workflow-step"><b>01</b><span>cuVSLAM地図を作成</span></div><div className="workflow-step"><b>02</b><span>VGL地図を準備</span></div><div className="workflow-step"><b>03</b><span>保存地図から点群を取得</span></div><div className="workflow-step"><b>04</b><span>HDMap・走行ラインを編集</span></div></div>}
     </aside>
     {showCreate && <Modal title="空のHDMapを作成" subtitle="地図IDを指定して、境界の手動編集から始めます。" onClose={() => setShowCreate(false)}><form onSubmit={e => { e.preventDefault(); void run(async () => { if (dirty && !window.confirm('未保存の編集を破棄して新しいHDMapを開きますか？')) return; const created = await api<MapDocument>('maps', { id: newId, title: newId }); await refresh(); setShowCreate(false); await reload(created.id, true); }); }}><Field label="地図ID" hint="英数字、ハイフン、アンダースコア"><input required pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value={newId} onChange={e => setNewId(e.target.value)} placeholder="practice_course"/></Field><div className="modal-actions"><button className="button primary" disabled={busy}>作成する<Icon name="arrow" size={16}/></button></div></form></Modal>}

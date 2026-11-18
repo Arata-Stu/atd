@@ -39,7 +39,7 @@ try:
         sys.exit("エラー: コンテナは停止中です。先に scripts/dev.sh で起動してください")
     environment = dict(item.split("=", 1) for item in container.get("Config", {}).get("Env", []) if "=" in item)
     if environment.get("ATD_RUNTIME_API") != "1" or environment.get("ATD_RUNTIME_REV") != sys.argv[1]:
-        sys.exit("エラー: コンテナの起動設定が古いか異なります。処理を終了後、scripts/dev.sh --build で再作成してください")
+        sys.exit("エラー: コンテナの起動設定が古いか異なります。処理を終了してコンテナを停止し、scripts/dev.sh で再作成してください。イメージの依存や固定入口も更新した場合は --build を指定してください")
     mount = next((item for item in container.get("Mounts", []) if item.get("Destination") == "/workspaces/atd"), {})
     if (mount.get("Type") != "bind" or mount.get("RW") is not True
             or os.path.realpath(mount.get("Source", "")) != os.path.realpath(sys.argv[2])):

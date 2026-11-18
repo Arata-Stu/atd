@@ -4,11 +4,11 @@ Notebook の Docker 内で、手動走行 bag と offline VSLAM の姿勢ファ�
 
 本車両ではエンコーダを使わず、RPM／edge 数からの速度校正は対象外とする。VSLAM による速度・yaw rate と、プロポ入力・基板状態・IMU を対応づける。実車の校正結果と、解析処理の portable test の結果を区別する。
 
-## 起動
+## Notebook での実行
 
-事前に Jetson で `recording_profile:=calibration` の bag を記録して Notebook へ受信し、既存の offline VSLAM で姿勢ファイルを作る。記録から解析までの手順は [車両モデル作成と同定](../../../docs/vehicle_calibration.md) を参照する。
+Jetson で `recording_profile:=calibration` の bag を記録し、Notebook へ受信する。ATD Studio の「車両校正」で bag を選ぶと、入力検査・VO 軌跡の準備・車両応答の解析を一括実行できる。[記録から UI での解析まで](../../../docs/vehicle_calibration.md)
 
-Notebook の Docker 内で実行する。`<...>` は実在する入力に置き換える。
+微分窓や重力ベクトルを個別に指定する場合は CLI を使う。事前に同じ bag の offline VSLAM で姿勢ファイルを用意し、Notebook の Docker 内で実行する。`<...>` は実在する入力に置き換える。
 
 ```bash
 /workspaces/atd/scripts/build.sh --packages-up-to atd_vehicle_calibration

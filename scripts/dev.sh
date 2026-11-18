@@ -190,8 +190,7 @@ PY
 source "${task_project_dir}/scripts/lib/runtime.sh"
 task_runtime_revision="$(atd_runtime_revision "$task_project_dir")" || exit 1
 export ATD_RUNTIME_REV="$task_runtime_revision"
-# 上流 CLI が COPY 入力を image hash に含めない場合にも、更新した sh 等を反映する。
-# 生成物は hash ごとの独立ディレクトリに置き、build context は元の docker/ を使う。
+# 起動引数は起動構成ごとに生成する。イメージタグには build 用の入力だけを反映する。
 export ATD_GENERATED_DOCKER_DIR="${task_project_dir}/.cache/docker/${ATD_RUNTIME_REV}"
 export DOCKER_ARGS_FILE="${ATD_GENERATED_DOCKER_DIR}/dev.${task_host}.dockerargs"
 task_container_name="atd_${task_host}_dev"
@@ -330,7 +329,8 @@ if [[ -n "$task_build_tmpdir" ]]; then
     export TMPDIR="$task_build_tmpdir"
 fi
 
-python3 - "$task_project_dir" "$ATD_GENERATED_DOCKER_DIR" "$ATD_RUNTIME_REV" "$DOCKER_ARGS_FILE" "$task_source_layout" <<'PY'
+task_image_revision="$(atd_image_revision "$task_project_dir")" || exit 1
+python3 - "$task_project_dir" "$ATD_GENERATED_DOCKER_DIR" "$task_image_revision" "$DOCKER_ARGS_FILE" "$task_source_layout" <<'PY'
 import os
 from pathlib import Path
 import re
@@ -339,7 +339,7 @@ import sys
 import tempfile
 root, destination, revision = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 source = (root / 'docker/Dockerfile.atd').read_bytes()
-dockerfile = source + ('\n# ATD runtime source revision: ' + revision + '\n').encode()
+dockerfile = source + ('\n# ATD image source revision: ' + revision + '\n').encode()
 arguments = (root / 'docker/dev.dockerargs').read_text().splitlines(keepends=True)
 if os.environ['ATD_SERIAL_ACCESS'] == '1':
     # 上流 CLI は既定で privileged。devtmpfs を共有して起動後の ttyACM 追加も見せる。

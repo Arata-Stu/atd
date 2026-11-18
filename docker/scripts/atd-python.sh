@@ -65,11 +65,7 @@ case "$task_action" in
 esac
 
 task_script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-if [[ -r "$task_script_dir/lib/python-environment.sh" ]]; then
-    source "$task_script_dir/lib/python-environment.sh"
-else
-    source /opt/atd/scripts/lib/python-environment.sh
-fi
+source "$task_script_dir/lib/python-environment.sh"
 
 atd_python_context "$task_profile"
 atd_python_describe

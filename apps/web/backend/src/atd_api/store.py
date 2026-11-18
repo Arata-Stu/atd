@@ -11,7 +11,7 @@ import re
 import tempfile
 import time
 
-from atd_processing.geometry import points, corridor
+from atd_processing.geometry import points, corridor, validate_raceline_limits
 
 
 def identifier(value):
@@ -136,6 +136,26 @@ class Store:
             current.update(revision=revision + 1, updated=time.time())
             atomic_json(self.folder(key) / 'hdmap/map.json', current)
             atomic_json(self.folder(key) / 'lines' / (kind + '.json'), dict(map_id=key, revision=current['revision'], **line))
+        return current
+
+    def apply_raceline_calibration(self, key, revision, adoption):
+        """Save a server-verified selection under the map's optimistic revision lock."""
+        with self.lock('map-' + identifier(key)):
+            current = self.load_map(key)
+            if type(revision) is not int or revision != current['revision']:
+                raise ValueError('地図の revision が変わりました。再読込してください')
+            previous = current.get('raceline_calibration')
+            if adoption is None:
+                if previous is None:
+                    return current
+                del current['raceline_calibration']
+            else:
+                validate_raceline_limits(adoption['limits'])
+                if previous is not None and all(previous.get(k) == v for k, v in adoption.items()):
+                    return current
+                current['raceline_calibration'] = dict(adoption, applied_at=time.time())
+            current.update(revision=revision + 1, updated=time.time())
+            atomic_json(self.folder(key) / 'hdmap/map.json', current)
         return current
 
     def records(self):

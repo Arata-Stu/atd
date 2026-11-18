@@ -20,7 +20,9 @@ atd_python_context() {
     task_venv="${task_root}/${task_arch}/${task_profile}"
     if [[ -n "${ATD_PYTHON_PROJECTS_DIR:-}" ]]; then
         task_projects="$ATD_PYTHON_PROJECTS_DIR"
-    elif [[ -d /workspaces/atd/docker/python ]]; then
+    elif [[ -n "${ATD_RUNTIME_DIR:-}" ]]; then
+        task_projects="${ATD_RUNTIME_DIR}/python"
+    elif [[ -d /workspaces/atd ]]; then
         task_projects=/workspaces/atd/docker/python
     else
         task_projects=/opt/atd/python

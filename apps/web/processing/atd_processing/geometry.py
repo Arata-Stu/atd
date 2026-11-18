@@ -10,6 +10,8 @@ DEFAULTS = dict(spacing=0.1, width=0.19, margin=0.05, max_speed=1.5,
                 centerline_method='region', region_resolution=0.02, centerline_max_points=800,
                 optimizer='mincurv', vehicle_length=0.35, rear_axle_to_rear=0.1065, curvature_limit=1.0)
 
+RACELINE_LIMIT_KEYS = ('curvature_limit', 'accel', 'decel', 'lateral_accel')
+
 
 def points(raw, minimum=0):
     if not isinstance(raw, list) or not minimum <= len(raw) <= 2000:
@@ -50,6 +52,12 @@ def settings(raw):
     if output['rear_axle_to_rear'] >= output['vehicle_length']:
         raise ValueError('後輪軸から後端までの距離は全長未満にしてください')
     return output
+
+
+def validate_raceline_limits(limits):
+    if not isinstance(limits, dict) or not limits or set(limits).difference(RACELINE_LIMIT_KEYS):
+        raise ValueError('採用する Raceline 制限を選んでください')
+    settings(limits)
 
 
 def corridor(document):
@@ -116,6 +124,11 @@ def generate(document, kind, raw_settings, check=lambda: None):
     if kind not in ('centerline', 'raceline', 'custom'):
         raise ValueError('未知のライン種別です')
     config = settings(raw_settings)
+    calibration = document.get('raceline_calibration') if kind == 'raceline' else None
+    if calibration is not None:
+        limits = calibration['limits']
+        validate_raceline_limits(limits)
+        config.update(limits)
     # 公開 API は従来の width を維持し、移植した車体モデルには vehicle_width として渡す。
     parameters = dict(config)
     parameters['vehicle_width'] = parameters.pop('width')
@@ -124,4 +137,6 @@ def generate(document, kind, raw_settings, check=lambda: None):
     shape = line_shape(result['points'], document['closed'])
     result.update(settings=config, length=shape.length, closed=document['closed'],
                   limitations='オフライン幾何・車体制約。最短ラップ、実車の操舵応答・制動性能は未検証')
+    if calibration is not None:
+        result['raceline_calibration'] = dict(calibration)
     return result

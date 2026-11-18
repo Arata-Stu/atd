@@ -3,27 +3,17 @@
 # 上流 entrypoint に errexit はないため、各段階の失敗を明示的に伝える。
 
 _atd_prepare_runtime() {
-    local task_runtime_dir task_config_dir task_ready_temp task_image_dir task_shell_path task_python_path task_build_path task_vgl_path task_index
-    local -a task_dynamic_paths task_baked_paths
+    local task_runtime_dir task_config_dir task_ready_temp task_image_dir task_python_path task_file
     if [[ "$(id -u)" != 0 ]]; then
         printf 'ATD runtime: コンテナの root 起動処理で実行してください。\n' >&2
         return 1
     fi
-    if [[ -n "${ATD_RUNTIME_DIR:-}" ]]; then
-        task_runtime_dir="$ATD_RUNTIME_DIR"
-    elif [[ -d /workspaces/atd/docker ]]; then
-        task_runtime_dir=/workspaces/atd/docker
-    else
-        task_runtime_dir=/opt/atd
-    fi
+    task_runtime_dir="${ATD_RUNTIME_DIR:-/opt/atd}"
     task_config_dir="${ATD_DDS_CONFIG_DIR:-/etc/atd}"
     task_image_dir="${ATD_IMAGE_DIR:-/opt/atd}"
-    task_shell_path="${ATD_SHELL_PATH:-/usr/local/bin/atd-shell}"
     task_python_path="${ATD_PYTHON_PATH:-/usr/local/bin/atd-python}"
-    task_build_path="${ATD_BUILD_PATH:-/usr/local/bin/atd-build}"
-    task_vgl_path="${ATD_VGL_PATH:-/usr/local/bin/atd-vgl}"
     if [[ "$task_runtime_dir" != /* || "$task_config_dir" != /* \
-        || "$task_image_dir" != /* || "$task_shell_path" != /* || "$task_python_path" != /* || "$task_build_path" != /* || "$task_vgl_path" != /* ]]; then
+        || "$task_image_dir" != /* || "$task_python_path" != /* || "${ATD_SHELL_PATH:-/usr/local/bin/atd-shell}" != /* ]]; then
         printf 'ATD runtime: runtime / DDS 設定先は絶対パスを指定してください。\n' >&2
         return 1
     fi
@@ -31,31 +21,11 @@ _atd_prepare_runtime() {
     # 前回の成功記録を残して途中失敗を成功扱いにしない。
     if ! rm -f -- "${task_config_dir}/runtime.ready"; then return 1; fi
 
-    # 起動時に更新できないイメージ内の入口を、最新 revision と誤認しない。
-    task_dynamic_paths=(
-        "${task_runtime_dir}/Dockerfile.atd"
-        "${task_runtime_dir}/scripts/10-atd-runtime.sh"
-        "${task_runtime_dir}/scripts/atd-shell.sh"
-        "${task_runtime_dir}/scripts/atd.bashrc"
-        "${task_runtime_dir}/scripts/atd-python.sh"
-        "${task_runtime_dir}/scripts/atd-build.sh"
-        "${task_runtime_dir}/scripts/lib/python-environment.sh"
-        "${task_runtime_dir}/scripts/atd-vgl.sh"
-    )
-    task_baked_paths=(
-        "${task_image_dir}/Dockerfile.atd"
-        "${BASH_SOURCE[0]}"
-        "$task_shell_path"
-        "${task_config_dir}/bashrc"
-        "$task_python_path"
-        "$task_build_path"
-        "${task_image_dir}/scripts/lib/python-environment.sh"
-        "$task_vgl_path"
-    )
-    for task_index in "${!task_dynamic_paths[@]}"; do
-        if ! cmp -s -- "${task_dynamic_paths[$task_index]}" "${task_baked_paths[$task_index]}"; then
+    # checkout から差し替えられないイメージ本体・固定入口の互換性を確認する。
+    for task_file in Dockerfile.atd scripts/atd-entrypoint.sh scripts/atd-dispatch.sh; do
+        if ! cmp -s -- "${task_runtime_dir}/${task_file}" "${task_image_dir}/${task_file}"; then
             printf 'ATD runtime: イメージ内の起動設定が古いか不足しています: %s\n--build で再構築してください。\n' \
-                "${task_dynamic_paths[$task_index]}" >&2
+                "$task_file" >&2
             return 1
         fi
     done

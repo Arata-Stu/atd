@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -168,7 +169,8 @@ def test_export_same_revision_and_missing_ros_is_error(client, monkeypatch):
     assert not (client.app.state.store.maps_root / 'mapping').exists()
 
 
-def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch):
+@pytest.mark.parametrize('odom', [b'0.0 0 0 0 0 0 0 1\n', b'', None], ids=['trajectory', 'empty', 'missing'])
+def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch, odom):
     from atd_api.offline import map_build
     store = Store(tmp_path / 'bags', tmp_path / 'results')
     bag = store.record_root / 'bag'
@@ -183,6 +185,8 @@ def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch):
         def run(self, argv, env=None):
             assert argv[:4] == ['ros2', 'run', 'isaac_mapping_ros', 'create_map_offline.py']
             assert argv[argv.index('--override') + 1] == 'cuvslam.cfg_planar=false'
+            assert '--base_link_name=camera_link' in argv
+            assert '--use_cusfm=False' in argv and '--use_cuvslam_opencv_compat=True' in argv
             assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
             output = Path(next(a.split('=', 1)[1] for a in argv if a.startswith('--base_output_folder=')))
             run = output / 'run1'
@@ -190,13 +194,23 @@ def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch):
             (run / 'cuvslam_map/map.mdb').write_bytes(b'not-empty')
             (run / 'map_frames/rectified').mkdir(parents=True)
             (run / 'map_frames/rectified/frames_meta.json').write_text('{}')
+            (run / 'poses/runs').mkdir(parents=True)
+            (run / 'poses/runs/odom_poses.tum').write_bytes(b'other')
+            if odom is not None:
+                (run / 'poses/odom_poses.tum').write_bytes(odom)
             (output / 'latest').symlink_to('run1', target_is_directory=True)
 
-    result = map_build(store, Work(), {'id': 'built', 'bag': 'bag'})
+    result = map_build(store, Work(), {'id': 'built', 'bag': 'bag', 'base_frame': 'camera_link'})
     assert result['cuvslam_ready'] is True and result['pointcloud_ready'] is False
     assert (store.maps_root / 'built/nvidia/cuvslam_map/map.mdb').read_bytes() == b'not-empty'
     assert store.load_map('built')['source']['pointcloud_status'] == 'pending'
     assert store.load_map('built')['source']['mapping_options']['ground_constraint'] is False
+    source = json.loads((store.maps_root / 'built/mapping.json').read_text())['source']
+    if odom:
+        assert source['odom_poses'] == dict(path='nvidia/poses/odom_poses.tum', frame='camera_link',
+                                            sha256=hashlib.sha256(odom).hexdigest())
+    else:
+        assert 'odom_poses' not in source
 
 
 def test_hash_rpc_cancellation_terminates_ssh_process(tmp_path, monkeypatch):

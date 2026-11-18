@@ -517,7 +517,6 @@ class DevScriptTests(unittest.TestCase):
                 self.assertEqual(activation["generated_context"], str(PROJECT / "docker"))
                 self.assertTrue(activation["generated_dockerfile"].startswith(
                     (PROJECT / "docker/Dockerfile.atd").read_text()))
-                self.assertIn(activation["runtime"], activation["generated_dockerfile"])
 
     def test_one_invocation_environment_overrides_selected_host(self):
         record = self.root / "override record"
@@ -782,18 +781,37 @@ class DevScriptTests(unittest.TestCase):
                 self.assertFalse(any(entry["tool"] == "docker" and entry["args"][-1] == "/usr/local/bin/atd-shell"
                                      for entry in self.calls()))
 
-    def test_runtime_manifest_change_changes_creation_revision(self):
+    def test_mounted_commands_startup_settings_and_build_inputs_invalidate_only_their_consumers(self):
         fixture = self.detector_fixture("revision-fixture", [])
         script = self.auto_project("revision-project", fixture)
-        result = self.invoke(script=script)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        first = self.activations()[0]["runtime"]
-        self.reset_calls()
-        manifest = script.parent.parent / "docker" / "dependencies.apt"
-        manifest.write_text(manifest.read_text() + "\n# changed runtime configuration\n")
-        result = self.invoke(script=script)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotEqual(self.activations()[0]["runtime"], first)
+
+        def activate():
+            self.reset_calls()
+            result = self.invoke(script=script)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            creation, = self.activations()
+            return creation
+
+        current = activate()
+        for relative, runtime_changed, image_changed in (
+            ("scripts/atd-web.sh", False, False),
+            ("scripts/atd-shell.sh", False, False),
+            ("scripts/configure-serial-access.sh", True, False),
+            ("scripts/10-atd-runtime.sh", True, False),
+            ("python/ros/uv.lock", True, False),
+            ("dependencies.apt", True, True),
+            ("scripts/install-dependencies.sh", True, True),
+            ("scripts/atd-dispatch.sh", True, True),
+        ):
+            with self.subTest(file=relative):
+                path = script.parent.parent / "docker" / relative
+                with path.open("a") as stream:
+                    stream.write("\n# changed in checkout\n")
+                previous = current
+                current = activate()
+                self.assertEqual(current["runtime"] != previous["runtime"], runtime_changed)
+                self.assertEqual(current["generated_dockerfile"] != previous["generated_dockerfile"],
+                                 image_changed)
 
     def test_dry_run_does_not_generate_build_files(self):
         fixture = self.detector_fixture("dry-fixture", [])

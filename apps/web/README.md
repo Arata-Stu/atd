@@ -38,6 +38,8 @@ atd-web --dry-run                 # 起動予定を表示
 
 ## Map
 
+「車両校正」で走行結果を開くと、Raceline の曲率・横加速度・加減速の候補と前進スロットルのフィードフォワード表を確認できる。採用する制限と地図を選び、その地図で Raceline を生成すると反映される。速度フィードフォワード表は JSON で保存できる。[候補の算出条件と採用手順](../../docs/vehicle_calibration.md)
+
 同じ Map 画面で、次の順に進める。駐車機能は対象に含めない。
 
 1. **cuVSLAM 地図を作成**: `/data/record/rosbags/` の bag、地図 ID、左右画像・CameraInfo の topic、base / optical frame を指定する。NVIDIA の `isaac_mapping_ros/create_map_offline.py` を独立 worker で呼び、`maps/<id>/nvidia/` に公式の `cuvslam_map/`・`map_frames/` 等の構成を維持して保存する。

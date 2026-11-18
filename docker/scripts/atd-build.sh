@@ -19,11 +19,7 @@ fail() { printf 'ATD Build: %s\n' "$*" >&2; exit 1; }
 if [[ "${1:-}" = --help || "${1:-}" = -h ]]; then usage; exit 0; fi
 if [[ "${1:-}" = -- ]]; then shift; fi
 task_script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-if [[ -r "$task_script_dir/lib/python-environment.sh" ]]; then
-    source "$task_script_dir/lib/python-environment.sh"
-else
-    source /opt/atd/scripts/lib/python-environment.sh
-fi
+source "$task_script_dir/lib/python-environment.sh"
 
 atd_python_context ros
 task_build=("$task_venv/bin/python" /usr/bin/colcon build)

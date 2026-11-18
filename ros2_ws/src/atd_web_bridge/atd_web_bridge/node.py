@@ -21,6 +21,7 @@ from sensor_msgs.msg import Joy
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 import yaml
+from atd_teleop_tools import profile as teleop_profiles
 
 from .core import Cache, ProfileStore, TeleopProfileStore, PropoProfileStore, VehicleProfileStore, prepare_parameter_value
 
@@ -67,6 +68,7 @@ class BridgeNode(Node):
             'rc_node': '/atd_rc_input_node', 'rc_profile_path': '/data/results/runs/input/propo.yaml',
             'vehicle_status_topic': '/vehicle/layout/status',
             'vehicle_profile_path': '/data/results/runs/vehicle/layout.yaml',
+            'recording_status_topic': '/recording/status',
             'parameter_node_prefix': '/atd_', 'parameter_allowlist_json': '{}'}
         self.settings = {key: self.declare_parameter(key, value, fixed).value for key, value in defaults.items()}
         if not 1024 <= self.settings['port'] <= 65535 or not .1 <= self.settings['freshness_s'] <= 30:
@@ -94,6 +96,7 @@ class BridgeNode(Node):
         self.subscribe(String, 'pico_status_topic', self.pico_status)
         self.subscribe(String, 'rc_status_topic', self.rc_status)
         self.subscribe(String, 'vehicle_status_topic', self.vehicle_status)
+        self.subscribe(String, 'recording_status_topic', self.recording_status)
         self.joy_clients = {
             'configure': self.create_client(SetBool, self.settings['joy_node'] + '/configure'),
             'reload': self.create_client(Trigger, self.settings['joy_node'] + '/reload_profile')}
@@ -176,6 +179,26 @@ class BridgeNode(Node):
         except (ValueError, yaml.YAMLError):
             self.get_logger().warning('Invalid vehicle/layout/status YAML')
 
+    def recording_status(self, message):
+        try:
+            if len(message.data) > 65536:
+                raise ValueError('Recording status exceeds 64 KiB')
+            value = yaml.safe_load(message.data)
+            if not isinstance(value, dict):
+                raise ValueError('Invalid recording status')
+            if type(value.get('schema_version')) is not int or value['schema_version'] != 1 \
+                    or type(value.get('instance_id')) is not str or not value['instance_id'] \
+                    or value.get('state') not in ('idle', 'starting', 'recording', 'stopping', 'error'):
+                raise ValueError('Invalid recording status schema or state')
+            stamp = value.get('stamp')
+            if type(stamp) not in (int, float) or not 0 <= stamp <= 1e12 or not math.isfinite(stamp):
+                raise ValueError('Invalid recording status stamp')
+            age = self.get_clock().now().nanoseconds / 1e9 - stamp
+            value['source_age_s'] = max(0., age) if math.isfinite(age) and age >= -.05 else None
+            self.cache.put('recording_status', value)
+        except (ValueError, yaml.YAMLError):
+            self.get_logger().warning('Invalid recording/status YAML')
+
     def configure_propo(self, path, body):
         state = self.cache.propo_status()
         status = state.get('input')
@@ -224,8 +247,12 @@ class BridgeNode(Node):
         else:
             if type(body.get('enabled')) is not bool:
                 raise ValueError('enabled は bool で指定してください')
-            if body['enabled'] is False and not self.teleop_profiles.read(state)['applied']:
-                raise ValueError('保存した操作割り当てを再読込してから出力を再開してください')
+            if body['enabled'] is False:
+                profile_state = self.teleop_profiles.read(state)
+                if not profile_state['applied']:
+                    raise ValueError('保存した操作割り当てを再読込してから出力を再開してください')
+                if not teleop_profiles.usable(profile_state['profile']):
+                    raise ValueError('操舵とスロットル、または記録開始／停止ボタンを割り当ててください')
             request = SetBool.Request(data=body['enabled'])
         client = self.teleop_clients['reload' if reloading else 'configure']
         if not client.wait_for_service(timeout_sec=.5):
@@ -336,6 +363,8 @@ class BridgeNode(Node):
                 return self.vehicle_profiles.read(self.cache.vehicle_status())
             if path == '/vehicle/profile' and method == 'PUT':
                 return self.vehicle_profiles.write(body.get('profile'), body.get('revision'), self.cache.vehicle_status())
+            if path == '/recording/status' and method == 'GET':
+                return self.cache.recording_status()
             if path == '/input/profile' and method == 'GET':
                 return self.profiles.read()
             if path == '/input/profile' and method == 'PUT':

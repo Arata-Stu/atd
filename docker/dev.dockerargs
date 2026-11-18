@@ -1,4 +1,4 @@
---mount type=bind,src="${ATD_PROJECT_DIR}",dst=/workspaces/atd,readonly
+--mount type=bind,src="${ATD_PROJECT_DIR}",dst=/workspaces/atd
 --mount type=bind,src="${ATD_PROJECT_DIR}/ros2_ws/src",dst=/workspaces/isaac_ros-dev/src/atd
 --mount type=bind,src="${ATD_RECORD_DIR}",dst=/data/record
 --mount type=bind,src="${ATD_RESULT_DIR}",dst=/data/results

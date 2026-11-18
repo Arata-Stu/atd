@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>atd_vehicle_calibration</name><version>0.1.0</version>
+  <description>Offline vehicle response analysis from manual S.BUS inputs, IMU and stereo odometry.</description>
+  <maintainer email="carbuncle01@users.noreply.github.com">carbuncle01</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>atd_interfaces</exec_depend><exec_depend>rosbag2_py</exec_depend>
+  <exec_depend>rosbag2_storage_mcap</exec_depend><exec_depend>rclpy</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
+  <exec_depend>tf2_msgs</exec_depend><exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend><exec_depend>python3-yaml</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>geometry_msgs</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

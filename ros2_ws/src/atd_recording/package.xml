@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>atd_recording</name><version>0.1.0</version>
+  <description>Explicit operator-controlled rosbag2 MCAP recording and verified close status.</description>
+  <maintainer email="carbuncle01@users.noreply.github.com">carbuncle01</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
+  <depend>rclcpp</depend><depend>rclcpp_components</depend>
+  <depend>rcl_interfaces</depend><depend>atd_interfaces</depend><depend>std_msgs</depend>
+  <depend>rosbag2_transport</depend><depend>rosbag2_cpp</depend><depend>rosbag2_storage</depend>
+  <depend>yaml-cpp</depend>
+  <exec_depend>rosbag2_storage_mcap</exec_depend>
+  <exec_depend>ament_index_python</exec_depend><exec_depend>launch</exec_depend><exec_depend>launch_ros</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend><test_depend>python3-yaml</test_depend>
+  <test_depend>rclpy</test_depend><test_depend>rosbag2_py</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

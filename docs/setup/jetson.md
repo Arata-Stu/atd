@@ -68,7 +68,7 @@ Jetson 自身の ROS workspace の場所を指定する。未設定時は実際�
 | --- | --- | --- |
 | ROS workspace | 指定したパス。未設定なら `<ATD checkout>/ros2_ws` | `/workspaces/isaac_ros-dev`（読書き可） |
 | 自作 ROS package の編集元（別 workspace を使う場合） | `<ATD checkout>/ros2_ws/src` | `/workspaces/isaac_ros-dev/src/atd`（読書き可） |
-| プロジェクト設定参照 | `<ATD checkout>` | `/workspaces/atd`（readonly） |
+| Git checkout・対話シェルの開始位置 | `<ATD checkout>` | `/workspaces/atd`（読書き可） |
 
 ```bash
 ./scripts/setup.sh --action workspace
@@ -84,6 +84,7 @@ workspace は対話入力した場所に CLI 設定を準備し、`config/worksp
 verify は Docker 接続、CLI の Docker モード、`--gpus all` による `/bin/true` のコンテナ起動までを確認する。CUDA 演算やセンサ取得は別途検証する。
 Docker 起動時には不足依存の導入と Fast DDS の loopback 設定を `.sh` で自動適用する。カメラ・録画・車両ノードは自動起動しない。
 次回は `./scripts/setup.sh --action start` または `./scripts/dev.sh` を使う。
+入室後は `git pull --ff-only` で Jetson ホストと同じ ATD checkout を更新できる。ホストで `.gitconfig` がディレクトリになった場合の復旧は[共通の Git 手順](README.md#git-pull)を参照する。
 
 コンテナ内で、まず ROS / workspace / DDS と入力デバイスの列挙を確認できる。
 

@@ -42,7 +42,7 @@ Notebook 上で ROS workspace の場所を指定し、コンテナ内では標�
 | --- | --- | --- |
 | ROS workspace | 指定したパス。未設定なら `<ATD checkout>/ros2_ws` | `/workspaces/isaac_ros-dev`（読書き可） |
 | 自作 ROS package の編集元（別 workspace を使う場合） | `<ATD checkout>/ros2_ws/src` | `/workspaces/isaac_ros-dev/src/atd`（読書き可） |
-| プロジェクト設定参照 | `<ATD checkout>` | `/workspaces/atd`（readonly） |
+| Git checkout・対話シェルの開始位置 | `<ATD checkout>` | `/workspaces/atd`（読書き可） |
 
 ```bash
 ./scripts/setup.sh --action workspace
@@ -55,6 +55,7 @@ workspace は対話入力した場所に CLI 設定を準備し、`config/worksp
 `ISAAC_ROS_WS` は `dev.sh` が設定するため、ホストの `.bashrc` へ export を追記しない。設定の詳細と既存 CLI 設定との衝突時の扱いは [共通手順](README.md#ros-workspace-のパス)を参照する。
 `./scripts/tools/docker.sh` で項目別診断を保存し、`./scripts/tools/docker.sh --action logs` で Notebook の過去の結果を確認できる。
 初回 build は `isaac_ros → realsense455 → atd` の順で行う。librealsense SDK だけ CUDA 無効とし、Isaac ROS の GPU 処理は維持する。
+Notebook の `./scripts/dev.sh --build` は、ホストの Isaac ROS CLI と Buildx の一時ファイルを既定で `$HOME/.cache/atd/build-tmp` に置く。初回に所有者専用（`0700`）で作成し、呼び出し元で `TMPDIR` を指定した場合はその値を優先する。`./scripts/dev.sh --build --dry-run` で使用予定のパスを確認できる。`setup.sh --action build` と `scripts/tools/docker.sh --build` も同じ設定を使う。通常起動や Jetson では、呼び出し元の一時ディレクトリ設定を使う。
 verify は一般ユーザーから Docker に接続し、CLI の Docker モードと `--gpus all` による `/bin/true` のコンテナ起動を確認する。CUDA 演算成功は別に検証する。
 
 コンテナに入った後、必要な確認を個別に行える。
@@ -67,6 +68,19 @@ ros2 pkg prefix rosbag2_storage_mcap
 
 期待する ROS / workspace / RMW は `lyrical` / `/workspaces/isaac_ros-dev` / `rmw_fastrtps_cpp`。
 ROS package が見つかることは、実 D455 の動作や bag 取得の成功を意味しない。
+
+### build 中に `no space left on device` が出た場合
+
+`docker buildx bake final_target` は最終イメージ用の Dockerfile をホストの一時ディレクトリに書く。エラーが出たパスのファイルシステムで、空き容量（`Avail`）と空き inode（`IFree`）を確認する。次のコマンドで、Notebook の build 用一時ディレクトリ、`/tmp`、ローカルの Docker データの保存先を比較できる。[Buildx の実装](https://github.com/docker/buildx/blob/master/build/opt.go#L1171-L1175)
+
+```bash
+build_tmp="${TMPDIR:-$HOME/.cache/atd/build-tmp}"
+docker_root="$(docker info --format '{{.DockerRootDir}}')"
+df -hT "$build_tmp" /tmp "$docker_root"
+df -i  "$build_tmp" /tmp "$docker_root"
+```
+
+ホームが満杯の場合は、空きのある別のファイルシステムに書込み可能なディレクトリを用意し、その絶対パスを `TMPDIR` に指定して build を再実行する。上流 CLI が一時ファイルのパスをシェルに渡すため、空白やシェルの特殊文字を含まないパスを使う。イメージと再ビルド用キャッシュは Docker が管理する。`docker system df` と `docker buildx du --builder default` で使用量を確認できる。[Docker のキャッシュ使用量](https://docs.docker.com/reference/cli/docker/buildx/du/)
 
 <a id="kart-cli"></a>
 

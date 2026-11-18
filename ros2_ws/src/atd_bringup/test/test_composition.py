@@ -81,6 +81,11 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(inputs['vehicle_profile'].name, 'vehicle_profile')
         self.assertIs(vehicle['profile'], inputs['vehicle_profile'])
         self.assertNotIn('camera_config', inputs)
+        self.assertEqual(inputs['recording'].name, 'recording')
+        self.assertEqual(inputs['recording_profile'].name, 'recording_profile')
+        self.assertEqual(inputs['recording_config'].name, 'recording_config')
+        self.assertNotIn('recording_config', camera)
+        self.assertNotIn('recording_config', vehicle)
 
     def test_persistent_camera_defaults_and_stream_contract_are_declared(self):
         from atd_bringup.launching import CAMERA_ARGUMENTS
@@ -89,6 +94,13 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(declarations['camera_config'], '/data/results/runs/bringup/d455.yaml')
         self.assertEqual(declarations['vehicle_profile'], '/data/results/runs/vehicle/layout.yaml')
         self.assertTrue(all(key in declarations for key in CAMERA_ARGUMENTS))
+        self.assertEqual(declarations['recording'], 'true')
+        self.assertEqual(declarations['recording_profile'], 'mapping')
+        self.assertEqual(declarations['recording_config'], '')
+
+    def test_sensor_only_profile_does_not_start_or_configure_a_recorder(self):
+        declarations = {value.args[0] for value in self.generate(False) if hasattr(value, 'default_value')}
+        self.assertTrue({'recording', 'recording_profile', 'recording_config'}.isdisjoint(declarations))
 
 
 if __name__ == '__main__':

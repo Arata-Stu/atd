@@ -52,7 +52,7 @@ elif tool == 'docker':
         mounts = [{'Destination': destination, 'Source': os.environ[key], 'RW': writable, 'Type': 'bind'}
                   for destination, key, writable in [
                       ('/workspaces/isaac_ros-dev', 'ATD_ROS_WS', True),
-                      ('/workspaces/atd', 'ATD_TEST_PROJECT', False),
+                      ('/workspaces/atd', 'ATD_TEST_PROJECT', True),
                       ('/data/record', 'ATD_TEST_RECORD', True),
                       ('/data/results', 'ATD_TEST_RESULT', True)]]
         native = os.path.realpath(os.path.join(os.environ['ATD_ROS_WS'], 'src')) == os.path.realpath(os.environ['ATD_TEST_ROS_SOURCE'])
@@ -61,6 +61,8 @@ elif tool == 'docker':
                            'Source': os.environ['ATD_TEST_ROS_SOURCE'], 'RW': True, 'Type': 'bind'})
         if os.environ.get('ATD_TEST_BAD_MOUNT'):
             mounts[0]['Source'] += '-old'
+        if os.environ.get('ATD_TEST_READONLY_CHECKOUT'):
+            mounts[1]['RW'] = False
         if os.environ.get('ATD_TEST_BAD_SOURCE_MOUNT'):
             mounts[-1]['Source'] += '-old'
         if os.environ.get('ATD_TEST_BAD_DDS'):
@@ -247,6 +249,13 @@ class DockerStatusTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('[FAIL] container-config', result.stdout)
         self.assertIn('[OK  ] container-startup', result.stdout)
+
+    def test_running_container_rejects_previous_readonly_checkout(self):
+        result = self.invoke(env={'ATD_TEST_CONTAINER': 'running', 'ATD_TEST_READONLY_CHECKOUT': '1'})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('[FAIL] container-config', result.stdout)
+        self.assertIn('/workspaces/atd', result.stdout)
+        self.assertIn('再作成', result.stdout)
 
     def test_running_container_rejects_dds_environment_override(self):
         result = self.invoke(env={'ATD_TEST_CONTAINER': 'running', 'ATD_TEST_BAD_DDS': '1'})

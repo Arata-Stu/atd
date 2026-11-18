@@ -45,7 +45,7 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 └── tests/                     # setup・Docker 等の共通基盤のテスト
 ```
 
-`apps/web/` と `atd_joy` / `atd_web_bridge`、運転要求型の `atd_interfaces` と操作割り当ての `atd_teleop`、Pico USB 受信の `atd_vehicle_interface` とプロポ役割の `atd_rc_input`、保存地図の点群取得用 `atd_mapping`、D455の `atd_sensors`、車両配置・static TFの `atd_vehicle_description` と統合起動の `atd_bringup` は初期実装を追加した。Pico firmware の編集元も関連する `atd_vehicle_interface` 内へまとめる。ソース実装と対象機での build・実機検証は区別する。
+`apps/web/` と `atd_joy` / `atd_web_bridge`、運転要求型の `atd_interfaces` と操作割り当ての `atd_teleop`、Pico USB 受信の `atd_vehicle_interface` とプロポ役割の `atd_rc_input`、保存地図の点群取得用 `atd_mapping`、D455の `atd_sensors`、車両配置・static TFの `atd_vehicle_description` と統合起動の `atd_bringup`、操作イベントから記録する `atd_recording`、Notebookで車両応答を解析する `atd_vehicle_calibration` を実装した。Pico firmware の編集元も関連する `atd_vehicle_interface` 内へまとめる。ソース実装と対象機での build・実機検証は区別する。
 
 | 配置 | 内容 |
 | --- | --- |
@@ -90,7 +90,7 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | その他のパス | `/workspaces/isaac_ros-dev/src/atd/`。編集元を rw で追加 mount する |
 
 別のホスト workspace を選択した場合、その `src/atd` は mount point として予約し、そこへ別のソースをコピーしない。既存データがある場合は setup を停止して保護する。
-コンテナの `/workspaces/atd` はプロジェクト設定の readonly 参照用であり、ソースの編集には workspace 内の package ソースを使う。別の workspace を使う場合も、編集元の `ros2_ws/src/` と workspace の `src/` を区別する。
+コンテナの `/workspaces/atd` はホストの Git checkout を読書き共有する。対話シェルで `git pull` すると、workspace 内の package ソースにも更新が反映される。別の workspace を使う場合も、編集元の `ros2_ws/src/` と workspace の `src/` を区別する。
 標準の build 入口は `./scripts/build.sh`、コンテナ内は `atd-build` とし、workspace の `src` を探索対象にする。`docker/scripts/atd-build.sh` が colcon の実行と CMake の interpreter 指定を担当する。直接 `colcon build` を使う場合も `--base-paths src` を明示し、checkout と workspace が同じ場所にあるときの重複探索を避ける。
 
 ## 設定・依存・操作の入口
@@ -124,6 +124,8 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | この文書 | ディレクトリとファイルの置き場所 |
 | [セットアップ手順](setup/README.md) | 実際の導入・起動・診断操作 |
 | [bringup](bringup.md) | Jetson の起動 profile、選択・引数・拡張方針 |
+| [rosbag記録](recording.md) | 入力イベントによる記録開始停止、profile、状態と実機確認 |
+| [車両モデルの校正](vehicle_calibration.md) | 手動走行で取得する入力とオフライン VSLAM 速度を使った同定手順 |
 | [車両配置・TF](vehicle_layout.md) | 座標系、UI編集、実測、static TFの適用 |
 | [Python 環境](python_environments.md) | uv、用途別環境、ROS 2 Python との関係 |
 | [VGL モデル](vgl_models.md) | Notebook export、SCP 転送、Jetson engine build、検証・ログ |
@@ -141,7 +143,7 @@ CAD 等の編集元データと提供された印刷用3MFは `hardware/cad/` �
 | 診断ログ | `<ATD checkout>/logs/docker/<host>/`。履歴を保持し、Git 管理対象外 |
 | ROS build 成果物 | `<選択した workspace>/{build,install,log}/`。未設定時の workspace は `<ATD checkout>/ros2_ws` |
 | Python venv / cache | `<選択した workspace>/.atd-python/`。各ホスト・アーキテクチャで生成する |
-| Web の node_modules / frontend build | `<選択した workspace>/.atd-web/frontend/`。readonly の checkout と分け、Notebook 上で生成する |
+| Web の node_modules / frontend build | `<選択した workspace>/.atd-web/frontend/`。Git checkout のソースと分け、Notebook 上で生成する |
 | Joy 物理配置・入力の役割設定 | Jetson の `/data/results/runs/input/{dualsense,teleop,propo}.yaml`。再生成用 cache ではなく永続設定として保持 |
 | D455起動・車両配置設定 | Jetsonの `/data/results/runs/bringup/d455.yaml` と `/data/results/runs/vehicle/layout.yaml`。再起動後も保持 |
 | bag | ホスト別設定の記録先。コンテナでは `/data/record` |

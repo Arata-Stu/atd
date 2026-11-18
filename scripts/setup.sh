@@ -200,7 +200,7 @@ show_workspace() {
     else
         printf 'ROS source（編集元）: %s/ros2_ws/src -> /workspaces/isaac_ros-dev/src/atd (read-write)\n' "$task_project_dir"
     fi
-    printf 'プロジェクト参照（Docker）: /workspaces/atd (read-only)\n'
+    printf 'ATD checkout（Docker）: /workspaces/atd (read-write)\n'
     printf 'workspace 設定（%s）: %s\n' "$task_host" "${ATD_WORKSPACE_CONFIG:-${task_project_dir}/config/workspace.env}"
     printf 'ISAAC_ROS_WS は dev.sh が設定します。ホストの bashrc への手動 export は不要です。\n'
 }

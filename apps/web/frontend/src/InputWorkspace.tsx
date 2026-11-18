@@ -3,6 +3,7 @@ import { api, availabilityText } from './api';
 import { Field, Icon, Tag } from './workspace_ui';
 import { TeleopSettingsPanel } from './TeleopSettingsPanel';
 import { PropoSettingsPanel } from './PropoSettingsPanel';
+import { RecordingStatusPanel } from './RecordingStatusPanel';
 
 interface AxisBinding { code: number; mode: 'bipolar' | 'unipolar'; negative: number; center: number; positive: number; deadzone: number }
 interface ButtonBinding { source: 'button' | 'axis'; code: number; direction: number; threshold: number }
@@ -45,6 +46,7 @@ export function InputWorkspace({ notify, onDirty }: { notify: (message: string, 
     notify(`${name} の入力を操作してください（10秒）`);
   }
   return <div className="content-page input-page"><div className="page-intro"><div><span className="eyebrow">CONTROLLER SETUP</span><h2>入力を確認して、操作の基準を整える。</h2><p>Jetsonに接続したコントローラやプロポの生入力と、操作の配置を確認します。</p></div><span className="outline-chip">JETSON INPUT</span></div>
+    <RecordingStatusPanel/>
     <div className="tabs" role="tablist" aria-label="入力デバイス"><button role="tab" id="input-tab-joy" aria-controls="input-panel-joy" aria-selected={device === 'joy'} className={device === 'joy' ? 'active' : ''} onClick={() => setDevice('joy')}>Bluetooth コントローラ{dirty || teleopDirty ? '（未保存）' : ''}</button><button role="tab" id="input-tab-propo" aria-controls="input-panel-propo" aria-selected={device === 'propo'} className={device === 'propo' ? 'active' : ''} onClick={() => setDevice('propo')}>プロポ・Pico{propoDirty ? '（未保存）' : ''}</button></div>
     <div role="tabpanel" id="input-panel-joy" aria-labelledby="input-tab-joy" style={{ display: device === 'joy' ? undefined : 'none' }}>
     {(error || !status?.connected) && <div className="inline-note"><Icon name="info" size={17}/><span>{error || availabilityText(status?.availability) || '観測bridgeへの接続を待っています。接続先は「データ転送」で設定します。'}</span></div>}

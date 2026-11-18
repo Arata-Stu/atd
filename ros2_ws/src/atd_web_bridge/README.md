@@ -14,7 +14,7 @@ node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_a
 
 `./scripts/bringup.sh` は対話端末で `input` / `bridge` を選択し、`--list` は一覧を表示する。`./scripts/bringup.sh --dry-run input` は Notebook でも予定する Jetson コマンドを確認できる。実行は Jetson の起動済み Docker 内で行い、ROS 環境の選択には `scripts/tools/python.sh` を利用する。[bringup の操作](../../../docs/bringup.md)を参照する。
 
-両 launch は config（share/config/bridge.yaml）を受ける。input.launch.py は profile（`/data/results/runs/input/dualsense.yaml`）、teleop_profile（`/data/results/runs/input/teleop.yaml`）、rc_profile（`/data/results/runs/input/propo.yaml`）を各 node と bridge に渡す。Joy・teleop と Pico 受信・プロポ役割処理を起動し、`teleop:=false` / `propo:=false` で各経路を除外できる。Pico の選択は `pico_serial` / `pico_sensor_path`、各 node の設定は `joy_config` / `teleop_config` / `pico_config` / `rc_config` で指定する。子launchの引数はスコープを分け、bridge の config・profile と混在させない。基板への走行指令や bag 記録は開始しない。Docker の host network を使い、HTTP もDDSも Jetson 内 loopback に限定する。
+両 launch は config（share/config/bridge.yaml）を受ける。input.launch.py は profile（`/data/results/runs/input/dualsense.yaml`）、teleop_profile（`/data/results/runs/input/teleop.yaml`）、rc_profile（`/data/results/runs/input/propo.yaml`）を各 node と bridge に渡す。Joy・teleop と Pico 受信・プロポ役割処理を起動し、`teleop:=false` / `propo:=false` で各経路を除外できる。Pico の選択は `pico_serial` / `pico_sensor_path`、各 node の設定は `joy_config` / `teleop_config` / `pico_config` / `rc_config` で指定する。子launchの引数はスコープを分け、bridge の config・profile と混在させない。基板への走行指令やbag記録は自動開始しない。inputは `recording:=true`（既定）で共通managerを起動し、割当済みJoy・プロポのイベントで記録する。`recording_profile:=inputs`（既定）、`mapping` または `calibration`、`recording_config:=絶対パス` を指定できる。Docker の host network を使い、HTTP もDDSも Jetson 内 loopback に限定する。
 
 ## 入力と通信
 
@@ -39,6 +39,10 @@ HTTP は `127.0.0.1:8790` のみ。`GET /live/status`、`POST /live/parameters`�
 pose は x/y/z/yaw/frame/stamp/age_s/stale、velocity は linear_mps/angular_rps/linear/frame/stamp/age_s/stale。input は bridge接続と device_connected/ready を分離し、status/raw の世代不一致・古さを成功と扱わない。Joy ready は車両の安全・停止確認ではない。
 
 プロポ用は `GET /propo/status`、`GET/PUT /propo/profile`、`POST /propo/reload`、`POST /propo/configure`。Notebook API は `/api` を付ける。`status` は `{board, input, ready, rc_valid, input_current, configuring, availability}` を返す。Notebook adapter が付ける最上位 `connected` は bridge への接続、`board.connected` は Pico の USB 接続、`board.streaming` は新鮮な telemetry の受信を表す。未受信は null のままとし、CH を 0 で埋めない。telemetry の元 `stamp` を保持し、receiver の `age_s` に bridge での経過時間を加算する。定期的な状態再配信だけで古い信号を新鮮に扱わず、Pico・役割 node の世代と serial が一致しない入力も利用可能とは表示しない。`rc_valid` は受信時点の RC 有効判定を telemetry の期限内だけ表示する観測値で、イベント出力時の厳密な鮮度判定は RC node が行う。
+
+## 記録状態の観測
+
+`GET /recording/status` は `/recording/status`（std_msgs/String）のmanager状態を元stamp・ageとともに返す。`freshness_s` と `availability.status`（missing/fresh/stale）を併記し、status未受信はnull。statusには開始処理・記録中・停止処理等、直近の操作要求と前回の終了結果が含まれる。古い状態や接続断を停止済みと補完せず、開始停止のHTTP操作は受け付けない。Notebook APIは `/api` を先頭に付ける。[記録手順](../../../docs/recording.md)
 
 ## 車両配置
 
@@ -68,6 +72,7 @@ Propo profile は `recording`・`auxiliary_1`・`auxiliary_2` の役割を CH4�
 | --- | --- | --- |
 | use_sim_time | false | ROS標準時刻 |
 | port | 8790 | loopback HTTP、1024〜65535 |
+| recording_status_topic | /recording/status | 記録managerの状態を観測 |
 | vehicle_status_topic | /vehicle/layout/status | 車体TF nodeの発行状態 |
 | vehicle_profile_path | /data/results/runs/vehicle/layout.yaml | 車両配置の永続設定 |
 | freshness_s | 2.5 | 0.1〜30秒、受信monotonic時刻で鮮度判定 |

@@ -29,6 +29,7 @@ allowed = {
     '/propo/status': ('GET',), '/propo/profile': ('GET', 'PUT'),
     '/propo/reload': ('POST',), '/propo/configure': ('POST',),
     '/vehicle/status': ('GET',), '/vehicle/profile': ('GET', 'PUT'),
+    '/recording/status': ('GET',),
 }
 if path not in allowed or request['method'] not in allowed[path]:
     raise ValueError('Unsupported bridge operation')

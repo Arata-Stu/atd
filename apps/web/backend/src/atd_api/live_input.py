@@ -12,6 +12,9 @@ def call(request: Request, path: str, method: str = 'GET', body: dict | None = N
     try:
         return bridge_request(request.app.state.store.connection(), path, method, body)
     except BridgeUnavailable as exc:
+        if method == 'GET' and path == '/recording/status':
+            return {'connected': False, 'status': None, 'message': str(exc),
+                    'availability': {'bridge': 'disconnected', 'status': 'missing'}}
         if method == 'GET' and path.endswith('/status'):
             return {'connected': False, 'device_connected': False, 'ready': False,
                     'pose': None, 'velocity': None, 'raw': None, 'normalized': None,
@@ -132,3 +135,8 @@ def vehicle_profile(request: Request):
 @router.put('/vehicle/profile')
 def save_vehicle_profile(request: Request, body: dict):
     return call(request, '/vehicle/profile', 'PUT', body)
+
+
+@router.get('/recording/status')
+def recording_status(request: Request):
+    return call(request, '/recording/status')

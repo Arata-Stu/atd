@@ -6,7 +6,7 @@ CAMERA_ARGUMENTS = ('enable_infra1', 'enable_infra2', 'enable_color', 'enable_de
                     'depth_profile', 'accel_fps', 'gyro_fps', 'unite_imu_method')
 INPUT_ARGUMENTS = ('config', 'profile', 'joy_config', 'teleop', 'teleop_profile', 'teleop_config',
                    'propo', 'pico_config', 'pico_serial', 'pico_sensor_path', 'rc_config', 'rc_profile',
-                   'vehicle_profile')
+                   'vehicle_profile', 'recording', 'recording_profile', 'recording_config')
 
 
 def description(manual=False):
@@ -41,6 +41,7 @@ def description(manual=False):
             'pico_serial': '', 'pico_sensor_path': '',
             'rc_config': str(share('atd_rc_input') / 'config/rc.yaml'),
             'rc_profile': '/data/results/runs/input/propo.yaml',
+            'recording': 'true', 'recording_profile': 'mapping', 'recording_config': '',
         })
     arguments = {key: LaunchConfiguration(key) for key in defaults}
     actions = [DeclareLaunchArgument(key, default_value=value) for key, value in defaults.items()]

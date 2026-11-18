@@ -20,6 +20,8 @@ ROS workspace は config/workspace.env のホスト別設定、未設定なら c
 setup.sh --action workspace で対話設定する。ATD_WORKSPACE_CONFIG で設定ファイルを変更できる。
 ATD_ROS_WS は ROS workspace を単発で上書きする。
 ATD_RECORD_DIR / ATD_RESULT_DIR は、選択ホストの保存先を単発で上書きする。
+Notebook の --build は一時ファイルを $HOME/.cache/atd/build-tmp に作る。
+TMPDIR を指定すると、既存の書込み可能なディレクトリを使う。
 保存先ディレクトリは事前に作成する。record / results は毎回、書込み可能で mount する。
 rosbag 記録・再生や車両ノードは自動起動しない。
 Docker 起動時に追加依存と Fast DDS の loopback 設定を自動適用する。
@@ -53,13 +55,16 @@ done
 if [[ "$task_host" = notebook ]]; then task_host=pc; fi
 case "$task_host" in ""|pc|jetson) ;; *) fail "--host の値は notebook、pc または jetson を指定してください" ;; esac
 
+# 上流 CLI は設定ファイルや一時 bake ファイルのパスを未 quote で扱う。
+validate_cli_shell_path() {
+    case "$1" in
+        *[[:space:]]*|*'$'*|*'`'*|*"'"*|*'"'*|*'\'*|*';'*|*'&'*|*'|'*|*'<'*|*'>'*|*'('*|*')'*|*'{'*|*'}'*|*'['*|*']'*|*'*'*|*'?'*|*'!'*)
+            fail "上流 CLI の制約により${2}に空白や shell 特殊文字は使えません"
+            ;;
+    esac
+}
 task_project_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-# 上流 build loader は検索ディレクトリを空白で分割し、設定パスを未 quote で読む。
-case "$task_project_dir" in
-    *[[:space:]]*|*'$'*|*'`'*|*"'"*|*'"'*|*'\'*|*';'*|*'&'*|*'|'*|*'<'*|*'>'*|*'('*|*')'*|*'{'*|*'}'*|*'['*|*']'*|*'*'*|*'?'*|*'!'*)
-        fail "上流 CLI の制約によりプロジェクトパスに空白や shell 特殊文字は使えません（データの保存先は空白可）"
-        ;;
-esac
+validate_cli_shell_path "$task_project_dir" "プロジェクトパス"
 task_host_selection="manual"
 if [[ -z "$task_host" ]]; then
     source "${task_project_dir}/scripts/lib/detect_host.sh"
@@ -193,6 +198,14 @@ task_container_name="atd_${task_host}_dev"
 task_cli_args=(activate --config "docker.run.container_name=${task_container_name}")
 if $task_build; then task_cli_args+=(--build-local); fi
 printf 'host: %s (%s)\ncontainer: %s\nworkspace: %s\n' "$task_host" "$task_host_selection" "$task_container_name" "$ISAAC_ROS_WS"
+printf 'Git checkout: %s -> /workspaces/atd (read-write)\n' "$task_project_dir"
+task_build_tmpdir=""
+if [[ "$task_host" = pc ]] && $task_build; then
+    task_build_tmpdir="${TMPDIR:-$HOME/.cache/atd/build-tmp}"
+    [[ "$task_build_tmpdir" = /* ]] || fail "TMPDIR は絶対パスで指定してください"
+    validate_cli_shell_path "$task_build_tmpdir" "TMPDIR"
+    printf 'build TMPDIR: %s\n' "$task_build_tmpdir"
+fi
 if [[ "$task_source_layout" = native ]]; then
     printf 'ROS source: %s/ros2_ws/src -> /workspaces/isaac_ros-dev/src (workspace mount / read-write)\n' "$task_project_dir"
 else
@@ -230,7 +243,7 @@ if sys.argv[2] == "true":
     sys.exit("エラー: build 前に同名の実行中コンテナを終了してください: " + sys.argv[1])
 expected = {
     "/workspaces/isaac_ros-dev": (os.environ["ISAAC_ROS_WS"], True),
-    "/workspaces/atd": (os.environ["ATD_PROJECT_DIR"], False),
+    "/workspaces/atd": (os.environ["ATD_PROJECT_DIR"], True),
     "/data/record": (os.environ["ATD_RECORD_DIR"], True),
     "/data/results": (os.environ["ATD_RESULT_DIR"], True),
 }
@@ -307,6 +320,15 @@ fi
 
 source "${task_project_dir}/scripts/lib/isaac_cli.sh"
 atd_check_isaac_cli || exit 1
+
+if [[ -n "$task_build_tmpdir" ]]; then
+    if [[ -z "${TMPDIR:-}" ]]; then
+        mkdir -p -m 700 -- "$task_build_tmpdir" || fail "ビルド用の一時ディレクトリを作成できません: $task_build_tmpdir"
+    fi
+    [[ -d "$task_build_tmpdir" && -w "$task_build_tmpdir" && -x "$task_build_tmpdir" ]] \
+        || fail "TMPDIR を書込み可能なディレクトリにしてください: $task_build_tmpdir"
+    export TMPDIR="$task_build_tmpdir"
+fi
 
 python3 - "$task_project_dir" "$ATD_GENERATED_DOCKER_DIR" "$ATD_RUNTIME_REV" "$DOCKER_ARGS_FILE" "$task_source_layout" <<'PY'
 import os
@@ -398,6 +420,22 @@ if sys.argv[5] == 'native':
     if sum(line.rstrip('\r\n') == source_mount for line in arguments) != 1:
         sys.exit('エラー: source mount のテンプレートを識別できません')
     arguments = [line for line in arguments if line.rstrip('\r\n') != source_mount]
+
+# 上流の -v ~/.gitconfig:/home/admin/.gitconfig は bind 元がないとホストに
+# ディレクトリを作る。新規コンテナ用に、未作成のときだけ通常ファイルを用意する。
+gitconfig = Path.home() / '.gitconfig'
+try:
+    fd = os.open(gitconfig, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+except FileExistsError:
+    if gitconfig.is_dir():
+        sys.exit(f'エラー: ホストの {gitconfig} はディレクトリです。内容を確認し、ディレクトリを退避してから再実行してください。')
+    if not gitconfig.is_file() or not os.access(gitconfig, os.R_OK):
+        sys.exit(f'エラー: ホストの {gitconfig} を読み取れる通常ファイルにしてください。')
+except OSError as error:
+    sys.exit(f'エラー: ホストの Git 設定ファイルを作成できません: {error}')
+else:
+    os.close(fd)
+
 destination.mkdir(parents=True, exist_ok=True)
 for output, content in ((destination / 'Dockerfile.atd', dockerfile),
                         (Path(sys.argv[4]), ''.join(arguments).encode())):

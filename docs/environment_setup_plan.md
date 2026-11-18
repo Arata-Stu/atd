@@ -60,7 +60,7 @@ cuVSLAM / VGL の公式地図処理と保存地図の点群取得、HDMap・ラ�
 必要になった機能ごとに依存と互換性を検討する。
 
 kart の `/workspaces/ros2_ws` 固定パスや独自 CLI の mount 規則も移植せず、ATD の標準 workspace `/workspaces/isaac_ros-dev` を維持する。
-既存 ATD の `/workspaces/atd` 参照用 mount と `/data/record`、`/data/results` の常時 rw mount は維持する。
+ATD の Git checkout を `/workspaces/atd` に、ホストの記録・解析結果を `/data/record` と `/data/results` に、それぞれ rw で mount する。
 
 ## 4. 共通依存と起動処理の実装
 

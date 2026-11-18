@@ -70,7 +70,7 @@ Isaac ROS 5.0 / ROS 2 Lyrical / JetPack 7.2 を対象とし、上流に対して
 
 | 確認した変更・挙動 | ATD での扱い |
 | --- | --- |
-| `<project>/ros2_ws` の親を `/workspaces` に一度だけ mount し、`/workspaces/ros2_ws` を使用 | 移植しない。ATD は標準の `/workspaces/isaac_ros-dev` を使い、プロジェクト設定の参照用に `/workspaces/atd` を別途 readonly mount する |
+| `<project>/ros2_ws` の親を `/workspaces` に一度だけ mount し、`/workspaces/ros2_ws` を使用 | 移植しない。ATD は標準の `/workspaces/isaac_ros-dev` を使い、Git 操作用に checkout 全体を `/workspaces/atd` へ rw mount する |
 | ホストの bash 設定や SSH / AWS ディレクトリの自動 mount を削減 | 必要な共有範囲を明示する設計を引き継ぐ候補。Jetson の SSH agent forwarding は残っている |
 | `DOCKER_ARGS_FILE` のコメント行を読み飛ばす | 設定ファイルをプロジェクトで管理する際に再利用可能 |
 | Dockerfile・画像 hash・build cache の処理はカスタム commit で変更していない | CLI source 化自体が毎回の全ソース再ビルドを要求するわけではない |
@@ -186,7 +186,7 @@ source build の具体例として、Isaac ROS 5 の `isaac_ros_cuvslam` は cuV
 | 選択した ROS workspace | `/workspaces/isaac_ros-dev` | CLI 標準の rw mount |
 | `<ATD checkout>/ros2_ws/src`（同じ `ros2_ws` を workspace に選ぶ場合） | `/workspaces/isaac_ros-dev/src` | workspace mount 内。追加 source mount は行わない |
 | `<ATD checkout>/ros2_ws/src`（別 workspace を使う場合） | `/workspaces/isaac_ros-dev/src/atd` | 自作 package の編集用 rw mount |
-| プロジェクト設定の参照元 | `/workspaces/atd` | readonly |
+| ホストの ATD checkout | `/workspaces/atd` | read-write、Git 操作と対話シェルの開始位置 |
 | rosbag の記録・解析元 | `/data/record` | 毎回 rw |
 | 地図・解析等の結果 | `/data/results` | 毎回 rw |
 

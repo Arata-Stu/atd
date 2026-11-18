@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sameTeleopProfile, teleopConnectionMatches, teleopFresh, teleopPreview, teleopProfileIssue, teleopReasonText, teleopRolesAssigned } from '../src/teleop_profile.ts';
+import { sameTeleopProfile, teleopCanResume, teleopConnectionMatches, teleopEventReasonText, teleopFresh, teleopPreview, teleopProfileIssue, teleopReasonText, teleopRecordingAssigned, teleopRolesAssigned } from '../src/teleop_profile.ts';
 
 const profile = () => ({ version: 1, axes: { steering: { axis: 'left_x', subtract_axis: '', scale: -1 }, throttle: { axis: 'r2', subtract_axis: 'l2', scale: .5 } }, buttons: { enable: 'r1', record_start: 'cross', record_stop: 'circle' } });
 const sample = () => ({ axes: [.4, 0, 0, 0, .2, .8, 0, 0], buttons: [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], stale: false });
@@ -31,6 +31,29 @@ test('Unassigned controls remain unassigned and do not inherit a driving policy'
   assert.deepEqual(teleopPreview(value, sample(), true), { steering: null, throttle: null, enable: false });
   assert.equal(teleopProfileIssue(value), '');
 });
+test('Recording-only button roles can resume events while driving axes and enable remain inactive', () => {
+  for (const role of ['record_start', 'record_stop']) {
+    const value = profile(); value.axes.steering.axis = ''; value.axes.throttle.axis = ''; value.axes.throttle.subtract_axis = '';
+    value.buttons = { enable: '', record_start: '', record_stop: '', [role]: 'cross' };
+    assert.equal(teleopRolesAssigned(value), false);
+    assert.equal(teleopRecordingAssigned(value), true);
+    assert.equal(teleopCanResume(value), true);
+    assert.deepEqual(teleopPreview(value, sample(), true), { steering: null, throttle: null, enable: false });
+  }
+});
+test('Empty, enable-only and single-axis-only mappings cannot resume without a record button', () => {
+  const value = profile(); value.axes.steering.axis = ''; value.axes.throttle.axis = ''; value.axes.throttle.subtract_axis = '';
+  value.buttons = { enable: '', record_start: '', record_stop: '' };
+  assert.equal(teleopCanResume(value), false);
+  value.buttons.enable = 'r1';
+  assert.equal(teleopCanResume(value), false);
+  value.axes.steering.axis = 'left_x';
+  assert.equal(teleopCanResume(value), false);
+  value.axes.throttle.axis = 'r2';
+  assert.equal(teleopCanResume(value), true);
+  value.axes.throttle.scale = NaN;
+  assert.equal(teleopCanResume(value), false);
+});
 test('Invalid gains, unavailable names and duplicate button roles are rejected', () => {
   for (const scale of [NaN, Infinity, -1.1, 1.1]) { const value = profile(); value.axes.steering.scale = scale; assert.match(teleopProfileIssue(value), /倍率/); }
   const invalid = profile(); invalid.axes.steering.axis = 'unknown'; assert.match(teleopProfileIssue(invalid), /標準軸/);
@@ -57,5 +80,7 @@ test('Jetson reasons provide Japanese actions without exposing unknown status to
   assert.match(teleopReasonText('release_all_controls'), /すべて離して/);
   assert.match(teleopReasonText('profile_missing_or_invalid'), /保存.*再読込/);
   assert.match(teleopReasonText('ready'), /運転指令に変換/);
+  assert.match(teleopEventReasonText('ready'), /記録ボタンの操作要求/);
+  assert.match(teleopEventReasonText('recording_buttons_are_unassigned'), /記録開始・停止.*未割当/);
   for (const reason of ['future_internal_token', 'toString', '', null, {}]) assert.equal(teleopReasonText(reason), '状態を確認できません。Jetsonの接続と入力を確認してください。');
 });

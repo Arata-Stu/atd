@@ -154,7 +154,7 @@ public:
         response->success = core_.configure(request->data, steady_now());
         response->message = response->success ?
           (request->data ? "configuration mode: requests suspended" : "input mapping resumed; drive permission is separate") :
-          "require configured steering/throttle, fresh Joy/ready/status, and release all controls";
+          "require drive axes or a recording button, fresh Joy/ready/status, and release all controls";
         publish();
         status(true);
       });
@@ -248,7 +248,8 @@ private:
     const double now = steady_now();
     const auto output = core_.output(now);
     const std::string reason = core_.reason(now);
-    const std::string state = reason + ":" + input_session_ + ":" + profile_error_;
+    const std::string events_reason = core_.events_reason(now);
+    const std::string state = reason + ":" + events_reason + ":" + input_session_ + ":" + profile_error_;
     if (!force && state == status_state_) {return;}
     status_state_ = state;
     YAML::Node data;
@@ -258,6 +259,8 @@ private:
     data["profile_path"] = profile_path_;
     data["ready"] = output.valid;
     data["reason"] = reason;
+    data["events_ready"] = core_.events_ready(now);
+    data["events_reason"] = events_reason;
     data["error"] = profile_error_;
     data["input_session"] = input_session_;
     data["steering"] = output.steering;

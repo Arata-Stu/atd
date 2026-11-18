@@ -205,6 +205,25 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "rmw_fastrtps_cpp|argument with spaces\n")
 
+    def test_interactive_shell_opens_checkout_from_default_workspace(self):
+        self.assertEqual(self.run_hook().returncode, 0)
+        workspace = self.root.resolve() / "ros workspace"
+        checkout = self.root.resolve() / "atd checkout"
+        workspace.mkdir()
+        checkout.mkdir()
+        workspace_alias = self.root / "workspace-link"
+        workspace_alias.symlink_to(workspace, target_is_directory=True)
+        env = {**self.env, "ISAAC_ROS_WS": str(workspace_alias), "ATD_PROJECT_DIR": str(checkout)}
+        for args, cwd, expected in (([], workspace, checkout), ([], self.root, self.root),
+                                    (["pwd"], workspace, workspace)):
+            with self.subTest(args=args, cwd=cwd):
+                result = subprocess.run(
+                    ["/bin/bash", str(SHELL), *args], cwd=cwd, env=env,
+                    input="pwd\nexit\n", capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(str(expected.resolve()), result.stdout.splitlines())
+
     def test_interactive_shell_ignores_host_rc_and_restores_overlay_dds(self):
         self.assertEqual(self.run_hook().returncode, 0)
         (self.config / "bashrc").write_text(BASHRC.read_text())

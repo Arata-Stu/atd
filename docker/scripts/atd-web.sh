@@ -58,7 +58,7 @@ if [[ "$task_action" = check ]]; then
 fi
 [[ -d "$task_workspace" && -w "$task_workspace" ]] || fail 'workspace に書き込めません'
 mkdir -p "$task_build"
-# readonly の checkout へ node_modules / dist を作らない。cache のみに同期する。
+# node_modules / dist は workspace 内の Web ビルド用ディレクトリに置く。
 rsync -a --delete --exclude=node_modules --exclude=dist --exclude=.source-hash "$task_source/" "$task_build/"
 task_fingerprint="$(python3 - "$task_source" <<'PY'
 import hashlib

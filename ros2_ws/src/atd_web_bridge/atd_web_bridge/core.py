@@ -123,6 +123,17 @@ class Cache:
                                                and status.get('tf_published') is True),
                 'availability': {'status': 'missing' if status is None else 'fresh' if fresh else 'stale'}}
 
+    def recording_status(self):
+        """Observe manager reports without inventing recording/result booleans."""
+        status = self.get('recording_status')
+        if status:
+            source_age = status.get('source_age_s')
+            valid_age = type(source_age) in (int, float) and 0 <= source_age <= 1e12 and math.isfinite(source_age)
+            status['age_s'] = source_age + status['age_s'] if valid_age else None
+            status['stale'] = bool(status['stale'] or not valid_age or status['age_s'] > self.fresh_s)
+        return {'status': status, 'freshness_s': self.fresh_s, 'availability': {
+            'status': 'missing' if status is None else 'stale' if status['stale'] else 'fresh'}}
+
 
 def revision(profile):
     return hashlib.sha256(json.dumps(profile, sort_keys=True, allow_nan=False).encode()).hexdigest()

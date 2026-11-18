@@ -43,6 +43,8 @@ struct Profile
   Axis steering, throttle;
   int enable{-1}, record_start{-1}, record_stop{-1};
   bool assigned() const {return steering.assigned() && throttle.assigned();}
+  bool events_assigned() const {return record_start >= 0 || record_stop >= 0;}
+  bool usable() const {return assigned() || events_assigned();}
   void validate() const
   {
     steering.validate();
@@ -125,6 +127,7 @@ public:
   bool configuring() const {return configuring_;}
   bool profile_valid() const {return have_profile_;}
   const Profile & profile() const {return profile_;}
+  bool events_ready(double now) const {return profile_.events_assigned() && available(now) && armed_;}
 
   std::vector<uint8_t> input(
     const std::vector<float> & axes, const std::vector<int32_t> & buttons,
@@ -164,7 +167,7 @@ public:
     Output result;
     result.stamp_ns = have_input_ ? input_stamp_ : 0;
     if (!available(now)) {reset(); return result;}
-    if (!armed_) {return result;}
+    if (!armed_ || !profile_.assigned()) {return result;}
     result.valid = true;
     result.steering = profile_.steering.map(axes_);
     result.throttle = profile_.throttle.map(axes_);
@@ -177,13 +180,15 @@ public:
     if (configuring_) {return "configuring";}
     if (!have_profile_) {return "profile_missing_or_invalid";}
     if (!profile_.assigned()) {return "steering_and_throttle_are_unassigned";}
-    if (!have_source_ || !source_available_ || now - source_at_ > status_timeout_) {
-      return "joy_status_unavailable";
-    }
-    if (!have_ready_ || !ready_ || now - ready_at_ > input_timeout_) {return "joy_not_ready";}
-    if (!have_input_ || now - input_at_ > input_timeout_) {return "joy_input_unavailable";}
-    if (!armed_) {return "release_all_controls";}
-    return "ready";
+    return input_reason(now);
+  }
+
+  std::string events_reason(double now) const
+  {
+    if (configuring_) {return "configuring";}
+    if (!have_profile_) {return "profile_missing_or_invalid";}
+    if (!profile_.events_assigned()) {return "recording_buttons_are_unassigned";}
+    return input_reason(now);
   }
 
   static bool shape_valid(const std::vector<float> & axes, const std::vector<int32_t> & buttons)
@@ -195,9 +200,19 @@ public:
   }
 
 private:
+  std::string input_reason(double now) const
+  {
+    if (!std::isfinite(now) || !have_source_ || !source_available_ || now < source_at_ || now - source_at_ > status_timeout_) {
+      return "joy_status_unavailable";
+    }
+    if (!have_ready_ || !ready_ || now < ready_at_ || now - ready_at_ > input_timeout_) {return "joy_not_ready";}
+    if (!have_input_ || now < input_at_ || now - input_at_ > input_timeout_) {return "joy_input_unavailable";}
+    if (!armed_) {return "release_all_controls";}
+    return "ready";
+  }
   bool available(double now, bool check_configuring = true) const
   {
-    return (!check_configuring || !configuring_) && have_profile_ && profile_.assigned() &&
+    return (!check_configuring || !configuring_) && have_profile_ && profile_.usable() &&
            have_source_ && source_available_ && now >= source_at_ && now - source_at_ <= status_timeout_ &&
            have_ready_ && ready_ && now >= ready_at_ && now - ready_at_ <= input_timeout_ &&
            have_input_ && now >= input_at_ && now - input_at_ <= input_timeout_;

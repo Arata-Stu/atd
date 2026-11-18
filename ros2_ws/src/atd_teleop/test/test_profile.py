@@ -71,6 +71,21 @@ class ProfileTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '64 KiB'):
                 profile.load(path)
 
+    def test_resume_assignment_can_be_driving_or_recording_but_not_enable_alone(self):
+        value = profile.default_profile()
+        self.assertFalse(profile.usable(value))
+        value['buttons']['enable'] = 'r1'
+        self.assertFalse(profile.usable(value))
+        value['axes']['steering']['axis'] = 'left_x'
+        self.assertFalse(profile.usable(value))
+        value['axes']['throttle']['axis'] = 'r2'
+        self.assertTrue(profile.usable(value))
+        for role in ('record_start', 'record_stop'):
+            with self.subTest(role=role):
+                value = profile.default_profile()
+                value['buttons'][role] = 'cross'
+                self.assertTrue(profile.usable(value))
+
 
 if __name__ == '__main__':
     unittest.main()

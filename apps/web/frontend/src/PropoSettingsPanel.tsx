@@ -206,7 +206,7 @@ export function PropoSettingsPanel({ notify, onDirty }: {
         {inputFresh && status?.input?.ready && !sourceMatches && <p className="small-note">受信元が切り替わりました。新しい Pico 入力に対応する役割状態を待っています。</p>}
       </>}
       <p className="small-note">役割の閾値・現在値の取得は S.BUS raw（0 ～ 2047）を使います。閾値の間は中間位置です。「raw・位置」は編集中の設定による確認表示で、確認時間を経た実際のイベントとは別です。再接続や設定の再開だけでは記録を開始しません。</p>
-      <p className="small-note">記録チャンネルは開始・停止の要求を生成します。実際の rosbag 記録処理は今後接続します。予備2枠に機能は割り当てていません。</p>
+      <p className="small-note">記録チャンネルは開始・停止の要求を生成します。実際の記録状態と保存結果はこのページ上部で確認できます。予備2枠に機能は割り当てていません。</p>
     </div>
   </section>;
 }

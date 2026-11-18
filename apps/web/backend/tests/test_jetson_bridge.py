@@ -44,7 +44,8 @@ class JetsonAdapterTests(unittest.TestCase):
                              ('/teleop/reload', 'POST'), ('/propo/status', 'GET'),
                              ('/propo/profile', 'GET'), ('/propo/profile', 'PUT'),
                              ('/propo/configure', 'POST'), ('/propo/reload', 'POST'),
-                             ('/vehicle/status', 'GET'), ('/vehicle/profile', 'GET'), ('/vehicle/profile', 'PUT')):
+                             ('/vehicle/status', 'GET'), ('/vehicle/profile', 'GET'), ('/vehicle/profile', 'PUT'),
+                             ('/recording/status', 'GET')):
             with self.subTest(path=path, method=method), patch('urllib.request.build_opener') as opener:
                 opener.return_value.open.return_value.__enter__.return_value.read.return_value = b'{}'
                 payload = {'port': 8790, 'path': path, 'method': method, 'nonce': 'a' * 32, 'body': {}}
@@ -56,7 +57,9 @@ class JetsonAdapterTests(unittest.TestCase):
         for path, method in (('/teleop/command', 'POST'), ('/teleop/status', 'PUT'), ('/teleop/reload', 'GET'),
                              ('/propo/command', 'POST'), ('/propo/bootsel', 'POST'),
                              ('/propo/status', 'PUT'), ('/propo/reload', 'GET'),
-                             ('/vehicle/apply', 'POST'), ('/vehicle/restart', 'POST'), ('/vehicle/status', 'PUT')):
+                             ('/vehicle/apply', 'POST'), ('/vehicle/restart', 'POST'), ('/vehicle/status', 'PUT'),
+                             ('/recording/status', 'POST'), ('/recording/status', 'PUT'),
+                             ('/recording/start', 'POST'), ('/recording/stop', 'POST')):
             with self.subTest(path=path, method=method), patch('urllib.request.build_opener') as opener:
                 payload = {'port': 8790, 'path': path, 'method': method, 'nonce': 'a' * 32}
                 with patch('sys.stdin', io.StringIO(json.dumps(payload))), self.assertRaisesRegex(ValueError, 'Unsupported'):

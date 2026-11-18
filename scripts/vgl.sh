@@ -333,10 +333,10 @@ try:
     if env.get("ATD_RUNTIME_API") != "1" or env.get("ATD_RUNTIME_REV") != sys.argv[1]:
         sys.exit("VGL: コンテナの起動構成が古いか異なります。処理を終了後に dev.sh --build で再作成してください")
     mounts = {mount["Destination"]: mount for mount in container.get("Mounts", [])}
-    for destination, source, writable in [("/workspaces/atd", sys.argv[2], False), ("/data/results", sys.argv[3], True)]:
+    for destination, source in [("/workspaces/atd", sys.argv[2]), ("/data/results", sys.argv[3])]:
         mount = mounts.get(destination, {})
-        if mount.get("Type") != "bind" or mount.get("RW") is not writable or os.path.realpath(mount.get("Source", "")) != os.path.realpath(source):
-            sys.exit("VGL: 起動済みコンテナの project / results mount が現在の設定と異なります")
+        if mount.get("Type") != "bind" or mount.get("RW") is not True or os.path.realpath(mount.get("Source", "")) != os.path.realpath(source):
+            sys.exit("VGL: " + destination + " の mount 元または書込み権限が異なります。処理を終了後、dev.sh でコンテナを再作成してください")
 except (ValueError, KeyError, TypeError, IndexError):
     sys.exit("VGL: Docker inspect を解釈できません")
 ' "$task_revision" "$task_project" "$task_results" || exit 1

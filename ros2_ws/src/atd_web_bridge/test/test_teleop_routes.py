@@ -106,6 +106,27 @@ class TeleopRouteTests(unittest.TestCase):
             self.dispatch('/teleop/configure', 'POST', {'enabled': 1})
         self.clients['configure'].call_async.assert_not_called()
 
+    def test_recording_only_profile_can_resume_but_empty_or_enable_only_cannot(self):
+        from atd_teleop_tools import profile as profiles
+        for role in ('record_start', 'record_stop'):
+            with self.subTest(role=role):
+                self.profile = profiles.default_profile()
+                self.profile['buttons'][role] = 'cross'
+                self.save()
+                self.status(ready=False, events_ready=False)
+                result = self.dispatch('/teleop/configure', 'POST', {'enabled': False})
+                self.assertTrue(result['output_resumed'])
+        calls = self.clients['configure'].call_async.call_count
+        for enable in ('', 'r1'):
+            with self.subTest(enable=enable):
+                self.profile = profiles.default_profile()
+                self.profile['buttons']['enable'] = enable
+                self.save()
+                self.status()
+                with self.assertRaisesRegex(ValueError, '割り当て'):
+                    self.dispatch('/teleop/configure', 'POST', {'enabled': False})
+        self.assertEqual(self.clients['configure'].call_async.call_count, calls)
+
     def test_timeout_invalidates_observation_and_does_not_retry(self):
         self.save()
         self.node.wait = Mock(side_effect=ValueError('ROS service timeout'))

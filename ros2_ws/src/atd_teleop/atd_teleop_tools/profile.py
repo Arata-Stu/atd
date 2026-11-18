@@ -56,6 +56,14 @@ def validate(profile):
     return result
 
 
+def usable(profile):
+    """Driving needs both axes; recording can be used independently."""
+    value = validate(profile)
+    driving = all(binding['axis'] or binding['subtract_axis'] for binding in value['axes'].values())
+    recording = bool(value['buttons']['record_start'] or value['buttons']['record_stop'])
+    return bool(driving or recording)
+
+
 class _UniqueLoader(yaml.SafeLoader):
     pass
 

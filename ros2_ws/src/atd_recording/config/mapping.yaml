@@ -1,0 +1,54 @@
+/atd_recording_node:
+  ros__parameters:
+    profile_name: mapping
+    record_root: /data/record/rosbags
+    topics:
+      - /camera/camera/infra1/image_rect_raw
+      - /camera/camera/infra2/image_rect_raw
+      - /camera/camera/infra1/camera_info
+      - /camera/camera/infra2/camera_info
+      - /camera/camera/color/image_raw
+      - /camera/camera/color/camera_info
+      - /camera/camera/accel/sample
+      - /camera/camera/gyro/sample
+      - /camera/camera/imu
+      - /tf
+      - /tf_static
+      - /joy/raw
+      - /joy
+      - /joy/connected
+      - /joy/ready
+      - /joy/status
+      - /teleop/command
+      - /teleop/events
+      - /teleop/status
+      - /vehicle/pico/telemetry
+      - /vehicle/pico/status
+      - /rc/events
+      - /rc/status
+      - /vehicle/layout/status
+    required_topics:
+      - /camera/camera/infra1/image_rect_raw
+      - /camera/camera/infra2/image_rect_raw
+      - /camera/camera/infra1/camera_info
+      - /camera/camera/infra2/camera_info
+      - /tf_static
+    required_types:
+      - sensor_msgs/msg/Image
+      - sensor_msgs/msg/Image
+      - sensor_msgs/msg/CameraInfo
+      - sensor_msgs/msg/CameraInfo
+      - tf2_msgs/msg/TFMessage
+    best_effort_topics:
+      - /camera/camera/infra1/image_rect_raw
+      - /camera/camera/infra2/image_rect_raw
+      - /camera/camera/infra1/camera_info
+      - /camera/camera/infra2/camera_info
+      - /camera/camera/color/image_raw
+      - /camera/camera/color/camera_info
+      - /camera/camera/accel/sample
+      - /camera/camera/gyro/sample
+      - /camera/camera/imu
+      - /joy/raw
+    transient_local_topics:
+      - /tf_static

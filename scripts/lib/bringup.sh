@@ -3,10 +3,10 @@
 # profile / host / package / launch file / 表示名 / 設定TUI種別（タブ区切り）。
 atd_bringup_profiles() {
     printf '%s\n' \
-        $'input\tjetson\tatd_web_bridge\tinput.launch.py\tJoy・Pico入力、役割処理、観測・設定bridge\tplain' \
+        $'input\tjetson\tatd_web_bridge\tinput.launch.py\tJoy・Pico入力、記録待機、観測・設定bridge\tplain' \
         $'bridge\tjetson\tatd_web_bridge\tbridge.launch.py\t観測・設定bridgeのみ（入力は別途起動）\tplain' \
         $'d455\tjetson\tatd_bringup\td455.launch.py\tD455・車両TF（bridgeなし）\tcamera' \
-        $'manual\tjetson\tatd_bringup\tmanual.launch.py\tD455・車両TF・既存入力一式\tcamera'
+        $'manual\tjetson\tatd_bringup\tmanual.launch.py\tD455・車両TF・入力・地図用記録待機\tcamera'
 }
 
 atd_bringup_lookup() {

@@ -32,7 +32,7 @@ if tool == 'docker':
             results += '-old'
         print(json.dumps([{'State': {'Running': state != 'stopped'},
             'Config': {'Env': ['ATD_RUNTIME_API=1', 'ATD_RUNTIME_REV=' + ('old' if state == 'old' else 'revision')]},
-            'Mounts': [{'Destination': '/workspaces/atd', 'Source': project, 'RW': False, 'Type': 'bind'},
+            'Mounts': [{'Destination': '/workspaces/atd', 'Source': project, 'RW': state != 'readonly_checkout', 'Type': 'bind'},
                        {'Destination': '/data/results', 'Source': results, 'RW': True, 'Type': 'bind'}]}]))
     elif args[-2:] == ['cat', '/etc/atd/runtime.ready']:
         print(os.environ.get('ATD_TEST_READY', 'revision'))
@@ -225,7 +225,7 @@ print(lines[0] if action == 'first' else next(line for line in lines if line.sta
         self.assertIn('終了値: 1', report.read_text())
 
     def test_container_guards_block_stale_or_wrong_results(self):
-        for state in ('missing', 'stopped', 'old', 'wrong_results'):
+        for state in ('missing', 'stopped', 'old', 'wrong_results', 'readonly_checkout'):
             with self.subTest(state=state):
                 result = self.invoke('doctor', env={'ATD_TEST_CONTAINER': state})
                 self.assertNotEqual(result.returncode, 0)

@@ -81,7 +81,7 @@ Notebook と Jetson の設定は各ホストで保存する。保存済みのパ
 | ROS workspace | 指定したパス。未設定なら `<ATD checkout>/ros2_ws` | `/workspaces/isaac_ros-dev` | 読書き可 |
 | 自作 ROS package の編集元（リポジトリの `ros2_ws` を workspace に選ぶ場合） | `<ATD checkout>/ros2_ws/src` | `/workspaces/isaac_ros-dev/src` | workspace mount 内 |
 | 自作 ROS package の編集元（別 workspace を使う場合） | `<ATD checkout>/ros2_ws/src` | `/workspaces/isaac_ros-dev/src/atd` | 読書き可 |
-| プロジェクト設定の参照元 | `<ATD checkout>` | `/workspaces/atd` | readonly |
+| Git checkout | `<ATD checkout>` | `/workspaces/atd` | 読書き可、対話シェルの開始位置 |
 
 ```bash
 ./scripts/setup.sh --action workspace
@@ -101,9 +101,32 @@ workspace 操作では CLI 設定を準備する。別の workspace を選択し
 リポジトリの `ros2_ws` 自体を workspace に選ぶ場合は、その `src` がコンテナの `/workspaces/isaac_ros-dev/src` にそのまま対応する。追加の `src/atd` mount point は作らない。直接指定する場合は、プロジェクト直下で `./scripts/setup.sh --action workspace --workspace "$PWD/ros2_ws"` を使える。既定パスとホスト別設定の保存方法は変わらない。
 CLI の探索規則に合わせ、`<workspace>/.isaac-ros-cli/config.yaml`、`<workspace>/scripts/.isaac_ros_common-config`、`<workspace>/../scripts/.build_image_layers.yaml` から `docker/isaac_ros/` のテンプレートを参照する。親の `scripts` は兄弟 workspace と共通になることがある。ATD の旧配置への既知の参照は新配置へ移行し、異なる既存設定は上書きせず停止する。
 `ISAAC_ROS_WS` は `dev.sh` がホストでは選択先へ設定し、コンテナ内では `/workspaces/isaac_ros-dev` を使う。ホストの `.bashrc` へ手動で export する必要はない。
-ROS の build は workspace 内で行い、コンテナの `/workspaces/atd` は設定参照用として扱う。標準の入口は `./scripts/build.sh`。直接 `colcon build` を使う場合は workspace の `src` を対象に `--base-paths src` を明示する。
+`/workspaces/atd` で `./scripts/build.sh` を実行すると ROS workspace 内で build する。直接 `colcon build` を使う場合は、先に `cd /workspaces/isaac_ros-dev` して `--base-paths src` を指定する。
 Notebook の `build/` / `install/` を Jetson へコピーせず、各ホスト用に build する。
 CLI 設定テンプレートは `docker/isaac_ros/`、Docker の生成物は `<ATD checkout>/.cache/docker/` に置く。テンプレート・ソースと、各ホストの workspace の build 成果物を分ける。詳しくは [構成規約](../project_structure.md)を参照する。
+
+<a id="git-pull"></a>
+
+### ホストとコンテナからの Git 更新
+
+通常の `git clone` で作った checkout をホストとコンテナの両方から更新できる。新規起動・再接続時の対話シェルは `/workspaces/atd` で開く。そこで `git pull --ff-only` を実行する。他の場所で作業中なら `git -C /workspaces/atd pull --ff-only` を使う。どちらで pull しても同じ作業ツリーに反映される。ROS package の更新後は必要な package を build し、イメージや起動設定の更新後はホストで `./scripts/dev.sh --build` してコンテナを再作成する。
+
+ホストで `unable to access '~/.gitconfig': Is a directory` が出た場合は、ログインユーザーで次を実行する。上流の既定引数は `~/.gitconfig` を `-v` で共有するため、元ファイルがない状態で起動すると Docker が同名のディレクトリを作る場合がある。次の例は既存のディレクトリを内容ごと退避し、所有者だけが読み書きできる空の設定ファイルを用意する。[Docker の bind mount](https://docs.docker.com/engine/storage/bind-mounts/#syntax)
+
+```bash
+(
+  set -e
+  if [[ -d "$HOME/.gitconfig" && ! -L "$HOME/.gitconfig" ]]; then
+    backup="$(mktemp -d "$HOME/gitconfig-backup.XXXXXX")"
+    mv -T -- "$HOME/.gitconfig" "$backup"
+    printf '退避先: %s\n' "$backup"
+    (umask 077; touch "$HOME/.gitconfig")
+  fi
+  git -C "$HOME/workspaces/atd" pull --ff-only
+)
+```
+
+更新した `dev.sh` は新規起動時に欠けている `~/.gitconfig` を通常ファイルとして用意する。読み取り専用の checkout や旧 `.gitconfig` を mount 済みのコンテナは、実行中の処理を終了して停止し、ホストから `./scripts/dev.sh --build` で作り直す。
 
 ## 状態の診断と履歴
 

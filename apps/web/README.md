@@ -15,7 +15,7 @@ atd-build --packages-up-to atd_mapping
 atd-web
 ```
 
-ブラウザは Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。FastAPI・frontend の build / 配信・地図作成等のジョブは Notebook の Docker 内で実行する。`atd-web` は専用の `web` 用 uv 環境を同期・選択して API を起動する。Raceline の最小曲率計算用には、独立した Python 3.12 の `raceline` 環境も同期する。初回は frontend 依存の同期と build を行い、以後はソースの変更時だけ再buildする。source は readonly mount のまま、`node_modules` と `dist` は選択した workspace の `.atd-web/frontend/` へ生成する。
+ブラウザは Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。FastAPI・frontend の build / 配信・地図作成等のジョブは Notebook の Docker 内で実行する。`atd-web` は専用の `web` 用 uv 環境を同期・選択して API を起動する。Raceline の最小曲率計算用には、独立した Python 3.12 の `raceline` 環境も同期する。初回は frontend 依存の同期と build を行い、以後はソースの変更時だけ再buildする。ソースをホストと共有し、`node_modules` と `dist` は選択した workspace の `.atd-web/frontend/` へ生成する。
 
 ```bash
 # Notebook の Docker 内
@@ -99,15 +99,21 @@ Input は Jetson に Bluetooth 接続した DualSense の生入力・正規化�
 
 物理配置は `/data/results/runs/input/dualsense.yaml`、役割設定は `/data/results/runs/input/teleop.yaml` に永続保存する。役割の初期値はすべて未割り当て。操舵・スロットルは標準軸と差し引く軸、倍率（負値で反転）を選択でき、ボタンは出力許可の要求・記録開始要求・記録終了要求へ割り当てる。保存済みと node への反映済みを区別し、未保存の編集中に監視更新で内容を置き換えない。接続先や bridge が変わった場合は設定を再取得してから操作する。
 
-`atd_teleop` が生成するのは正規化した運転要求と操作イベント。`valid` や `enable_requested` は最終的な走行許可ではない。記録ボタンも現段階では要求イベントの生成までで、rosbag は開始しない。出力許可判断・ATD の基板通信は後続実装。詳細は [atd_joy](../../ros2_ws/src/atd_joy/README.md)、[atd_teleop](../../ros2_ws/src/atd_teleop/README.md)、[atd_interfaces](../../ros2_ws/src/atd_interfaces/README.md)を参照する。
+`atd_teleop` が生成するのは正規化した運転要求と操作イベント。`valid` や `enable_requested` は最終的な走行許可ではない。記録ボタンのイベントは `atd_recording` が実際のrosbag開始・停止へ接続する。記録ボタンだけの役割設定でも操作要求を再開でき、運転用軸が未設定なら運転要求は無効のままになる。出力許可判断・ATD の基板通信は後続実装。詳細は [atd_joy](../../ros2_ws/src/atd_joy/README.md)、[atd_teleop](../../ros2_ws/src/atd_teleop/README.md)、[atd_interfaces](../../ros2_ws/src/atd_interfaces/README.md)を参照する。
 
 「コントローラ」→「プロポ・Pico」では、受信機 → S.BUS → Pico → USB → Jetson で受け取った入力の PWM 相当値（µs）と raw 値（0〜2047）、USB・S.BUS・操作経路・電源・異常・受信カウンタを監視する。CH1〜CH6を既定表示し、表示数を6／10／16chに切り替えられる。表示数は Notebook のブラウザに保持し、高いCHに役割があれば表示を自動で広げる。受信・ROS・APIでは常に全16chを保持するため、10chプロポへの変更で通信の型を作り直す必要はない。現在のUSB監視データから使用中のch数は判別できないため、表示数を送受信機の自動検出結果とは扱わない。Pico の CH1＝操舵・CH2＝スロットル・CH3＝操作権は固定で、この画面では変更しない。
 
 µs は参照 Rev6 firmware の既定換算に合わせた参考値で、raw 172／992／1811 を1000／1500／2000 µsに対応させ、区間ごとに補間・整数丸めし端点で制限する。受信入力を見やすくする換算表示であり、ESC・サーボへの実出力や実測波形ではない。役割の判定閾値は引き続き raw 単位を使う。未受信・期限切れの値を1500 µs等で補完しない。
 
-Jetson 側の「記録の開始・停止」「予備1」「予備2」は CH4〜CH16 へ割り当てられ、初期値は全て未割り当て。低側・高側の raw 閾値、反転、位置の確認時間を設定できる。使用するプロポが送信できるCHを選ぶ。設定開始 → 保存 → 再読込 → 操作要求を再開の順で反映し、保存先は `/data/results/runs/input/propo.yaml`。既存の version 1 の設定も利用できる。設定開始は役割イベントだけを停止し、Pico の基本手動操作は継続する。再開には正常で新鮮な RC 入力が必要で、現在のスイッチ位置を基準に取り直す。通常は安定した低側→高側で記録開始要求、高側→低側で停止要求となる。中間位置とチャタリングでは要求を出さない。予備2枠は状態表示のみで、記録も `/rc/events` への要求発行まで。rosbag の実行処理は後続実装。
+Jetson 側の「記録の開始・停止」「予備1」「予備2」は CH4〜CH16 へ割り当てられ、初期値は全て未割り当て。低側・高側の raw 閾値、反転、位置の確認時間を設定できる。使用するプロポが送信できるCHを選ぶ。設定開始 → 保存 → 再読込 → 操作要求を再開の順で反映し、保存先は `/data/results/runs/input/propo.yaml`。既存の version 1 の設定も利用できる。設定開始は役割イベントだけを停止し、Pico の基本手動操作は継続する。再開には正常で新鮮な RC 入力が必要で、現在のスイッチ位置を基準に取り直す。通常は安定した低側→高側で記録開始要求、高側→低側で停止要求となる。中間位置とチャタリングでは要求を出さない。予備2枠は状態表示のみ。記録要求は `/rc/events` から `atd_recording` へ渡し、Joyと同じ記録セッションを開始・停止する。
 
 `atd_vehicle_interface` は Rev6 の監視用 CDC1 / if02 を USB 属性と Pico 固有 serial で識別し、`INFO` と `STREAM ON` だけを送信する。複数 Pico があれば自動選択せず、`./scripts/bringup.sh input pico_serial:=<ID>` で選ぶ。必要なら `pico_sensor_path:=/dev/serial/by-id/<CDC1>`・`pico_config:=<YAML>`・`rc_profile:=<YAML>` を指定できる。CDC0 と走行指令は使わず、firmware の制御処理は変更していない。firmware ソースは [Pico firmware](../../ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/README.md) として同じ ROS package 内で Git 管理する。詳細は [Pico 受信](../../ros2_ws/src/atd_vehicle_interface/README.md)、[プロポ役割](../../ros2_ws/src/atd_rc_input/README.md)、[要件3.10節](../../docs/project_requirements.md#310-rev6-pico-firmware-の確認2026-11-18)を参照する。ホスト検証と Jetson Docker・実 USB・実機の確認は別である。
+
+## rosbagの記録状態
+
+コントローラ画面のJoy／プロポに共通のカードで、記録待機・開始処理・記録中・終了処理・エラーを観測する。開始停止はJetsonに接続したJoy・プロポの割当操作で行い、Webの記録操作endpointは追加しない。直近の要求受付、保存先、状態時点の経過、前回の保存確定と件数・サイズを区別して表示する。
+
+`GET /api/recording/status` はSSH経由でmanagerの状態を観測する。元stampからの経過時間にbridgeとbrowserの経過を加え、受信が止まった状態を現在の「記録中」として保持しない。未受信・古い状態・Jetson接続断は停止済みと補完しない。UI／SSH接続が切れても記録は継続し、Jetson側の入力操作で停止できる。[ボタン割当と記録手順](../../docs/recording.md)
 
 ## 車両設定
 
@@ -135,6 +141,7 @@ Jetson で `./scripts/build.sh --packages-up-to atd_bringup` 後、`./scripts/br
 | `../../ros2_ws/src/atd_vehicle_description/` | 車両配置profileと車体・カメラ取付のstatic TF |
 | `../../ros2_ws/src/atd_sensors/` | D455の実機対応モード照会・TUI・検査付き起動 |
 | `../../ros2_ws/src/atd_bringup/` | D455・車体TF・入力監視の統合起動 |
+| `../../ros2_ws/src/atd_recording/` | Joy・プロポのイベントから共通のrosbag2 recorderを管理し、MCAPと終了結果を確認 |
 | `../../ros2_ws/src/atd_interfaces/` | 正規化した運転要求・操作イベントの ROS message 定義 |
 
 Docker の追加 apt 依存は [dependencies.apt](../../docker/dependencies.apt)、追加処理は [Dockerfile.atd](../../docker/Dockerfile.atd)。cuVSLAM・公式 mapping・visual mapping・VGL の apt package を使う。Node / pnpm と Web 用 Python 環境は Notebook 専用で、Jetson の通常起動では Web 依存を同期しない。

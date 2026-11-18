@@ -19,4 +19,9 @@ if (($#)); then
     exec "$@"
 fi
 source "${task_config_dir}/dds.env.sh"
+# CLI が選んだ ROS workspace から対話入室するときは checkout を開く。
+task_project_dir="${ATD_PROJECT_DIR:-/workspaces/atd}"
+if [[ . -ef "${ISAAC_ROS_WS:-/workspaces/isaac_ros-dev}" && -d "$task_project_dir" ]]; then
+    cd -- "$task_project_dir"
+fi
 exec /bin/bash --noprofile --rcfile "${task_config_dir}/bashrc" -i

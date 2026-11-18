@@ -10,7 +10,8 @@ export interface BridgeIdentity { instance_id?: string; hostname?: string }
 export interface TeleopState {
   connected: boolean;
   identity?: BridgeIdentity;
-  status: { configuring: boolean; profile_valid: boolean; profile_path: string; ready: boolean; reason: string; profile?: TeleopProfile; age_s?: number; stale?: boolean } | null;
+  status: { configuring: boolean; profile_valid: boolean; profile_path: string; ready: boolean; reason: string;
+    events_ready?: boolean; events_reason?: string; profile?: TeleopProfile; age_s?: number; stale?: boolean } | null;
   message?: string;
 }
 export interface TeleopProfileResult {
@@ -40,6 +41,13 @@ export function teleopProfileIssue(profile: TeleopProfile): string {
 export function teleopRolesAssigned(profile: TeleopProfile): boolean {
   return (['steering', 'throttle'] as const).every(role => !!(profile.axes[role].axis || profile.axes[role].subtract_axis));
 }
+export function teleopRecordingAssigned(profile: TeleopProfile): boolean {
+  return !!(profile.buttons.record_start || profile.buttons.record_stop);
+}
+/** 運転と記録のどちらかを使う構成で再開可能。運転許可ボタンだけでは再開しない。 */
+export function teleopCanResume(profile: TeleopProfile): boolean {
+  return !teleopProfileIssue(profile) && (teleopRolesAssigned(profile) || teleopRecordingAssigned(profile));
+}
 
 /** status 自体の鮮度と、ブラウザが最後に受信してからの時間を両方確認する。 */
 export function teleopFresh(state: TeleopState | null, receivedAt: number, now: number): boolean {
@@ -52,9 +60,10 @@ export function teleopConnectionMatches(profile: BridgeIdentity | null, state: B
 }
 
 const TELEOP_REASONS: Record<string, string> = {
-  configuring: '役割設定中です。指令出力を停止しています。',
+  configuring: '役割設定中です。運転指令と記録イベントを停止しています。',
   profile_missing_or_invalid: '役割設定を保存し、再読込してください。',
-  steering_and_throttle_are_unassigned: '操舵とスロットルの入力を割り当ててください。',
+  steering_and_throttle_are_unassigned: '操舵・スロットルが揃っていないため、運転指令は無効です。',
+  recording_buttons_are_unassigned: '記録開始・停止のボタンが未割当です。',
   joy_status_unavailable: 'コントローラの状態を確認できません。接続と入力の起動を確認してください。',
   joy_not_ready: 'コントローラを接続し、入力設定を終了してください。',
   joy_input_unavailable: '新しいコントローラ入力を待っています。',
@@ -65,6 +74,9 @@ const TELEOP_REASONS: Record<string, string> = {
 export function teleopReasonText(reason: unknown): string {
   return typeof reason === 'string' && Object.hasOwn(TELEOP_REASONS, reason)
     ? TELEOP_REASONS[reason] : '状態を確認できません。Jetsonの接続と入力を確認してください。';
+}
+export function teleopEventReasonText(reason: unknown): string {
+  return reason === 'ready' ? '記録ボタンの操作要求を生成できます。' : teleopReasonText(reason);
 }
 
 /** 保存前の割り当てを確認するローカル表示。Jetson が出力した指令ではない。 */

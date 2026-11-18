@@ -38,7 +38,7 @@ if args[:2] == ['container', 'inspect']:
     print(json.dumps([{
         'State': {'Running': state != 'stopped'},
         'Config': {'Env': [key + '=' + value for key, value in environment.items()]},
-        'Mounts': [{'Destination': '/workspaces/atd', 'Source': source, 'Type': 'bind', 'RW': False}],
+        'Mounts': [{'Destination': '/workspaces/atd', 'Source': source, 'Type': 'bind', 'RW': state != 'readonly_checkout'}],
     }]))
 elif args[:1] == ['exec']:
     if args[-2:] == ['cat', '/etc/atd/runtime.ready']:
@@ -139,7 +139,7 @@ class PythonLauncherTests(unittest.TestCase):
         self.assertIn('atd_pc_dev', self.commands()[-1])
 
     def test_missing_stopped_legacy_stale_and_other_checkout_do_not_execute(self):
-        for state in ('missing', 'stopped', 'legacy', 'stale', 'different_checkout'):
+        for state in ('missing', 'stopped', 'legacy', 'stale', 'different_checkout', 'readonly_checkout'):
             with self.subTest(state=state):
                 self.calls_path.unlink(missing_ok=True)
                 result = self.invoke('ros', 'check', env={'ATD_TEST_CONTAINER': state})

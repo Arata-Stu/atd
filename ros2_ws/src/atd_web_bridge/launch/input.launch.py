@@ -1,4 +1,4 @@
-"""Jetson の入力・操作要求・監視を起動する。基板出力や記録は開始しない。"""
+"""Jetson の入力・操作要求・記録待機・監視を起動する。録画は操作イベントで開始する。"""
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -23,6 +23,7 @@ def generate_launch_description():
     teleop = Path(get_package_share_directory('atd_teleop'))
     pico = Path(get_package_share_directory('atd_vehicle_interface'))
     rc = Path(get_package_share_directory('atd_rc_input'))
+    recording = Path(get_package_share_directory('atd_recording'))
     return LaunchDescription([
         DeclareLaunchArgument('config', default_value=str(share / 'config/bridge.yaml')),
         DeclareLaunchArgument('profile', default_value='/data/results/runs/input/dualsense.yaml'),
@@ -37,6 +38,9 @@ def generate_launch_description():
         DeclareLaunchArgument('rc_config', default_value=str(rc / 'config/rc.yaml')),
         DeclareLaunchArgument('rc_profile', default_value='/data/results/runs/input/propo.yaml'),
         DeclareLaunchArgument('vehicle_profile', default_value='/data/results/runs/vehicle/layout.yaml'),
+        DeclareLaunchArgument('recording', default_value='true', choices=['true', 'false']),
+        DeclareLaunchArgument('recording_profile', default_value='inputs', choices=['mapping', 'calibration', 'inputs']),
+        DeclareLaunchArgument('recording_config', default_value=''),
         include(joy / 'launch/joy.launch.py',
                 {'profile': LaunchConfiguration('profile'), 'config': LaunchConfiguration('joy_config')}),
         include(teleop / 'launch/teleop.launch.py',
@@ -48,6 +52,9 @@ def generate_launch_description():
         include(rc / 'launch/rc.launch.py',
                 {'profile': LaunchConfiguration('rc_profile'), 'config': LaunchConfiguration('rc_config')},
                 IfCondition(LaunchConfiguration('propo'))),
+        include(recording / 'launch/recording.launch.py',
+                {'profile': LaunchConfiguration('recording_profile'),
+                 'config': LaunchConfiguration('recording_config')}, IfCondition(LaunchConfiguration('recording'))),
         Node(package='atd_web_bridge', executable='web_bridge', output='screen',
              parameters=[LaunchConfiguration('config'), {'profile_path': LaunchConfiguration('profile'),
                           'teleop_profile_path': LaunchConfiguration('teleop_profile'),

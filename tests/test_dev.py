@@ -26,6 +26,7 @@ import sys
 
 entry = {"tool": "isaac-ros", "args": sys.argv[1:]}
 if sys.argv[1:2] == ["activate"]:
+    entry["tmpdir"] = os.environ.get("TMPDIR")
     entry["record"] = os.environ["ATD_RECORD_DIR"]
     entry["results"] = os.environ["ATD_RESULT_DIR"]
     entry["workspace"] = os.environ["ISAAC_ROS_WS"]
@@ -73,7 +74,7 @@ if state == "missing":
     sys.exit(1)
 expected = [
     ("/workspaces/isaac_ros-dev", os.environ["ISAAC_ROS_WS"], True),
-    ("/workspaces/atd", os.environ["ATD_PROJECT_DIR"], False),
+    ("/workspaces/atd", os.environ["ATD_PROJECT_DIR"], state != 'readonly_checkout'),
     ("/data/record", os.environ["ATD_RECORD_DIR"], True),
     ("/data/results", os.environ["ATD_RESULT_DIR"], True),
 ]
@@ -131,6 +132,53 @@ print(json.dumps([{
 
 
 class DevScriptTests(unittest.TestCase):
+    def test_gitconfig_prepared_only_for_new_container(self):
+        gitconfig = self.root / '.gitconfig'
+        for extra, env in ((['--dry-run'], {}), ([], {'ATD_TEST_CONTAINER': 'matching'})):
+            result = self.invoke('jetson', *extra, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(gitconfig.exists())
+        result = self.invoke('jetson')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(gitconfig.read_bytes(), b'')
+        self.assertEqual(gitconfig.stat().st_mode & 0o777, 0o600)
+
+    def test_gitconfig_preserves_existing_file_and_symlink(self):
+        gitconfig = self.root / '.gitconfig'
+        contents = '[user]\n\tname = someone\n'
+        gitconfig.write_text(contents)
+        gitconfig.chmod(0o400)
+        result = self.invoke('pc')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(gitconfig.read_text(), contents)
+        self.assertEqual(gitconfig.stat().st_mode & 0o777, 0o400)
+        target = gitconfig.rename(self.root / 'user.gitconfig')
+        gitconfig.symlink_to(target)
+        result = self.invoke('jetson')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(gitconfig.readlink(), target)
+        self.assertEqual(target.read_text(), contents)
+
+    def test_gitconfig_directory_and_broken_link_are_preserved(self):
+        gitconfig = self.root / '.gitconfig'
+        gitconfig.mkdir()
+        saved = gitconfig / 'original'
+        saved.write_text('keep')
+        result = self.invoke('jetson')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ディレクトリを退避', result.stderr)
+        self.assertEqual(saved.read_text(), 'keep')
+        self.assertEqual(self.activations(), [])
+        gitconfig.rename(self.root / 'saved-dir')
+        missing = self.root / 'missing'
+        gitconfig.symlink_to(missing)
+        result = self.invoke('jetson')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('.gitconfig', result.stderr)
+        self.assertTrue(gitconfig.is_symlink())
+        self.assertFalse(missing.exists())
+        self.assertEqual(self.activations(), [])
+
     def test_optional_host_ssh_is_readonly_and_required_on_reconnect(self):
         ssh = self.root / '.ssh'
         ssh.mkdir(mode=0o700)
@@ -448,7 +496,7 @@ class DevScriptTests(unittest.TestCase):
                 ])
                 self.assertEqual(activation["workspace"], str(self.workspaces[host]))
                 expected_args = [
-                    ["--mount", f"type=bind,src={PROJECT},dst=/workspaces/atd,readonly"],
+                    ["--mount", f"type=bind,src={PROJECT},dst=/workspaces/atd"],
                     ["--mount", f"type=bind,src={PROJECT / 'ros2_ws/src'},dst=/workspaces/isaac_ros-dev/src/atd"],
                     ["--mount", f"type=bind,src={self.paths[(host, 'record')]},dst=/data/record"],
                     ["--mount", f"type=bind,src={self.paths[(host, 'results')]},dst=/data/results"],
@@ -575,13 +623,49 @@ class DevScriptTests(unittest.TestCase):
     def test_build_requests_local_cli_build_and_dry_run_executes_nothing(self):
         result = self.invoke("pc", "--build")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("--build-local", self.activations()[0]["args"])
+        activation, = self.activations()
+        self.assertIn("--build-local", activation["args"])
+        build_tmp = self.root / ".cache/atd/build-tmp"
+        self.assertEqual(activation["tmpdir"], str(build_tmp))
+        self.assertTrue(build_tmp.is_dir())
         self.reset_calls()
         result = self.invoke("jetson", "--build", "--dry-run")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--build-local", result.stdout)
         self.assertIn("read-write", result.stdout)
         self.assertEqual(self.calls(), [])
+
+    def test_notebook_build_passes_explicit_tmpdir_to_cli(self):
+        tmpdir = self.root / "custom-tmp"
+        tmpdir.mkdir()
+        result = self.invoke("pc", "--build", env={"TMPDIR": str(tmpdir)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        activation, = self.activations()
+        self.assertEqual(activation["tmpdir"], str(tmpdir))
+        self.assertFalse((self.root / ".cache/atd/build-tmp").exists())
+
+    def test_notebook_build_rejects_unusable_explicit_tmpdir_before_activation(self):
+        missing = self.root / "missing-tmp"
+        unsafe = self.root / "tmp;unsafe"
+        unsafe.mkdir()
+        for value in (str(missing), str(unsafe), "relative-tmp"):
+            with self.subTest(tmpdir=value):
+                self.reset_calls()
+                result = self.invoke("pc", "--build", env={"TMPDIR": value})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("TMPDIR", result.stderr)
+                self.assertEqual(self.activations(), [])
+        self.assertFalse(missing.exists())
+
+    def test_start_and_jetson_build_do_not_set_notebook_tmpdir(self):
+        for args in (("pc",), ("jetson", "--build")):
+            with self.subTest(args=args):
+                self.reset_calls()
+                result = self.invoke(*args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                activation, = self.activations()
+                self.assertIsNone(activation["tmpdir"])
+                self.assertFalse((self.root / ".cache/atd/build-tmp").exists())
 
     def test_kart_launcher_blocks_new_build_and_allows_reconnect(self):
         script = self.auto_project("atd-project", self.root)
@@ -600,12 +684,13 @@ class DevScriptTests(unittest.TestCase):
         self.assertEqual(self.calls()[-1]["args"][-1], "/usr/local/bin/atd-shell")
 
     def test_existing_container_requires_matching_path_and_access(self):
-        for state in ("different_path", "different_access"):
+        for state in ("different_path", "different_access", "readonly_checkout"):
             with self.subTest(state=state):
                 self.reset_calls()
                 result = self.invoke("pc", env={"ATD_TEST_CONTAINER": state})
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("mount が設定と異なります", result.stderr)
+                self.assertIn("再作成", result.stderr)
                 self.assertEqual(self.activations(), [])
         self.reset_calls()
         result = self.invoke("pc", env={"ATD_TEST_CONTAINER": "matching"})
@@ -713,9 +798,11 @@ class DevScriptTests(unittest.TestCase):
     def test_dry_run_does_not_generate_build_files(self):
         fixture = self.detector_fixture("dry-fixture", [])
         script = self.auto_project("dry-project", fixture)
-        result = self.invoke("pc", "--dry-run", script=script)
+        result = self.invoke("pc", "--build", "--dry-run", script=script)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(self.root / ".cache/atd/build-tmp"), result.stdout)
         self.assertFalse((script.parent.parent / ".cache/docker").exists())
+        self.assertFalse((self.root / ".cache/atd/build-tmp").exists())
         self.assertEqual(self.calls(), [])
 
     def test_python_lock_changes_revision_but_generated_python_files_do_not(self):

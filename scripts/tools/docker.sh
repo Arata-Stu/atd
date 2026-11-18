@@ -227,17 +227,15 @@ try:
     mounts = {mount["Destination"]: mount for mount in container.get("Mounts", [])}
     source_root = os.path.join(sys.argv[2], "ros2_ws", "src")
     source_destination = "/workspaces/isaac_ros-dev/src/atd"
-    writable_values = [True, False, True, True]
     if os.path.realpath(source_root) == os.path.realpath(os.path.join(sys.argv[1], "src")):
         if source_destination in mounts:
             sys.exit("不要な入れ子の source mount があります")
     else:
         paths.append(source_root)
         destinations.append(source_destination)
-        writable_values.append(True)
-    for destination, expected, writable in zip(destinations, paths, writable_values):
+    for destination, expected in zip(destinations, paths):
         mount = mounts.get(destination, {})
-        if (not expected or mount.get("Type") != "bind" or mount.get("RW") != writable
+        if (not expected or mount.get("Type") != "bind" or mount.get("RW") is not True
                 or os.path.realpath(mount.get("Source", "")) != os.path.realpath(expected)):
             sys.exit("mount が現在の設定と異なります: " + destination)
     environment = dict(item.split("=", 1) for item in container.get("Config", {}).get("Env", []) if "=" in item)
@@ -255,7 +253,7 @@ try:
 except (ValueError, KeyError, TypeError, IndexError):
     sys.exit("container inspect の構成を解釈できません")
 ' "$task_workspace" "$task_project_dir" "$task_record" "$task_result" "$task_source_revision"; then
-                    report OK container-config 'workspace / data mounts / DDS 環境変数が現在の設定と一致'
+                    report OK container-config 'checkout / workspace / data mounts / DDS 環境変数が現在の設定と一致'
                 else report FAIL container-config '設定変更前の構成または不一致。処理を終了後にコンテナを再作成してください'; fi
                 if [[ -n "$task_revision" ]] && task_ready="$(docker exec "$task_container" cat /etc/atd/runtime.ready 2>/dev/null)" \
                     && [[ "$task_ready" == "$task_revision" ]] \

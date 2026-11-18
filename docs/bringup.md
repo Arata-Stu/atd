@@ -12,12 +12,12 @@
 
 | profile | 起動する処理 | ROS launch |
 | --- | --- | --- |
-| `manual` | D455、車体static TF、Joy・Pico入力、役割処理、観測・設定bridge | `atd_bringup manual.launch.py` |
+| `manual` | D455、車体static TF、Joy・Pico入力、役割処理、地図用記録待機、bridge | `atd_bringup manual.launch.py` |
 | `d455` | D455 と車体static TF | `atd_bringup d455.launch.py` |
-| `input` | Joy・Pico入力、役割処理、観測・設定bridge | `atd_web_bridge input.launch.py` |
+| `input` | Joy・Pico入力、役割処理、入力記録待機、bridge | `atd_web_bridge input.launch.py` |
 | `bridge` | 観測・設定bridgeのみ | `atd_web_bridge bridge.launch.py` |
 
-`manual` は手動走行時のセンサ・入力監視をまとめる名称で、車両出力や rosbag 記録は開始しない。プロポの基本走行は引き続き Pico 内で完結する。全 profile は Jetson ローカル専用。Notebook は Web UI と解析を担当し、車載 DDS に参加しない。
+`manual` は手動走行時のセンサ・入力監視をまとめる名称で、車両出力や rosbag 記録は自動開始しない。`manual` / `input` は記録managerを1つ起動して待機し、Joy・プロポの割当操作で開始・停止する。プロポの基本走行は引き続き Pico 内で完結する。全 profile は Jetson ローカル専用。Notebook は Web UI と解析を担当し、車載 DDS に参加しない。
 
 ## D455 の TUI
 
@@ -65,6 +65,10 @@ TTY で D455 profile を選び、launch引数を付けなかった場合に設�
 `manual` は既存 `input` の引数も受ける。`profile`・`teleop_profile`・`rc_profile` が入力の永続設定、`joy_config`・`teleop_config`・`pico_config`・`rc_config` が各 node の起動設定、`config` がbridge設定。`pico_serial` / `pico_sensor_path` で Pico を選び、`teleop:=false` / `propo:=false` で各入力経路を除外する。`bridge` はbridge用の `config` と `vehicle_profile` を受ける。[bridge package](../ros2_ws/src/atd_web_bridge/README.md)
 
 `d455` はbridgeを含まないため、UIから車体配置を編集する場合は別ターミナルで `bridge` を起動するか、`manual` を使う。`manual` はbridgeを1つだけ起動する。`input` / `bridge` と重複して起動しない。
+
+## rosbagの記録
+
+`manual` は `recording_profile:=mapping`、`input` は `recording_profile:=inputs` が既定。車両モデル用のプロポ手動走行には `./scripts/bringup.sh manual recording_profile:=calibration` を使う。`recording:=false` でmanagerを除外し、`recording_config:=絶対パス` で独自YAMLを使える。保存先は `/data/record/rosbags/<bag_id>/`、形式はMCAP。開始処理・記録中・終了処理・保存確定をNotebook UIのコントローラ画面で観測できる。[ボタン割当と記録手順](recording.md)
 
 ## 車両の配置設定
 

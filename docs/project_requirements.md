@@ -60,14 +60,15 @@
 ### 2.4. センサ・手動介入・車両 I/O の方針
 
 - D455 の IR（infra）、RGB、IMU、Depth はいずれも使用する可能性を残し、RealSense driver で起動する方針とする。
-- `bringup.sh` のTUIで各ストリームのON／OFF・解像度・Hzを選ぶ。初期値は左右IR 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。実機の対応モードを列挙して同時構成を検査し、非対応値を黙って代替しない。bagの記録対象は別途決める。
+- `bringup.sh` のTUIで各ストリームのON／OFF・解像度・Hzを選ぶ。初期値は左右IR 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。実機の対応モードを列挙して同時構成を検査する。bag の記録対象は用途に合わせて記録 profile で選択する。
+- 車両モデルの初期校正にはプロポ手動走行の bag を使う。Notebook のオフライン VSLAM で得た pose から後輪車軸中央の前後速度を推定し、エンコーダのない車両の基準速度として、プロポ入力・IMU と突き合わせる。スロットルに対する加減速と操舵に対する旋回応答を実走行で同定する。[車両校正の手順](vehicle_calibration.md)
 - 車体static TFは `atd_vehicle_description`、カメラ内部TFはRealSense driverが担当する。`base_link` を後輪回転軸中央（x前・y左・z上）とし、車体寸法とカメラ取付位置をNotebook UIから実測値で編集する。空欄は未計測として保持し、保存後のTF node再起動で適用する。CAD参考寸法と実測値、保存状態と適用中状態を区別する。
 - Joy による手動介入を想定し、DualSense を Bluetooth で Jetson に接続する予定とする。
 - Joy の操作割り当て、手動・自律の切替条件、停止・再開条件は後から決める。
 - Joy の入力監視と軸・ボタン配置の調整は、地図・転送・ライブ表示と同じ Web アプリから行えるようにする。プロポは受信機 → S.BUS → Pico → USB → Jetson の経路とし、Jetson では値の監視と rosbag の記録開始・停止等に利用する。Pico の走行用 CH1〜CH3 は固定し、Jetson 側の CH4〜CH16 の役割を設定できる。UIは既定でCH1〜CH6のrawとPWM相当µsを表示し、10／16ch表示へ切り替えられる構成とする。実際のPWM出力・波形測定値と入力換算値を区別する。送受信機種・スイッチ位置・校正値は実機で確認する。
 - プロポの基本操作は Pico 内で完結させ、プロポ／Jetson の最終的な操作権切替も Pico 側で行う。Jetson 内での DualSense／将来自律入力の許可判断とは別の層として扱う。6ch の用途は操舵、スロットル、操作権切替、rosbag 開始／停止、未定2枠とし、未定枠に役割を割り当てない。
 - 入力取得・正規化と、操舵・スロットル・操作要求への役割割り当てを分ける。役割は設定で変更し、Jetson で入力・teleop を起動した後、Notebook の同じ入力画面から受信情報の監視と設定を行う。具体的な割り当ては初期値で固定しない。
-- 初回実装は `atd_interfaces` の運転要求・操作イベント型と `atd_teleop` を対象とする。正規化した要求は最終的な走行許可・PWM・実速度ではなく、出力許可判断、パルス幅変換、基板通信、rosbag 記録処理は後続実装で接続する。
+- 初回実装は `atd_interfaces` の運転要求・操作イベント型と `atd_teleop` を対象とする。正規化した要求は最終的な走行許可・PWM・実速度ではなく、出力許可判断、パルス幅変換、基板通信は後続実装で接続する。記録要求は `atd_recording` で実際の開始・停止へ接続する。
 - ESC・ステアリングサーボの制御に PCA は使わず、独自 firmware で対応する予定とする。
 - マイコンは Pico ベース、Jetson との接続は USB とする。ユーザー提供の Rev6 firmware を `atd_vehicle_interface/firmware/pico_rev6/` で Git 管理する。USB 制御指令形式の採用、実際の CH 配置・端点、ESC／サーボへの適合、停止・再開条件の ATD への反映と実機確認は別途行う。実装と取り込み元は 3.10 節に記録する。
 
@@ -75,7 +76,7 @@
 
 - 初回準備の入口は `scripts/setup.sh` とする。fzf のメニューを優先し、未導入の初回は番号選択を利用する。
 - Notebook（Ubuntu 24.04 / x86_64・amd64）と Jetson（JetPack 7.2 / aarch64・arm64、BSP マーカー）を区別してホスト準備を行う。`--host notebook` は内部の `pc` 設定へ対応する。
-- clone の標準配置は `~/workspaces/atd`、未設定時の ROS workspace は実際の clone 配下の `ros2_ws` とする。標準配置なら `~/workspaces/atd/ros2_ws` となる。workspace 操作で対話的に指定し、`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存する。`--workspace` での直接指定にも対応する。Docker 内は `/workspaces/isaac_ros-dev` とし、両ホストの build / install は別々に扱う。
+- clone の標準配置は `~/workspaces/atd`、未設定時の ROS workspace は実際の clone 配下の `ros2_ws` とする。標準配置なら `~/workspaces/atd/ros2_ws` となる。workspace 操作で対話的に指定し、`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存する。`--workspace` での直接指定にも対応する。Docker 内の ROS workspace は `/workspaces/isaac_ros-dev` とし、両ホストの build / install は別々に扱う。ホストの ATD checkout を `/workspaces/atd` に読書き共有し、コンテナの対話シェルから同じ checkout に対して `git pull` できるようにする。
 - bag・地図・モデル等は clone 配下の `data/record`・`data/results` を未設定時の保存先とする。`data/` は Git 管理対象外の永続資産として保持する。既存の保存済み指定、引数・環境変数の上書きを優先し、旧設定の変更と既存データの移動は自動実行しない。新しい配置は setup の workspace / storage 操作で明示的に選び直す。
 - 自作 ROS package の編集元はリポジトリの `ros2_ws/src/atd_<module>/` とする。別の workspace を使う場合はコンテナの workspace `src/atd/` に rw で mount する。CLI 設定テンプレートは `docker/isaac_ros/`、生成 Dockerfile は Git 管理対象外の `.cache/docker/` に置く。配置の詳細は [構成規約](project_structure.md)に従う。
 - `scripts/tools/docker.sh` でセットアップ状態を項目ごとの `OK` / `FAIL` / `SKIP` として表示する。結果は `logs/docker/<host>/` に保存し、後から対話的に確認できるようにする。診断だけではホストへの導入や Docker 起動を行わない。
@@ -129,7 +130,7 @@ bag の記録対象や各 bag の topic / frame は実データに合わせて�
 - Jetson では UI のブラウザ・frontend を起動しない。これは Jetson 側で必要なバックエンドや bridge を動かさないという意味ではない。
 - UI の追加でも、走行処理の Jetson 内完結、PC からの遠隔走行制御を行わないこと、車載 DDS の直接通信範囲の要件を維持する。
 - 基本機能は 2.9 節の地図・転送・ライブ表示・入力設定とする。UI サーバーは Notebook の Docker 内、Jetson との観測・設定接続は SSH 経由の loopback HTTP とし、操作・既定ポートは Web アプリの README に記録する。個別の観測 topic・周期等は実 bringup に合わせて設定する。
-- Jetson のまとめ起動は `scripts/bringup.sh` に集約し、実装済みの `manual`（D455・車体TF・入力監視・bridge）、`d455`（D455・車体TF）、`input`（Joy・Pico入力・役割処理・bridge）、`bridge`（bridgeのみ）を提供する。引数なしの対話端末では fzf、未導入なら番号で選び、非対話では profile を明示する。`--list` と `--dry-run` は Notebook でも使え、profile を省略した dry-run は `input` の予定を示す。実際の起動は Jetson の既存 Docker 内に限定し、車両出力・bag 記録を開始しない。
+- Jetson のまとめ起動は `scripts/bringup.sh` に集約し、実装済みの `manual`（D455・車体TF・入力監視・bridge）、`d455`（D455・車体TF）、`input`（Joy・Pico入力・役割処理・bridge）、`bridge`（bridgeのみ）を提供する。引数なしの対話端末では fzf、未導入なら番号で選び、非対話では profile を明示する。`--list` と `--dry-run` は Notebook でも使え、profile を省略した dry-run は `input` の予定を示す。実際の起動は Jetson の既存 Docker 内に限定し、車両出力・bag 記録を自動開始しない。`manual` / `input` は共通の記録managerを待機させ、Joy・プロポの割当操作で開始・停止する。
 - profile 一覧は `scripts/lib/bringup.sh` に置き、各 ROS package の実装済み launch と対応させる。D455と車体TFの統合起動を `atd_bringup` に実装する。未実装の自己位置推定・自律走行 profile・空 package は追加しない。[bringup の操作](bringup.md)に現在の対象と拡張方針を記録する。
 - setup・Docker・Python・VGL・Web UI・bringup のスクリプト実装と、Docker / ROS / GPU / 実機での結合確認は分けて扱う。
 
@@ -256,7 +257,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - Notebook の初回は Docker 内で `atd-build --packages-up-to atd_mapping` が必要である。公式 apt や `web` / `raceline` の同期は自作 ROS package の build を代替しない。`atd-web check` で `atd_mapping` を含む導入状態を診断する。
 - Centerline の region と、独立した `raceline` 環境による mincurv / mincurv_iqp を実装した。旧 paired / local への fallback は設けない。単体テスト、小規模閉路で実 QP / IQP solver を使うテスト、frontend の型検査・build はローカルで確認した。
 - Jetson 側に C++ component の `atd_joy` と、観測・設定用の `atd_web_bridge` を追加した。Notebook API は SSH から Jetson loopback HTTP へアクセスし、車載 DDS に直接参加しない。
-- `atd_interfaces` に正規化運転要求と操作イベント、`atd_teleop` に設定可能な役割割り当てを追加した。Notebook の入力画面に物理配置と役割設定を統合し、保存済みと反映済みを区別する。操作要求の出力までで、最終走行許可・基板通信・rosbag の記録実行は未実装。仕様と検証境界は [atd_teleop](../ros2_ws/src/atd_teleop/README.md)を参照する。
+- `atd_interfaces` に正規化運転要求と操作イベント、`atd_teleop` に設定可能な役割割り当てを追加した。Notebook の入力画面に物理配置と役割設定を統合し、保存済みと反映済みを区別する。操作要求の出力までで、最終走行許可・基板通信は未実装。記録実行は `atd_recording` が担当し、操作イベントと記録結果を分ける。仕様と検証境界は [atd_teleop](../ros2_ws/src/atd_teleop/README.md)を参照する。
 - Web UI は Notebook の Docker 内で `atd-web` を実行して起動し、ブラウザだけを Notebook ホストで開く。ホスト用の `scripts/tools/webui.sh` は `docker exec` による補助入口とする。Jetson の入力起動は `scripts/bringup.sh input`、手順・初期 schema・生成方式・制約は [Web アプリ](../apps/web/README.md)と package の README に記録する。
 - Docker build、ROS build / install、実 bag / GPU での公式処理、実 SCP、Bluetooth / evdev、実走行は対象機で別に確認する。ローカルのコード検証だけでこれらを検証済みとはしない。
 
@@ -286,7 +287,7 @@ ATD 側に `atd_vehicle_interface` の CDC1 受信・状態配信と、`atd_rc_i
 
 UI はraw値（0〜2047）とPWM相当値（µs）、USB・S.BUS・操作経路・電源・異常・カウンタを表示する。既定はCH1〜CH6で、6／10／16ch表示を選択・Notebookのブラウザに保持する。役割が高いCHにあれば表示数を自動で広げる。受信・ROS・APIは全16chを保持し、10chへの変更で型定義を変えない。表示数は利用中の送受信機のch数を自動検出した結果ではない。PWM相当値は参照firmwareの既定値raw172／992／1811→1000／1500／2000µsを区間補間・整数丸め・端点制限した参考表示であり、ESC・サーボの実出力や波形の実測値ではない。役割閾値はraw単位を維持し、欠落・古い入力を中立値で埋めない。
 
-Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または未割り当てへ設定でき、閾値・反転・debounce を `/data/results/runs/input/propo.yaml` へ保存する。version 1の既存設定を維持する。初期値は全て未割り当てで、予備2枠は状態表示のみ。設定開始・保存・再読込・イベント再開を分け、設定中も Pico の手動走行は継続する。再接続・反映・再開時は現在位置を基準に取り直し、スイッチを保持しているだけでは要求を出さない。正常で新鮮な入力の安定した低→高で開始要求、高→低で停止要求を `/rc/events` に出す。実際の rosbag 記録処理は未実装。
+Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または未割り当てへ設定でき、閾値・反転・debounce を `/data/results/runs/input/propo.yaml` へ保存する。version 1の既存設定を維持する。初期値は全て未割り当てで、予備2枠は状態表示のみ。設定開始・保存・再読込・イベント再開を分け、設定中も Pico の手動走行は継続する。再接続・反映・再開時は現在位置を基準に取り直し、スイッチを保持しているだけでは要求を出さない。正常で新鮮な入力の安定した低→高で開始要求、高→低で停止要求を `/rc/events` に出す。実際の記録は `atd_recording` が担当し、Joy・プロポで同じ記録セッションを開始・停止する。
 
 ホスト上でプロトコル、sysfs/PTY による USB 選択・排他・切断、役割判定、Web API・画面ロジックを検証した。ROS build/install・DDS/service 結合・Jetson Docker・実 USB・S.BUS・実基板の動作は未検証。Pico の選択状態と Jetson 内の HOST 要求の gate を分ける方針を維持する。
 
@@ -340,6 +341,7 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 | [environment_setup_plan.md](environment_setup_plan.md) | `kart/docker` の比較、ホスト / Docker の分担、依存追加、TUI / UI 配置、段階的なセットアップの提案 |
 | [python_environments.md](python_environments.md) | uv による用途別 Python 環境、ROS 2 の ABI・依存管理、AI 学習環境との分離 |
 | [bringup.md](bringup.md) | Jetson の実装済み起動 profile、対話選択・引数・拡張方針 |
+| [recording.md](recording.md) | Joy・プロポによるMCAP記録、開始停止、profile、保存確認と監視 |
 | [vehicle_layout.md](vehicle_layout.md) | 車両座標系、寸法・配置のUI編集、CAD参考値、static TFの適用手順 |
 | [vgl_models.md](vgl_models.md) | Notebook の ONNX export、SCP 転送、Jetson の engine build と検証・ログ |
 | [hardware_cad.md](hardware_cad.md) | 車体CAD・印刷用3MF・Rev6カメラ組立モデルの一覧と取り込み元。実物との一致は未検証 |
@@ -353,6 +355,8 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 | `../config/storage.env.example` | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
 
 ## 7. 更新履歴
+
+- 2026-11-18: `atd_recording` と `bringup.sh` に Joy・プロポによる MCAP 記録と Notebook からの状態観測を追加した。車両校正用の `calibration` profile は両 IR・CameraInfo、静的 TF、分離 IMU、Pico テレメトリを必須とする。Notebook の `atd_vehicle_calibration` は同じ走行の VO 軌跡から基準速度と加速度を求め、プロポ手動区間の入力応答を出力する。対象環境での ROS 結合・実走行データによる同定は別途確認する。
 
 - 2026-11-18: D455を含む `manual` / `d455` profile、対応モードに基づくストリーム設定TUI、車体static TF、Notebookの車両配置UIを追加。初期値は左右IR 640×480@90、RGB 640×480@30、加速度200Hz／ジャイロ400Hz、Depth OFF。CAD板寸法は参考値とし、未計測取付TFを補完せず、保存後の再起動で適用する。ホストの検証とJetson Docker／D455／実車確認を区別する。
 

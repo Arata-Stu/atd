@@ -36,7 +36,7 @@ buttons:
 
 上記は設定形式の例であり、採用済みのボタン配置ではない。軸は `clamp((axis - subtract_axis) * scale, -1, 1)`。空文字の入力は0として扱い、scale は [-1,1]。軸名は left_x/left_y/right_x/right_y/l2/r2/dpad_x/dpad_y。ボタン名は atd_joy の17論理ボタン名。ボタンの空文字は未割り当て。同じボタンに複数の役割は割り当てられない。
 
-`steering` / `throttle` はそれぞれ少なくとも一つの入力軸を割り当てる必要がある。Python の `atd_teleop_tools.profile` と C++ の読み込みが schema を検査する。保存は検証後の atomic rename。物理 profile の校正や操作方式は変更しない。
+運転要求には `steering` / `throttle` の両方に入力軸が必要。記録専用なら開始・停止ボタンを割り当てて再開できる。この場合はイベントを配信し、運転要求は中立・無効を維持する。`/teleop/status` の `ready` は運転要求、`events_ready` は操作イベントの利用可否を表す。Python の `atd_teleop_tools.profile` と C++ の読み込みが schema を検査する。保存は検証後の atomic rename。
 
 | service | 型 | 内容 |
 | --- | --- | --- |

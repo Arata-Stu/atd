@@ -1,0 +1,24 @@
+/atd_recording_node:
+  ros__parameters:
+    profile_name: inputs
+    record_root: /data/record/rosbags
+    topics:
+      - /tf
+      - /tf_static
+      - /joy/raw
+      - /joy
+      - /joy/connected
+      - /joy/ready
+      - /joy/status
+      - /teleop/command
+      - /teleop/events
+      - /teleop/status
+      - /vehicle/pico/telemetry
+      - /vehicle/pico/status
+      - /rc/events
+      - /rc/status
+      - /vehicle/layout/status
+    best_effort_topics:
+      - /joy/raw
+    transient_local_topics:
+      - /tf_static

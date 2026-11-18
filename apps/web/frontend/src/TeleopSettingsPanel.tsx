@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { Icon, Tag } from './workspace_ui';
-import { sameTeleopProfile, teleopConnectionMatches, teleopFresh, teleopPreview, teleopProfileIssue, teleopReasonText, teleopRolesAssigned } from './teleop_profile';
+import { sameTeleopProfile, teleopCanResume, teleopConnectionMatches, teleopEventReasonText, teleopFresh, teleopPreview, teleopProfileIssue, teleopReasonText, teleopRecordingAssigned, teleopRolesAssigned } from './teleop_profile';
 import type { AxisRole, BridgeIdentity, ButtonRole, JoySample, TeleopProfile, TeleopProfileResult, TeleopState } from './teleop_profile';
 
 const AXIS_LABELS: Record<string, string> = { left_x: '左スティック X', left_y: '左スティック Y', right_x: '右スティック X', right_y: '右スティック Y', l2: 'L2', r2: 'R2', dpad_x: '十字キー X', dpad_y: '十字キー Y' };
@@ -23,7 +23,8 @@ export function TeleopSettingsPanel({ normalized, inputReady, inputReceivedAt, n
   const fresh = teleopFresh(status, receivedAt, now), matching = teleopConnectionMatches(identity, status?.identity);
   const configuring = fresh && matching && status?.status?.configuring === true;
   const applied = saved && fresh && matching && status?.status?.profile_valid === true && sameTeleopProfile(persisted, status.status.profile);
-  const issue = profile ? teleopProfileIssue(profile) : '', assigned = !!profile && teleopRolesAssigned(profile);
+  const issue = profile ? teleopProfileIssue(profile) : '', driveAssigned = !!profile && teleopRolesAssigned(profile);
+  const recordingAssigned = !!profile && teleopRecordingAssigned(profile), canResume = !!profile && teleopCanResume(profile);
   const inputFresh = inputReady && inputReceivedAt > 0 && Math.max(0, now - inputReceivedAt) <= 3000;
   const preview = profile ? teleopPreview(profile, normalized, inputFresh) : null;
 
@@ -83,12 +84,12 @@ export function TeleopSettingsPanel({ normalized, inputReady, inputReceivedAt, n
   const selectOptions = (names: string[], labels: Record<string, string>) => <><option value="">未割当</option>{names.map(name => <option value={name} key={name}>{labels[name] || name} ({name})</option>)}</>;
 
   return <section className="content-card input-config" aria-label="運転操作の割り当て" style={{ marginTop: 22 }}>
-    <div className="card-heading"><h3>運転操作の割り当て</h3><Tag>{dirty ? '未保存' : !saved ? '未設定' : applied ? '反映済み' : fresh && matching ? '未反映' : '反映未確認'}</Tag></div>
+    <div className="card-heading"><h3>運転・記録操作の割り当て</h3><Tag>{dirty ? '未保存' : !saved ? '未設定' : applied ? '反映済み' : fresh && matching ? '未反映' : '反映未確認'}</Tag></div>
     <div className="input-config-body">
       <p>標準軸・ボタンに、操舵・スロットル・記録操作の役割を割り当てます。設定はJetsonに保存します。</p>
       {(error || !fresh) && <p className="inline-note">{error || statusError || status?.message || 'Jetsonの操作設定状態を受信していません。入力を起動し、接続設定を確認してください。'}</p>}
       {profile && status?.connected && !matching && <p className="inline-note">接続先またはJetsonの起動状態が変わりました。編集中の内容は保持しています。設定を再取得してから操作してください。</p>}
-      <div className="config-mode-bar"><Icon name="info" size={17}/><p>{configuring ? '設定中は運転指令を無効にします。保存・再読込後、全入力を離して指令出力を再開します。' : '割り当てを変更するには「役割設定を開始」を選びます。指令出力の再開は走行許可とは別の操作です。'}</p></div>
+      <div className="config-mode-bar"><Icon name="info" size={17}/><p>{configuring ? '設定中は運転指令と記録イベントを止めます。保存・再読込後、全入力を離して操作要求を再開します。' : '記録ボタンだけを割り当てる使い方もできます。操作要求の再開は走行許可とは別の操作です。'}</p></div>
       <div className="button-row wrapping">
         <button className="button" disabled={!fresh || !matching || busy || configuring} onClick={() => void run(async () => { await service('configure', { enabled: true }); notify('役割設定モードを要求しました'); })}>役割設定を開始</button>
         <button className="button primary" disabled={!profile || !configuring || busy || !!issue || (!dirty && saved)} onClick={() => void run(async () => {
@@ -96,8 +97,8 @@ export function TeleopSettingsPanel({ normalized, inputReady, inputReceivedAt, n
           if (mounted.current) { setProfile(result.profile); setPersisted(result.profile); setRevision(result.revision); setSaved(result.saved); setError(''); }
           notify('役割を保存しました。「役割を再読込」でJetsonに反映してください');
         })}><Icon name="save" size={15}/>役割を保存</button>
-        <button className="button" disabled={!configuring || !saved || dirty || busy} onClick={() => void run(async () => { await service('reload', {}); notify('役割を再読込しました。全入力を離して指令出力を再開できます'); })}>役割を再読込</button>
-        <button className="button" disabled={!configuring || !applied || dirty || busy || !inputFresh || !assigned} onClick={() => void run(async () => { await service('configure', { enabled: false }); notify('指令出力の再開を要求しました。走行許可は別途必要です'); })}>指令出力を再開</button>
+        <button className="button" disabled={!configuring || !saved || dirty || busy} onClick={() => void run(async () => { await service('reload', {}); notify('役割を再読込しました。全入力を離して操作要求を再開できます'); })}>役割を再読込</button>
+        <button className="button" disabled={!configuring || !applied || dirty || busy || !inputFresh || !canResume} onClick={() => void run(async () => { await service('configure', { enabled: false }); notify(driveAssigned ? '操作要求の再開を要求しました。走行許可は別途必要です' : '記録操作の再開を要求しました。運転指令は無効のままです'); })}>操作要求を再開</button>
         <button className="button" disabled={busy} onClick={() => {
           if (dirty && !window.confirm('未保存の役割設定を破棄して、Jetsonから再取得しますか？')) return;
           void run(readProfile);
@@ -119,11 +120,12 @@ export function TeleopSettingsPanel({ normalized, inputReady, inputReceivedAt, n
           {(['enable', 'record_start', 'record_stop'] as const).map(role => <tr key={role}><td><strong>{ROLE_LABELS[role]}</strong></td><td><select aria-label={`${role} 標準ボタン`} disabled={!configuring || busy} value={profile.buttons[role]} onChange={e => editButton(role, e.target.value)}>{selectOptions(buttons, BUTTON_LABELS)}</select></td></tr>)}
         </tbody></table></div>
         {issue && <p className="inline-note" role="alert">{issue}</p>}
-        {!assigned && <p className="small-note">操舵とスロットルを両方割り当てるまで、有効な運転指令は出力しません。</p>}
+        {!driveAssigned && <p className="small-note">操舵とスロットルが揃っていないため、運転指令は無効です。{recordingAssigned ? '記録ボタンの操作要求だけを再開できます。' : '記録開始・停止のどちらかを割り当てると、記録操作だけを再開できます。'}</p>}
+        {!canResume && <p className="small-note">運転許可ボタンのみ、または操舵・スロットルの片方のみでは再開できません。</p>}
         <p className="small-note">プレビューは現在の入力と編集中の設定による計算値です。Jetsonの実際の出力とは別です。入力設定中・未接続時は表示しません。</p>
-        {fresh && matching && status?.status?.reason && <p className="small-note">Jetsonの状態: {teleopReasonText(status.status.reason)}</p>}
+        {fresh && matching && status?.status && <><p className="small-note">運転指令: {status.status.ready ? '入力準備済み' : '無効'} · {teleopReasonText(status.status.reason)}</p><p className="small-note">記録イベント: {status.status.events_ready === true ? '入力準備済み' : status.status.events_ready === false ? '停止中／未準備' : '未確認'}{status.status.events_reason && ` · ${teleopEventReasonText(status.status.events_reason)}`}</p></>}
       </>}
-      <p className="small-note">基板への送信とrosbag記録は、この運転指令・操作要求に後から接続します。</p>
+      <p className="small-note">記録イベントの入力準備と、実際の記録状態は別です。rosbag の状態はこのページ上部で確認できます。基板への運転指令送信は未実装です。</p>
     </div>
   </section>;
 }

@@ -161,11 +161,114 @@ void session_config_and_invalid_values()
   check(!rig.core.output(0).valid, "unassigned roles never produce a valid request");
 }
 
+void recording_only_never_enables_driving()
+{
+  Rig rig;
+  Profile profile;
+  profile.record_start = 0;
+  profile.record_stop = 1;
+  profile.enable = 5;
+  rig.core.set_profile(profile);
+  check(rig.core.configure(true, rig.now), "recording-only configuration can start");
+  rig.send();
+  check(rig.core.configure(false, rig.now), "recording-only roles can resume after release");
+  check(rig.send().empty() && rig.core.events_ready(rig.now), "released recording buttons establish baseline");
+  check(rig.core.reason(rig.now) == "steering_and_throttle_are_unassigned" &&
+    rig.core.events_reason(rig.now) == "ready", "drive and recording readiness remain separate");
+  for (int i = 0; i < 3; ++i) {
+    const auto output = rig.core.output(rig.now);
+    check(!output.valid && output.steering == 0 && output.throttle == 0 && !output.enable_requested,
+      "timer publications remain invalid neutral without driving axes");
+  }
+  rig.axes[0] = .8F;
+  rig.axes[5] = .6F;
+  rig.buttons[5] = 1;
+  rig.buttons[0] = 1;
+  check(rig.send() == std::vector<uint8_t>{1}, "recording-only start edge survives drive output ticks");
+  auto output = rig.core.output(rig.now);
+  check(!output.valid && output.steering == 0 && output.throttle == 0 && !output.enable_requested,
+    "unassigned axes and enable button must never leak driving values");
+  check(rig.send().empty(), "held recording-only button emits once");
+  rig.buttons[0] = 0;
+  rig.send();
+  rig.core.output(rig.now);
+  rig.buttons[1] = 1;
+  check(rig.send() == std::vector<uint8_t>{2}, "recording-only stop edge emits once");
+}
+
+void recording_only_keeps_freshness_release_and_reconnect_guards()
+{
+  Rig rig;
+  Profile profile;
+  profile.record_start = 0;
+  rig.core.set_profile(profile);
+  rig.core.configure(true, rig.now);
+  rig.buttons[0] = 1;
+  rig.send();
+  check(!rig.core.configure(false, rig.now), "recording-only resume still rejects held buttons");
+  rig.buttons[0] = 0;
+  rig.axes[0] = .2F;
+  rig.send();
+  check(!rig.core.configure(false, rig.now), "recording-only resume still requires all axes released");
+  rig.axes[0] = 0;
+  rig.send();
+  check(rig.core.configure(false, rig.now), "single recording button is enough to resume");
+  rig.send();
+  rig.buttons[0] = 1;
+  check(rig.send() == std::vector<uint8_t>{1}, "single configured start button works");
+  rig.now = .3;
+  rig.core.ready(true, rig.now);
+  check(!rig.core.events_ready(rig.now), "fresh ready cannot revive stale event input");
+  rig.core.input(rig.axes, rig.buttons, rig.stamp - 1, rig.now);
+  check(!rig.core.events_ready(rig.now), "duplicate stamp cannot revive recording events");
+  check(rig.send().empty() && !rig.core.events_ready(rig.now), "held button after timeout cannot synthesize start");
+  rig.buttons[0] = 0;
+  rig.send();
+  check(rig.core.events_ready(rig.now), "release reestablishes recording baseline");
+  rig.core.source("new-joy-process:1", true, rig.now);
+  rig.buttons[0] = 1;
+  check(rig.send().empty() && !rig.core.events_ready(rig.now), "reconnect held start requires release");
+  rig.buttons[0] = 0;
+  rig.send();
+  rig.buttons[0] = 1;
+  check(rig.send() == std::vector<uint8_t>{1}, "new press after reconnect baseline records");
+  rig.core.ready(false, rig.now);
+  check(!rig.core.events_ready(rig.now), "Joy not-ready disables recording immediately");
+  rig.now = 3.1;
+  rig.send();
+  check(!rig.core.events_ready(rig.now) && rig.core.events_reason(rig.now) == "joy_status_unavailable",
+    "fresh Joy alone cannot revive expired session status");
+}
+
+void empty_or_enable_only_profile_cannot_resume()
+{
+  for (const int enabled : {-1, 5}) {
+    Rig rig;
+    Profile profile;
+    profile.enable = enabled;
+    rig.core.set_profile(profile);
+    rig.core.configure(true, rig.now);
+    rig.send();
+    check(!rig.core.configure(false, rig.now), "empty and enable-only profiles cannot resume");
+    check(!rig.core.events_ready(rig.now) && !rig.core.output(rig.now).valid, "no usable roles stay inactive");
+  }
+  Rig rig;
+  Profile profile;
+  profile.record_stop = 1;
+  rig.core.set_profile(profile);
+  rig.send();
+  rig.buttons[1] = 1;
+  check(rig.send() == std::vector<uint8_t>{2}, "stop-only recording profile remains usable");
+}
+
 int main()
 {
   mapping_and_limits();
   events_are_edges_and_require_release();
   timeouts_do_not_refresh_stale_input();
   session_config_and_invalid_values();
+  recording_only_never_enables_driving();
+  recording_only_keeps_freshness_release_and_reconnect_guards();
+  empty_or_enable_only_profile_cannot_resume();
   std::cout << "teleop core: mapping, events, freshness, sessions, configuration, malformed input passed\n";
 }

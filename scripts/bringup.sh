@@ -7,10 +7,10 @@ usage() {
 使い方: scripts/bringup.sh [--dry-run] [--configure] [input|bridge|d455|manual] [name:=value ...]
 
 引数なし: fzf で起動構成を選択（未導入時は番号選択）
-  input      Jetson の Joy・Pico入力、役割処理、観測・設定bridge
+  input      Jetson の Joy・Pico入力、入力記録待機、観測・設定bridge
   bridge     観測・設定bridgeのみ。入力・役割 node は別途起動する
   d455       D455・車両TF（bridgeなし）
-  manual     D455・車両TF・既存input一式（bridgeは1つ）
+  manual     D455・車両TF・input一式・地図用記録待機（bridgeは1つ）
   --configure D455設定TUIを明示して開く（対話端末専用）
   --list     現在の起動構成を表示
   --dry-run  起動せず予定を表示。構成省略時は input。Notebookでも利用可能
@@ -21,12 +21,19 @@ usage() {
     scripts/bringup.sh --dry-run input propo:=false
     scripts/bringup.sh d455
     scripts/bringup.sh manual camera_serial:=D455_SERIAL enable_depth:=false
+    scripts/bringup.sh manual recording_profile:=mapping
+    scripts/bringup.sh manual recording_profile:=calibration
+    scripts/bringup.sh input recording:=false
 
 d455/manual は対話端末かつlaunch引数なしなら設定TUIへ進みます。
 launch引数あり・非TTYでは保存設定/指定値で直接起動し、--configureで明示編集できます。
 保存先: /data/results/runs/bringup/d455.yaml（camera_config:=絶対パスで変更）
 既定要求: Infra左右640x480@90、RGB640x480@30、accel200Hz/gyro400Hz ON、Depth OFF。
 対応可否はJetson上の実機SDK照会で検査し、未対応時に自動変更しません。
+manual/inputは記録managerを起動しますが、録画はJoy・プロポの割当操作で開始します。
+記録設定: recording_profile:=mapping|calibration|inputs、recording_config:=絶対YAMLパス。
+calibration は車両モデル用の左右IR・CameraInfo・静的TF・加速度・角速度・Pico入力を必須にします。
+manualの既定はmapping（左右IR必須）、inputはinputs（カメラ不要）。
 
 起動済み Docker を使用します。先に scripts/dev.sh で起動してください。
 現在の構成は Jetson 上で実行します。Notebook の Web UI は Docker 内の atd-web を使います。

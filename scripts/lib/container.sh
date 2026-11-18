@@ -41,9 +41,9 @@ try:
     if environment.get("ATD_RUNTIME_API") != "1" or environment.get("ATD_RUNTIME_REV") != sys.argv[1]:
         sys.exit("エラー: コンテナの起動設定が古いか異なります。処理を終了後、scripts/dev.sh --build で再作成してください")
     mount = next((item for item in container.get("Mounts", []) if item.get("Destination") == "/workspaces/atd"), {})
-    if (mount.get("Type") != "bind" or mount.get("RW") is not False
+    if (mount.get("Type") != "bind" or mount.get("RW") is not True
             or os.path.realpath(mount.get("Source", "")) != os.path.realpath(sys.argv[2])):
-        sys.exit("エラー: 起動済みコンテナは別の ATD checkout を参照しています。scripts/dev.sh から構成を確認してください")
+        sys.exit("エラー: /workspaces/atd の mount 元または書込み権限が異なります。処理を終了後、scripts/dev.sh でコンテナを再作成してください")
 except (ValueError, TypeError, IndexError, KeyError):
     sys.exit("エラー: Docker inspect の結果を解釈できません")
 ' "$task_revision" "$task_project_dir" || return 1

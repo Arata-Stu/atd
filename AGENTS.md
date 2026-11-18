@@ -64,7 +64,7 @@
 - 操作や可視化に役立つブラウザ UI も積極的に作成する。主な用途は地図の編集、自己位置の確認、PC / Jetson の操作・状態確認である。
 - ブラウザ UI はノート PC のみで使い、Chrome で `http://127.0.0.1:<port>` を開く。Jetson で UI のブラウザ・frontend を起動しない。観測・設定用の Jetson 側 ROS bridge は別に配置する。
 - 共通 Web アプリは React + TypeScript / Vite と FastAPI を採用する。`apps/web/` に frontend・backend・Web に依存しない processing を分け、通常は Notebook の Docker 内で `atd-web` を実行する。`scripts/tools/webui.sh` はホストから同じコンテナ内コマンドへ委譲する補助入口。ブラウザだけを Notebook ホストで開く。Node / pnpm と `web` 用 uv 環境は Notebook 専用。実装・ホスト上の検証・Docker / ROS / 実機検証を区別する。
-- 共通 Web アプリは地図、Jetson との SCP 転送、bringup 中のライブ表示・ROS 2 parameter 動的調整、Joy 入力監視・軸ボタン配置調整を扱う。プロポは Pico の USB 入力と基板状態を監視し、CH1〜CH6を既定表示、6／10／16chで切り替えられるようにする。raw 値と PWM 相当の µs 換算値を併記し、実際の ESC・サーボ出力や波形の測定値とは区別する。CH4〜CH16 の記録・予備役割は初期設定を未割り当てとする。設定中は Jetson の役割イベントだけを止め、Pico の手動走行には介入しない。再接続・再開時のスイッチ位置は基準として取り直し、記録開始イベントを合成しない。記録の実行処理と USB 走行指令の送信は未実装。機能要件と実装・検証状態は [要件文書](docs/project_requirements.md) で区別する。
+- 共通 Web アプリは地図、Jetson との SCP 転送、bringup 中のライブ表示・ROS 2 parameter 動的調整、Joy 入力監視・軸ボタン配置調整を扱う。プロポは Pico の USB 入力と基板状態を監視し、CH1〜CH6を既定表示、6／10／16chで切り替えられるようにする。raw 値と PWM 相当の µs 換算値を併記し、実際の ESC・サーボ出力や波形の測定値とは区別する。CH4〜CH16 の記録・予備役割は初期設定を未割り当てとする。設定中は Jetson の役割イベントだけを止め、Pico の手動走行には介入しない。再接続・再開時のスイッチ位置は基準として取り直し、記録開始イベントを合成しない。記録の実行処理は `atd_recording` に集約し、Joy・プロポの要求からMCAPを作成する。bringupでmanagerを起動しても録画は自動開始しない。保存完了はstop後のmetadata・MCAP検査で判定し、UI・SSH断を停止扱いにしない。USB走行指令の送信は未実装。機能要件と実装・検証状態は [要件文書](docs/project_requirements.md) で区別する。
 - UI の追加でも、走行処理の Jetson 内完結と、PC から遠隔の走行制御を与えない要件を維持する。ブラウザの実行場所と、サーバー・Jetson 側バックエンドの配置は区別する。
 
 ## ROS 2 パッケージと実装

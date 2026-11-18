@@ -82,6 +82,18 @@ df -i  "$build_tmp" /tmp "$docker_root"
 
 ホームが満杯の場合は、空きのある別のファイルシステムに書込み可能なディレクトリを用意し、その絶対パスを `TMPDIR` に指定して build を再実行する。上流 CLI が一時ファイルのパスをシェルに渡すため、空白やシェルの特殊文字を含まないパスを使う。イメージと再ビルド用キャッシュは Docker が管理する。`docker system df` と `docker buildx du --builder default` で使用量を確認できる。[Docker のキャッシュ使用量](https://docs.docker.com/reference/cli/docker/buildx/du/)
 
+### 過去の Docker ビルドキャッシュを削除する
+
+Notebook ホストの ATD checkout で実行する。
+
+```bash
+./scripts/tools/clean-docker-cache.sh
+```
+
+`Reclaimable` は回収対象のキャッシュ量、`Total` はキャッシュの総量。Docker の確認で `y` を入力すると、ATD が使う `default` builder の未使用キャッシュを、同じ builder を使う他プロジェクト分も含めて削除する。削除後は Docker が回収量を表示する。使用量の確認だけなら `./scripts/tools/clean-docker-cache.sh --dry-run` を使う。[Docker の buildx prune](https://docs.docker.com/reference/cli/docker/buildx/prune/)
+
+ビルド済みイメージ、コンテナ、ボリューム、checkout 配下の bag・地図・モデルは保持する。イメージと共有するレイヤーはディスクに残るため、実際に空く容量は `Reclaimable` より少ない場合がある。次回の再ビルドでは削除したキャッシュを作り直す。[Docker のキャッシュ使用量](https://docs.docker.com/reference/cli/docker/buildx/du/)
+
 <a id="kart-cli"></a>
 
 ## `ISAAC_ROS_WS must be <kart project>/ros2_ws beside packages.repos` で止まる場合

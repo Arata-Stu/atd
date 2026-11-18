@@ -12,6 +12,7 @@ import time
 from atd_joy_tools import profile as profiles
 from atd_teleop_tools import profile as teleop_profiles
 from atd_rc_tools import profile as rc_profiles
+from atd_vehicle_layout import profile as vehicle_profiles
 
 
 class Cache:
@@ -110,6 +111,18 @@ class Cache:
                 'availability': {key: 'missing' if value is None else 'stale' if value['stale'] else 'fresh'
                                  for key, value in (('board', board), ('input', inputs))}}
 
+    def vehicle_status(self):
+        status = self.get('vehicle_layout_status')
+        if status:
+            source_age = status.get('source_age_s')
+            valid_age = type(source_age) in (int, float) and math.isfinite(source_age) and source_age >= 0
+            status['age_s'] = source_age + status['age_s'] if valid_age else None
+            status['stale'] = bool(status['stale'] or not valid_age or status['age_s'] > self.fresh_s)
+        fresh = bool(status and not status['stale'])
+        return {'status': status, 'ready': bool(fresh and status.get('profile_valid') is True
+                                               and status.get('tf_published') is True),
+                'availability': {'status': 'missing' if status is None else 'fresh' if fresh else 'stale'}}
+
 
 def revision(profile):
     return hashlib.sha256(json.dumps(profile, sort_keys=True, allow_nan=False).encode()).hexdigest()
@@ -181,6 +194,41 @@ class TeleopProfileStore:
             teleop_profiles.save(self.path, value)
             return {**self.read(state), 'applied': False,
                     'message': '保存しました。再読込と操作出力の再開は個別に実行してください'}
+
+
+class VehicleProfileStore:
+    """Persist layout without changing already-published static transforms."""
+    def __init__(self, path):
+        self.path = Path(path).expanduser()
+        self.lock = threading.RLock()
+
+    def read(self, state=None):
+        with self.lock:
+            saved = self.path.exists()
+            value = vehicle_profiles.load(self.path) if saved else vehicle_profiles.default_profile()
+            status = (state or {}).get('status')
+            active = None
+            if status:
+                try:
+                    active = vehicle_profiles.validate(status.get('active_profile'))
+                except (ValueError, TypeError):
+                    pass
+            path = status.get('profile_path') if status else None
+            matching_path = isinstance(path, str) and bool(path) and Path(path).expanduser().resolve() == self.path.resolve()
+            applied = bool(saved and status and not status.get('stale') and status.get('profile_valid') is True
+                           and status.get('tf_published') is True and matching_path and active == value)
+            return {'profile': value, 'revision': revision(value), 'saved': saved, 'path': str(self.path),
+                    'applied': applied, 'pending_restart': bool(saved and not applied), 'active_profile': active,
+                    'frames': dict(vehicle_profiles.FRAMES), 'dimension_fields': list(vehicle_profiles.DIMENSIONS),
+                    'sources': list(vehicle_profiles.SOURCES),
+                    'cad_reference': copy.deepcopy(vehicle_profiles.CAD_REFERENCE)}
+
+    def write(self, value, expected, state=None):
+        with self.lock:
+            if expected != self.read()['revision']:
+                raise ValueError('車両配置が変更されています。再取得してください')
+            vehicle_profiles.save(self.path, value)
+            return {**self.read(state), 'message': '保存しました。静的TFへの反映には車両配置nodeの再起動が必要です'}
 
 
 class PropoProfileStore:

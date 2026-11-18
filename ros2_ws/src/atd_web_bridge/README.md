@@ -40,6 +40,14 @@ pose は x/y/z/yaw/frame/stamp/age_s/stale、velocity は linear_mps/angular_rps
 
 プロポ用は `GET /propo/status`、`GET/PUT /propo/profile`、`POST /propo/reload`、`POST /propo/configure`。Notebook API は `/api` を付ける。`status` は `{board, input, ready, rc_valid, input_current, configuring, availability}` を返す。Notebook adapter が付ける最上位 `connected` は bridge への接続、`board.connected` は Pico の USB 接続、`board.streaming` は新鮮な telemetry の受信を表す。未受信は null のままとし、CH を 0 で埋めない。telemetry の元 `stamp` を保持し、receiver の `age_s` に bridge での経過時間を加算する。定期的な状態再配信だけで古い信号を新鮮に扱わず、Pico・役割 node の世代と serial が一致しない入力も利用可能とは表示しない。`rc_valid` は受信時点の RC 有効判定を telemetry の期限内だけ表示する観測値で、イベント出力時の厳密な鮮度判定は RC node が行う。
 
+## 車両配置
+
+両launchで `vehicle_profile`（既定 `/data/results/runs/vehicle/layout.yaml`）を指定でき、bridgeの `vehicle_profile_path` へ渡す。`atd_bringup manual.launch.py` は車体TF nodeにも同じpathを渡す。
+
+`GET /vehicle/status` は `/vehicle/layout/status` の元stampと受信後経過時間から鮮度を返す。`GET/PUT /vehicle/profile` は保存設定・revision・path・frames・CAD参考metadataと、`saved` / `applied` / `pending_restart` / `active_profile` を返す。PUTはbridgeの `instance_id` とrevisionを要求する。TF node未起動でも保存できるが、適用済みにはしない。保存済みとactive profile/pathが一致し、新鮮な `profile_valid=true` / `tf_published=true` 状態を受信した場合だけ適用済みとする。
+
+未計測値はnull、保存はm／rad。カメラ取付TFの有効化には全6値を要求する。保存後も既存のstatic TFは変えず、node再起動で反映する。CADはreadonly参考情報で、profileやTFへ自動転記しない。[車両配置・TFの手順](../../../docs/vehicle_layout.md)
+
 ## 設定操作
 
 ROS node 名は prefix で閲覧範囲を制限し、書込対象は `parameter_allowlist_json` の node完全名→parameter名配列で明示する。例 `{"/atd_example":["gain"]}` は説明用で、そのnodeを導入しない。既定 `{}` は書込許可なし。descriptor の read_only/type/range/step を検査し、対象 node の SetParametersAtomically service に一度要求する。GetParametersで反映値を再取得し、requested/values/applied を返す。永続YAMLを勝手に書き換えない。timeoutは結果未確認として返す。
@@ -60,6 +68,8 @@ Propo profile は `recording`・`auxiliary_1`・`auxiliary_2` の役割を CH4�
 | --- | --- | --- |
 | use_sim_time | false | ROS標準時刻 |
 | port | 8790 | loopback HTTP、1024〜65535 |
+| vehicle_status_topic | /vehicle/layout/status | 車体TF nodeの発行状態 |
+| vehicle_profile_path | /data/results/runs/vehicle/layout.yaml | 車両配置の永続設定 |
 | freshness_s | 2.5 | 0.1〜30秒、受信monotonic時刻で鮮度判定 |
 | odometry_topic | /localization/odometry | Odometry入力 |
 | pose_topic | /localization/pose | PoseStamped入力 |

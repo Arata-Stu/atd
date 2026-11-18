@@ -36,6 +36,7 @@ def generate_launch_description():
         DeclareLaunchArgument('pico_sensor_path', default_value=''),
         DeclareLaunchArgument('rc_config', default_value=str(rc / 'config/rc.yaml')),
         DeclareLaunchArgument('rc_profile', default_value='/data/results/runs/input/propo.yaml'),
+        DeclareLaunchArgument('vehicle_profile', default_value='/data/results/runs/vehicle/layout.yaml'),
         include(joy / 'launch/joy.launch.py',
                 {'profile': LaunchConfiguration('profile'), 'config': LaunchConfiguration('joy_config')}),
         include(teleop / 'launch/teleop.launch.py',
@@ -50,5 +51,6 @@ def generate_launch_description():
         Node(package='atd_web_bridge', executable='web_bridge', output='screen',
              parameters=[LaunchConfiguration('config'), {'profile_path': LaunchConfiguration('profile'),
                           'teleop_profile_path': LaunchConfiguration('teleop_profile'),
-                          'rc_profile_path': LaunchConfiguration('rc_profile')}]),
+                          'rc_profile_path': LaunchConfiguration('rc_profile'),
+                          'vehicle_profile_path': LaunchConfiguration('vehicle_profile')}]),
     ])

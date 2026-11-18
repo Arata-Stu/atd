@@ -45,7 +45,7 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 └── tests/                     # setup・Docker 等の共通基盤のテスト
 ```
 
-`apps/web/` と `atd_joy` / `atd_web_bridge`、運転要求型の `atd_interfaces` と操作割り当ての `atd_teleop`、Pico USB 受信の `atd_vehicle_interface` とプロポ役割の `atd_rc_input`、保存地図の点群取得用 `atd_mapping` は初期実装を追加した。Pico firmware の編集元も関連する `atd_vehicle_interface` 内へまとめる。ソース実装と対象機での build・実機検証は区別する。
+`apps/web/` と `atd_joy` / `atd_web_bridge`、運転要求型の `atd_interfaces` と操作割り当ての `atd_teleop`、Pico USB 受信の `atd_vehicle_interface` とプロポ役割の `atd_rc_input`、保存地図の点群取得用 `atd_mapping`、D455の `atd_sensors`、車両配置・static TFの `atd_vehicle_description` と統合起動の `atd_bringup` は初期実装を追加した。Pico firmware の編集元も関連する `atd_vehicle_interface` 内へまとめる。ソース実装と対象機での build・実機検証は区別する。
 
 | 配置 | 内容 |
 | --- | --- |
@@ -108,7 +108,7 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | ROS package の build | `scripts/build.sh` → コンテナ内の `atd-build` |
 | VGL モデルの export・転送・build | `scripts/vgl.sh` |
 | Notebook 共通 Web UI | Docker 内の `atd-web`。ホストからの補助入口は `scripts/tools/webui.sh` |
-| Jetson の ROS 起動 | `scripts/bringup.sh`。`input` / `bridge` の実在 profile を選択 |
+| Jetson の ROS 起動 | `scripts/bringup.sh`。`manual` / `d455` / `input` / `bridge` の実在 profile を選択 |
 
 日常操作の入口を `scripts/` 直下に置き、現在は setup・dev・build・vgl・bringup の5本にまとめる。診断・環境管理等の補助入口は `scripts/tools/` に置く。コンテナ内の処理は `docker/scripts/`、ホスト準備の内部処理は `scripts/setup/`、ホスト側の共通関数は `scripts/lib/` に置く。ホスト判定は `scripts/lib/detect_host.sh` を共用する。入口ごとに同じ設定読込みやホスト判定を実装し直さない。コンテナ内のビルド処理と Python 環境管理は独立したコマンドにし、共通の環境準備は `docker/scripts/lib/` から読み込む。
 
@@ -124,6 +124,7 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | この文書 | ディレクトリとファイルの置き場所 |
 | [セットアップ手順](setup/README.md) | 実際の導入・起動・診断操作 |
 | [bringup](bringup.md) | Jetson の起動 profile、選択・引数・拡張方針 |
+| [車両配置・TF](vehicle_layout.md) | 座標系、UI編集、実測、static TFの適用 |
 | [Python 環境](python_environments.md) | uv、用途別環境、ROS 2 Python との関係 |
 | [VGL モデル](vgl_models.md) | Notebook export、SCP 転送、Jetson engine build、検証・ログ |
 | [ビルド方針](isaac_ros_build_strategy.md) | CLI・Docker・ROS package の build 方針と技術的な根拠 |
@@ -142,6 +143,7 @@ CAD 等の編集元データと提供された印刷用3MFは `hardware/cad/` �
 | Python venv / cache | `<選択した workspace>/.atd-python/`。各ホスト・アーキテクチャで生成する |
 | Web の node_modules / frontend build | `<選択した workspace>/.atd-web/frontend/`。readonly の checkout と分け、Notebook 上で生成する |
 | Joy 物理配置・入力の役割設定 | Jetson の `/data/results/runs/input/{dualsense,teleop,propo}.yaml`。再生成用 cache ではなく永続設定として保持 |
+| D455起動・車両配置設定 | Jetsonの `/data/results/runs/bringup/d455.yaml` と `/data/results/runs/vehicle/layout.yaml`。再起動後も保持 |
 | bag | ホスト別設定の記録先。コンテナでは `/data/record` |
 | 地図・モデル・解析・学習結果 | ホスト別設定の結果先。コンテナでは `/data/results` |
 

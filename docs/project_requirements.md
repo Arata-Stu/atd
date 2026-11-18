@@ -26,7 +26,7 @@
 | 車載計算機 | Jetson Orin Nano 8GB | 実走行の処理と制御を担当 |
 | 車両 I/O 基板 | Raspberry Pi Pico ベース。受信機の S.BUS を入力し、Jetson とは USB 接続 | 参照 firmware は JPBB Rev6 / RP2040 版 Pico 用。実基板での確認は別途必要 |
 | プロポ | 6 チャンネルを基本とし、将来の10ch導入も可能性あり | Pico の CH1＝操舵・CH2＝スロットル・CH3＝操作権は固定。全16chを受信・保持し、CH4〜CH16 は Jetson 側の記録・予備役割を変更可能。予備2枠の用途は未定 |
-| 初期センサ | RealSense D455 のみ | IR（infra）、RGB、IMU、Depth を利用候補として残す |
+| 初期センサ | RealSense D455 のみ | 初期値はInfra1/2 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。各ストリーム・モードをTUIで変更 |
 | 作業用ノート PC | Ubuntu 24 系、NVIDIA RTX 4060 | 共通の OS 基準は Ubuntu 24.04。地図作成・編集・解析・可視化を担当 |
 | ストレージ | 1TB SSD を利用可能 | 搭載先、マウント先、空き容量は環境構築時に記録する |
 | OS 基準 | Ubuntu 24.04 | 2026-11-16 時点の構成想定 |
@@ -60,7 +60,8 @@
 ### 2.4. センサ・手動介入・車両 I/O の方針
 
 - D455 の IR（infra）、RGB、IMU、Depth はいずれも使用する可能性を残し、RealSense driver で起動する方針とする。
-- 実際に使用するストリームの組み合わせ、解像度、周期、bag の記録対象は後から決める。全ストリームの常時同時起動・記録を必須とはしない。
+- `bringup.sh` のTUIで各ストリームのON／OFF・解像度・Hzを選ぶ。初期値は左右IR 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。実機の対応モードを列挙して同時構成を検査し、非対応値を黙って代替しない。bagの記録対象は別途決める。
+- 車体static TFは `atd_vehicle_description`、カメラ内部TFはRealSense driverが担当する。`base_link` を後輪回転軸中央（x前・y左・z上）とし、車体寸法とカメラ取付位置をNotebook UIから実測値で編集する。空欄は未計測として保持し、保存後のTF node再起動で適用する。CAD参考寸法と実測値、保存状態と適用中状態を区別する。
 - Joy による手動介入を想定し、DualSense を Bluetooth で Jetson に接続する予定とする。
 - Joy の操作割り当て、手動・自律の切替条件、停止・再開条件は後から決める。
 - Joy の入力監視と軸・ボタン配置の調整は、地図・転送・ライブ表示と同じ Web アプリから行えるようにする。プロポは受信機 → S.BUS → Pico → USB → Jetson の経路とし、Jetson では値の監視と rosbag の記録開始・停止等に利用する。Pico の走行用 CH1〜CH3 は固定し、Jetson 側の CH4〜CH16 の役割を設定できる。UIは既定でCH1〜CH6のrawとPWM相当µsを表示し、10／16ch表示へ切り替えられる構成とする。実際のPWM出力・波形測定値と入力換算値を区別する。送受信機種・スイッチ位置・校正値は実機で確認する。
@@ -128,8 +129,8 @@ bag の記録対象や各 bag の topic / frame は実データに合わせて�
 - Jetson では UI のブラウザ・frontend を起動しない。これは Jetson 側で必要なバックエンドや bridge を動かさないという意味ではない。
 - UI の追加でも、走行処理の Jetson 内完結、PC からの遠隔走行制御を行わないこと、車載 DDS の直接通信範囲の要件を維持する。
 - 基本機能は 2.9 節の地図・転送・ライブ表示・入力設定とする。UI サーバーは Notebook の Docker 内、Jetson との観測・設定接続は SSH 経由の loopback HTTP とし、操作・既定ポートは Web アプリの README に記録する。個別の観測 topic・周期等は実 bringup に合わせて設定する。
-- Jetson のまとめ起動は `scripts/bringup.sh` に集約し、実装済みの `input`（Joy・Pico入力・役割処理・bridge）と `bridge`（bridgeのみ）を提供する。引数なしの対話端末では fzf、未導入なら番号で選び、非対話では profile を明示する。`--list` と `--dry-run` は Notebook でも使え、profile を省略した dry-run は `input` の予定を示す。実際の起動は Jetson の既存 Docker 内に限定し、車両出力・bag 記録を開始しない。
-- profile 一覧は `scripts/lib/bringup.sh` に置き、各 ROS package の実装済み launch と対応させる。センサ・自己位置推定・自律走行等の起動単位や専用 `atd_bringup` package は対象機能の実装時に検討し、未実装の profile・空 package は追加しない。[bringup の操作](bringup.md)に現在の対象と拡張方針を記録する。
+- Jetson のまとめ起動は `scripts/bringup.sh` に集約し、実装済みの `manual`（D455・車体TF・入力監視・bridge）、`d455`（D455・車体TF）、`input`（Joy・Pico入力・役割処理・bridge）、`bridge`（bridgeのみ）を提供する。引数なしの対話端末では fzf、未導入なら番号で選び、非対話では profile を明示する。`--list` と `--dry-run` は Notebook でも使え、profile を省略した dry-run は `input` の予定を示す。実際の起動は Jetson の既存 Docker 内に限定し、車両出力・bag 記録を開始しない。
+- profile 一覧は `scripts/lib/bringup.sh` に置き、各 ROS package の実装済み launch と対応させる。D455と車体TFの統合起動を `atd_bringup` に実装する。未実装の自己位置推定・自律走行 profile・空 package は追加しない。[bringup の操作](bringup.md)に現在の対象と拡張方針を記録する。
 - setup・Docker・Python・VGL・Web UI・bringup のスクリプト実装と、Docker / ROS / GPU / 実機での結合確認は分けて扱う。
 
 ### 2.8. Docker 内の Python 環境
@@ -151,6 +152,7 @@ Notebook の VGL export は `vgl-export`、Web API は `web`、Raceline の最�
 | 地図 | rosbag から NVIDIA 公式処理で cuVSLAM / VGL 地図を準備し、保存地図の localize と点群取得後に HDMap を編集。centerline / raceline / 必要に応じた custom line を生成。駐車機能は不要 |
 | Jetson との転送 | SCP を簡単に実行する UI。Jetson → ノート PC の rosbag 受信、ノート PC → Jetson の作成地図送信 |
 | ライブ表示・調整 | bringup 実行中の観測。地図走行時の地図と自己位置推定の表示、ROS 2 parameter の動的調整、速度等の時系列プロット |
+| 車両配置・寸法 | 上面図・側面図と寸法線で寸法と入力欄を対応付け、mm／度で実測値を編集。Jetsonへ保存し、static TF node再起動で反映 |
 | 入力監視・設定 | Jetson の Joy 入力監視、物理配置の調整、操舵・スロットル・操作要求への役割設定を共通アプリへ統合。Pico USBのraw・PWM相当µs・基板状態を監視し、6／10／16ch表示とCH4〜CH16のJetson側役割設定を扱う |
 
 地図画面は cuVSLAM 地図作成、VGL 地図準備、保存地図からの点群取得、HDMap 編集を一つの流れとして提供する。元 bag と VGL 準備時の Notebook 用モデルを原則として自動選択し、前工程や資産対応に不備があれば理由と必要な操作を示す。NVIDIA 地図は点群取得前に編集・生成を開始せず、空の手動 HDMap は点群なしで編集できる。成功したジョブの表示は自動更新し、未保存編集は破棄しない。
@@ -320,7 +322,7 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 
 1. Pico firmware と ATD 間の USB 制御形式、実 CH 配置・校正、ESC・サーボへの適合、操作権・通信断時の停止と再開条件の結合確認。Pico／USB／S.BUS の方針は決定済みである。
 2. 初期の走行場所・路面・目標速度・到達目標、障害物に対する停止 / 回避の範囲。
-3. D455 の各ストリームの利用・記録設定、撮影モード、取付姿勢と較正。
+3. D455の指定初期モードの実機対応と実効FPS・欠落、bag記録対象、撮影条件、車両寸法・カメラ取付姿勢の実測と較正。TUI・UIの設定入口は実装対象であり、実機検証とは区別する。
 4. DualSense の操作割り当て、手動 / 自律の切替と停止・再開条件。プロポの実機種・スイッチ位置・校正、利用可能なCH4〜CH16の役割選択と実際の記録処理の結合。Pico の CH1〜CH3 を固定し、予備2枠の用途は未定。10chプロポの採用は候補であり、購入・実機対応確認済みとは扱わない。
 5. 採用済み cuVSLAM / VGL・点群取得・region / mincurv / mincurv_iqp の対象機・実 bag での結合確認、HDMap schema の拡張、実車の性能、走行開始時の自己位置推定。VGL モデルの GPU / SDK 互換性、SCP の実接続と転送後の利用、成果物の対応管理。
 6. 個別パッケージの責務、通信契約、性能目標と検証手順。
@@ -338,18 +340,21 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 | [environment_setup_plan.md](environment_setup_plan.md) | `kart/docker` の比較、ホスト / Docker の分担、依存追加、TUI / UI 配置、段階的なセットアップの提案 |
 | [python_environments.md](python_environments.md) | uv による用途別 Python 環境、ROS 2 の ABI・依存管理、AI 学習環境との分離 |
 | [bringup.md](bringup.md) | Jetson の実装済み起動 profile、対話選択・引数・拡張方針 |
+| [vehicle_layout.md](vehicle_layout.md) | 車両座標系、寸法・配置のUI編集、CAD参考値、static TFの適用手順 |
 | [vgl_models.md](vgl_models.md) | Notebook の ONNX export、SCP 転送、Jetson の engine build と検証・ログ |
 | [hardware_cad.md](hardware_cad.md) | 車体CAD・印刷用3MF・Rev6カメラ組立モデルの一覧と取り込み元。実物との一致は未検証 |
 | `../docker/` | 追加 Dockerfile とデータを毎回 mount する起動引数 |
 | `../docker/isaac_ros/` | 選択した workspace から参照する CLI 設定テンプレート |
 | `../ros2_ws/src/` | 自作 `atd_*` package の編集元。build 成果物はホスト別 workspace に作成する |
 | `../scripts/dev.sh` | PC / Jetson を自動判定する開発環境の起動スクリプト。必要に応じて手動上書き可能 |
-| `../scripts/bringup.sh` | 実装済みの `input` / `bridge` を選び、Jetson の既存 Docker 内で起動する入口 |
+| `../scripts/bringup.sh` | 実装済みの `manual` / `d455` / `input` / `bridge` を選び、Jetson の既存 Docker 内で起動する入口 |
 | `../scripts/tools/docker.sh` | Docker 開発環境の診断、結果の保存・閲覧、起動・build の入口 |
 | `../config/workspace.env.example` | PC / Jetson ごとの ROS workspace 設定例 |
 | `../config/storage.env.example` | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
 
 ## 7. 更新履歴
+
+- 2026-11-18: D455を含む `manual` / `d455` profile、対応モードに基づくストリーム設定TUI、車体static TF、Notebookの車両配置UIを追加。初期値は左右IR 640×480@90、RGB 640×480@30、加速度200Hz／ジャイロ400Hz、Depth OFF。CAD板寸法は参考値とし、未計測取付TFを補完せず、保存後の再起動で適用する。ホストの検証とJetson Docker／D455／実車確認を区別する。
 
 - 2026-11-18: 日常のスクリプト入口を setup・dev・build・vgl・bringup の5本へ整理し、診断・Python・Web補助を `scripts/tools/`、ホスト判定を `scripts/lib/` へ分けた。入力系の起動を `bringup.sh input` / `bringup.sh bridge` にまとめ、実在する profile だけを選択・実行する方針とした。
 - 2026-11-18: ユーザー指定のTT-02-v3の3MF 4件とD455／D435iのFCStd組立モデル2件を `hardware/cad/` に保管。元ファイルと既存v1モデルを保持し、SHA-256一致・ZIP CRC・XML／内部参照を確認した。寸法・組付け・機材採用の確定とは区別する。

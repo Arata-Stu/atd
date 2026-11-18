@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from atd_sensors.tui import entrypoint
+
+raise SystemExit(entrypoint())

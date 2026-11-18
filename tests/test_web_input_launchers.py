@@ -98,7 +98,7 @@ class EntryTests(unittest.TestCase):
                          'ATD_TEST_PICK': selection})
                 self.assertEqual(result.returncode == 0, succeeds, result.stderr)
                 if succeeds:
-                    self.assertEqual(result.stdout.strip(), 'jetson\tatd_web_bridge\tbridge.launch.py')
+                    self.assertEqual(result.stdout.strip(), 'jetson\tatd_web_bridge\tbridge.launch.py\tplain')
 
     def test_interactive_entry_chooses_bridge_and_cancel_does_not_launch(self):
         fake_bin = self.root / 'menu-bin'
@@ -139,13 +139,55 @@ class EntryTests(unittest.TestCase):
         awk = shutil.which('awk')
         self.assertIsNotNone(awk)
         (commands / 'awk').symlink_to(awk)
-        for response, expected in (('2\n', 'bridge'), ('3\n', 'quit'), ('\n', ''), ('90\n', '')):
+        for response, expected in (('2\n', 'bridge'), ('3\n', 'd455'), ('5\n', 'quit'), ('\n', ''), ('90\n', '')):
             with self.subTest(response=response):
                 result = subprocess.run(['/bin/bash', '-c', 'source "$1"; atd_bringup_choose',
                     'picker-test', str(helper)], input=response, text=True, capture_output=True,
                     timeout=10, env={**self.env, 'PATH': str(commands)})
                 self.assertEqual(result.stdout.strip(), expected)
                 self.assertEqual(result.returncode == 0, bool(expected))
+
+    def test_camera_profiles_are_direct_in_noninteractive_execution(self):
+        for profile in ('d455', 'manual'):
+            with self.subTest(profile=profile):
+                result = self.invoke('bringup.sh', profile, 'camera_serial:=123456', ATD_TEST_HOST='jetson')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.args()[-5:], ['ros2', 'launch', 'atd_bringup', profile + '.launch.py',
+                                                   'camera_serial:=123456'])
+
+    def test_camera_dry_run_has_no_tui_and_marks_capabilities_unqueried(self):
+        result = self.invoke('bringup.sh', '--dry-run', 'd455')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('未照会', result.stdout)
+        self.assertIn('200Hz', result.stdout)
+        self.assertEqual(self.args()[-4:], ['ros2', 'launch', 'atd_bringup', 'd455.launch.py'])
+
+    def test_explicit_configure_is_camera_only_and_requires_tty_unless_dry_run(self):
+        for arguments in (('input', '--configure'), ('d455', '--configure')):
+            with self.subTest(arguments=arguments):
+                result = self.invoke('bringup.sh', *arguments, ATD_TEST_HOST='jetson')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.output.exists())
+        result = self.invoke('bringup.sh', '--dry-run', '--configure', 'manual')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.args()[-7:], ['ros2', 'run', 'atd_sensors', 'd455_setup',
+                                          '--bringup-profile', 'manual', '--'])
+
+    def test_camera_interactive_entry_opens_tui_and_arguments_allow_direct_launch(self):
+        for arguments, expected in ((('d455',), 'd455_setup'),
+                                     (('manual', 'enable_depth:=false'), 'manual.launch.py'),
+                                     (('manual', '--configure', 'enable_depth:=false'), 'd455_setup')):
+            with self.subTest(arguments=arguments):
+                master, slave = pty.openpty()
+                try:
+                    result = subprocess.run(['/bin/bash', str(self.scripts / 'bringup.sh'), *arguments],
+                        stdin=slave, stdout=slave, stderr=subprocess.PIPE,
+                        env={**self.env, 'ATD_TEST_HOST': 'jetson'}, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr.decode())
+                finally:
+                    os.close(master)
+                    os.close(slave)
+                self.assertIn(expected, self.args())
 
     def test_web_is_pc_only_and_uses_web_environment(self):
         result = self.invoke('tools/webui.sh', ATD_TEST_HOST='jetson')

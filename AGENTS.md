@@ -43,7 +43,8 @@
 - 開発環境は `scripts/dev.sh` で起動し、PC / Jetson は機種情報・BSP のマーカーから自動判定する。必要な場合だけ `--host pc|jetson` で上書きする。保存先はホストごとに設定し、記録データと解析結果を毎回読書き可能で mount する。rosbag 記録や車両起動は自動実行しない。
 - 新規起動と稼働中コンテナへの再接続を区別する。再接続は `atd-shell` を使い、稼働中の依存・DDS 設定を更新しない。構成が変わった場合や旧コンテナは、処理を終了して再作成する。
 - コンテナ内の対話シェルは `atd-shell` を標準とし、ホストから共有された旧 DDS 設定を含む `.bashrc` に依存しない。
-- 初期センサ構成は RealSense D455 のみとする。IR（infra）、RGB、IMU、Depth はいずれも利用候補として残し、RealSense driver で起動する方針とする。全ストリームの常時同時起動・記録を必須と解釈しない。
+- 初期センサ構成は RealSense D455 のみとする。IR（infra）、RGB、IMU、Depth はいずれも利用候補として残し、RealSense driver で起動する方針とする。全ストリームの常時同時起動・記録を必須と解釈しない。起動初期値はInfra1/2 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。TUIで各OFF・実機対応モードを選び、同時構成を検査する。
+- 車体static TFと車両配置は `atd_vehicle_description` が担当する。`base_link` は後輪回転軸中央、x前・y左・z上。カメラ内部TFはRealSense driverに任せる。車両UIではmm／度で実測し、未計測値を原点・identityで補完しない。CAD参考寸法と実車寸法を区別し、保存とTF node再起動による適用を分けて示す。
 - 自動運転・DualSense 操作側に必要な処理と制御は Jetson Orin Nano 8GB 内で完結させる。プロポの基本手動操作は Pico 内で ESC・サーボ出力まで完結させ、Jetson の稼働を必要としない。
 - ノート PC は地図作成・編集・解析・走行情報の可視化を担当する。Foxglove Bridge 等による自己位置等の観測を想定する。ノート PC から遠隔の走行制御を与える構成にしない。
 - 地図作成は、手動走行中に Jetson で記録した bag を SCP で Notebook へ転送し、同じ Web UI で NVIDIA 公式 cuVSLAM / VGL 地図準備、保存地図への localize と点群 snapshot 取得、HDMap 編集・ライン生成まで進め、作成地図を Jetson へ SCP 転送する。NVIDIA 地図は点群取得後に編集可能とし、空の手動 HDMap は点群なしでも編集できる。駐車は対象に含めない。
@@ -59,7 +60,7 @@
 - ユーザーが操作する CLI・補助スクリプトは、対話形式や TUI を優先して設計する。
 - 処理、bag、地図、設定等の候補を検索・選択する場面では、`fzf` を積極的に活用し、対話的に実行できるようにする。
 - 対話操作と、引数・環境変数による直接指定を併用できる構成にする。既存の PC / Jetson の自動判定など、確定済みの起動方針との整合を保つ。
-- ROS のまとめ起動は `scripts/bringup.sh` を入口とし、実在する `input`（Joy・Pico入力・役割処理・bridge）と `bridge`（bridgeのみ）を扱う。引数なしの対話端末では fzf、未導入なら番号で選択し、非対話では profile の明示を求める。実行は Jetson の既存 Docker 内に限定し、Notebook では `--list` と `--dry-run` による確認を使う。profile 一覧は `scripts/lib/bringup.sh` で管理し、追加時は実装済み launch・必要な引数・対象ホストを対応させる。未実装のセンサ・自律走行 profile や空の `atd_bringup` package を先に作らない。操作は [bringup](docs/bringup.md)を参照する。
+- ROS のまとめ起動は `scripts/bringup.sh` を入口とし、実在する `manual`（D455・車体TF・入力監視・bridge）、`d455`（D455・車体TF）、`input`（Joy・Pico入力・役割処理・bridge）、`bridge`（bridgeのみ）を扱う。引数なしの対話端末では fzf、未導入なら番号で選択し、非対話では profile の明示を求める。実行は Jetson の既存 Docker 内に限定し、Notebook では `--list` と `--dry-run` による確認を使う。profile 一覧は `scripts/lib/bringup.sh` で管理し、追加時は実装済み launch・必要な引数・対象ホストを対応させる。構成の組合せは `atd_bringup`、D455の設定・起動は `atd_sensors` が担当する。未実装の自律走行 profile は先に作らない。操作は [bringup](docs/bringup.md)を参照する。
 - 操作や可視化に役立つブラウザ UI も積極的に作成する。主な用途は地図の編集、自己位置の確認、PC / Jetson の操作・状態確認である。
 - ブラウザ UI はノート PC のみで使い、Chrome で `http://127.0.0.1:<port>` を開く。Jetson で UI のブラウザ・frontend を起動しない。観測・設定用の Jetson 側 ROS bridge は別に配置する。
 - 共通 Web アプリは React + TypeScript / Vite と FastAPI を採用する。`apps/web/` に frontend・backend・Web に依存しない processing を分け、通常は Notebook の Docker 内で `atd-web` を実行する。`scripts/tools/webui.sh` はホストから同じコンテナ内コマンドへ委譲する補助入口。ブラウザだけを Notebook ホストで開く。Node / pnpm と `web` 用 uv 環境は Notebook 専用。実装・ホスト上の検証・Docker / ROS / 実機検証を区別する。

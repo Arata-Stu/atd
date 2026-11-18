@@ -2,7 +2,7 @@
 
 RealSense D455 を初期センサとし、Jetson Orin Nano 8GB を搭載した RC カーで自動運転を行うプロジェクト。
 実走行の処理・制御と車載 ROS 2 / DDS 通信は Jetson 内で完結させ、ノート PC は地図作成・編集・解析・可視化に使用する。
-共通 Web アプリは React + TypeScript / Vite と FastAPI で実装し、Map・Transfer・Live・Input を統合する。UI はノート PC の Chrome だけで `127.0.0.1:<port>` から利用する。Jetson では ROS の観測・設定 bridge と入力ノードを動かす。
+共通 Web アプリは React + TypeScript / Vite と FastAPI で実装し、Map・Transfer・Live・Input・車両設定を統合する。UI はノート PC の Chrome だけで `127.0.0.1:<port>` から利用する。Jetson では ROS の観測・設定 bridge と入力ノードを動かす。
 
 想定基盤は Ubuntu 24.04 / JetPack 7.2 / ROS 2 Lyrical / Isaac ROS 5 の Docker。Notebook は x86_64・RTX 4060、Jetson は aarch64・Orin Nano を区別して準備する。イベントカメラ関連の依存は導入しない。
 
@@ -21,12 +21,13 @@ RealSense D455 を初期センサとし、Jetson Orin Nano 8GB を搭載した R
 ```bash
 ./scripts/setup.sh
 ./scripts/dev.sh --build
-./scripts/build.sh --packages-up-to atd_web_bridge
+./scripts/build.sh --packages-up-to atd_bringup
+./scripts/bringup.sh manual    # D455・車体TF・入力監視をTUIで設定して起動
 ./scripts/bringup.sh input     # Joy・Pico入力、役割処理、観測設定bridge
 ./scripts/bringup.sh bridge    # bridgeだけ。入力nodeが別途起動済みの場合
 ```
 
-`bringup.sh` は引数なしの対話端末では profile を fzf で選択し、未導入時は番号選択を使う。`--list` は一覧、`--dry-run input` は Notebook からも実行予定だけを確認できる。実際の起動は Jetson の既存 Docker 内で行い、車両出力や bag 記録は開始しない。[bringup の操作と拡張方針](docs/bringup.md)を参照する。
+`bringup.sh` は引数なしの対話端末では profile を fzf で選択し、未導入時は番号選択を使う。D455を含む `manual` / `d455` では、各ストリームのOFF・解像度・Hzを実機の対応モードから選択する。初期値はInfra1/2 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。`--list` は一覧、`--dry-run manual` は Notebook からも実行予定だけを確認できる。実際の起動は Jetson の既存 Docker 内で行い、車両出力や bag 記録は開始しない。[bringup の操作と拡張方針](docs/bringup.md)を参照する。
 
 診断・Python 環境管理・Web のホスト側補助入口は `scripts/tools/{docker,python,webui}.sh` に置く。Web UI は通常 Notebook の Docker 内で `atd-web` を実行し、Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。ホストからは `./scripts/tools/webui.sh` でも同じ処理を呼べる。FastAPI・frontend の build / 配信・地図作成ジョブはコンテナ内で動く。
 
@@ -85,7 +86,8 @@ ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用�
 | [VGL モデル](docs/vgl_models.md) | Notebook の export、SCP 転送、Jetson engine build、検証・ログ |
 | [ビルド方針](docs/isaac_ros_build_strategy.md) | CLI / Docker / ROS の範囲、RealSense、DDS と技術的な根拠 |
 | [環境セットアップ案](docs/environment_setup_plan.md) | Kart の比較調査、未実装部分の構成案 |
-| [CAD・3Dプリント資料](docs/hardware_cad.md) | TT-02-v1／v3、Rev6カメラ組立モデル、3MFと取り込み元 |
+| [車両配置・TF](docs/vehicle_layout.md) | 座標系、UIの寸法編集、実測とstatic TFの適用 |
+| [CAD・3Dプリント資料](docs/hardware_cad.md) | TT-02印刷フレーム、Rev6カメラ組立モデル、3MFと取り込み元 |
 
 現在は共通基盤の初期実装段階。スクリプト・設定の自動テストと、実 Docker build・ROS / GPU / D455 / Joy・車両 I/O・実走行の検証は区別する。対象機での通し導入・実機検証は未実施。
 

@@ -117,3 +117,18 @@ def configure_propo(request: Request, body: dict):
     if type(body.get('enabled')) is not bool:
         raise HTTPException(status_code=422, detail='enabled は true / false で指定してください')
     return call(request, '/propo/configure', 'POST', body)
+
+
+@router.get('/vehicle/status')
+def vehicle_status(request: Request):
+    return call(request, '/vehicle/status')
+
+
+@router.get('/vehicle/profile')
+def vehicle_profile(request: Request):
+    return call(request, '/vehicle/profile')
+
+
+@router.put('/vehicle/profile')
+def save_vehicle_profile(request: Request, body: dict):
+    return call(request, '/vehicle/profile', 'PUT', body)

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "serial": "",
+  "unite_imu_method": 0,
+  "streams": {
+    "infra1": {"enabled": true, "width": 640, "height": 480, "fps": 90},
+    "infra2": {"enabled": true, "width": 640, "height": 480, "fps": 90},
+    "color": {"enabled": true, "width": 640, "height": 480, "fps": 30},
+    "depth": {"enabled": false, "width": 640, "height": 480, "fps": 30},
+    "accel": {"enabled": true, "fps": 200},
+    "gyro": {"enabled": true, "fps": 400}
+  }
+}

@@ -18,6 +18,8 @@
     rc_status_topic: /rc/status
     rc_node: /atd_rc_input_node
     rc_profile_path: /data/results/runs/input/propo.yaml
+    vehicle_status_topic: /vehicle/layout/status
+    vehicle_profile_path: /data/results/runs/vehicle/layout.yaml
     parameter_node_prefix: /atd_
     # 実際の対象nodeとparameter名を明示する。既定では変更を許可しない。
     parameter_allowlist_json: '{}'

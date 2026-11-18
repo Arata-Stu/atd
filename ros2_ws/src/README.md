@@ -4,7 +4,7 @@
 パッケージごとに `package.xml` と `CMakeLists.txt` を持ち、C++ と `ament_cmake_auto` を基本とする。
 そのパッケージの `include/`・`src/`・`launch/`・`config/`・`test/` はパッケージ内に置く。
 
-Jetson の通常起動は `scripts/bringup.sh input`、入力 node が別途起動済みなら `scripts/bringup.sh bridge` を使う。profile は実装済みの launch と対応させ、一覧を `scripts/lib/bringup.sh` で管理する。将来の統合起動 package は対象機能の実装時に検討し、空の `atd_bringup` は先に作らない。[bringup の操作](../../docs/bringup.md)を参照する。
+D455 の能力列挙・設定・起動は `atd_sensors`、車体static TFと永続配置設定は `atd_vehicle_description`、複数機能の起動構成は `atd_bringup` が担当する。Jetson で `scripts/build.sh --packages-up-to atd_bringup` 後、`scripts/bringup.sh manual` でD455・車体TF・入力監視をまとめて起動する。`d455` はD455・TFのみ、`input` / `bridge` は従来の入力監視用。profile は実装済みの launch と対応させ、一覧を `scripts/lib/bringup.sh` で管理する。[bringup の操作](../../docs/bringup.md)を参照する。
 
 ホストから編集する対象は、このリポジトリの `ros2_ws/src/`。
 別の ROS workspace を選択した場合、Docker ではこのディレクトリを workspace の `src/atd/` に読書き可能で mount する。

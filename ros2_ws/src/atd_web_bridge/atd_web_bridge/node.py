@@ -22,7 +22,7 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 import yaml
 
-from .core import Cache, ProfileStore, TeleopProfileStore, PropoProfileStore, prepare_parameter_value
+from .core import Cache, ProfileStore, TeleopProfileStore, PropoProfileStore, VehicleProfileStore, prepare_parameter_value
 
 
 def stamp(header):
@@ -65,6 +65,8 @@ class BridgeNode(Node):
             'teleop_profile_path': '/data/results/runs/input/teleop.yaml',
             'pico_status_topic': '/vehicle/pico/status', 'rc_status_topic': '/rc/status',
             'rc_node': '/atd_rc_input_node', 'rc_profile_path': '/data/results/runs/input/propo.yaml',
+            'vehicle_status_topic': '/vehicle/layout/status',
+            'vehicle_profile_path': '/data/results/runs/vehicle/layout.yaml',
             'parameter_node_prefix': '/atd_', 'parameter_allowlist_json': '{}'}
         self.settings = {key: self.declare_parameter(key, value, fixed).value for key, value in defaults.items()}
         if not 1024 <= self.settings['port'] <= 65535 or not .1 <= self.settings['freshness_s'] <= 30:
@@ -77,6 +79,7 @@ class BridgeNode(Node):
         self.profiles = ProfileStore(self.settings['profile_path'])
         self.teleop_profiles = TeleopProfileStore(self.settings['teleop_profile_path'])
         self.propo_profiles = PropoProfileStore(self.settings['rc_profile_path'])
+        self.vehicle_profiles = VehicleProfileStore(self.settings['vehicle_profile_path'])
         self.operation_lock = threading.RLock()
         self.identity = {'schema': 'atd.web_bridge.v1', 'instance_id': uuid.uuid4().hex,
                          'hostname': socket.gethostname(), 'node': self.get_fully_qualified_name()}
@@ -90,6 +93,7 @@ class BridgeNode(Node):
         self.subscribe(String, 'teleop_status_topic', self.teleop_status)
         self.subscribe(String, 'pico_status_topic', self.pico_status)
         self.subscribe(String, 'rc_status_topic', self.rc_status)
+        self.subscribe(String, 'vehicle_status_topic', self.vehicle_status)
         self.joy_clients = {
             'configure': self.create_client(SetBool, self.settings['joy_node'] + '/configure'),
             'reload': self.create_client(Trigger, self.settings['joy_node'] + '/reload_profile')}
@@ -155,6 +159,22 @@ class BridgeNode(Node):
                 self.cache.put('rc_status', value)
         except (ValueError, yaml.YAMLError):
             self.get_logger().warning('Invalid rc/status YAML')
+
+    def vehicle_status(self, message):
+        try:
+            if len(message.data) > 65536:
+                raise ValueError('Vehicle status exceeds 64 KiB')
+            value = yaml.safe_load(message.data)
+            if not isinstance(value, dict) or type(value.get('profile_valid')) is not bool:
+                raise ValueError('Invalid vehicle status')
+            stamp = value.get('stamp')
+            if type(stamp) not in (int, float) or not -1e12 <= stamp <= 1e12 or not math.isfinite(stamp):
+                raise ValueError('Invalid vehicle status stamp')
+            age = self.get_clock().now().nanoseconds / 1e9 - stamp
+            value['source_age_s'] = max(0., age) if math.isfinite(age) and age >= -.05 else None
+            self.cache.put('vehicle_layout_status', value)
+        except (ValueError, yaml.YAMLError):
+            self.get_logger().warning('Invalid vehicle/layout/status YAML')
 
     def configure_propo(self, path, body):
         state = self.cache.propo_status()
@@ -284,7 +304,7 @@ class BridgeNode(Node):
 
     def dispatch(self, path, method, body):
         with self.operation_lock:
-            if path.startswith(('/teleop/', '/propo/')) and method in ('PUT', 'POST'):
+            if path.startswith(('/teleop/', '/propo/', '/vehicle/')) and method in ('PUT', 'POST'):
                 if type(body.get('instance_id')) is not str or body['instance_id'] != self.identity['instance_id']:
                     raise ValueError('Jetson bridge の接続先が変更されています。状態と設定を再取得してください')
             if path == '/live/status' and method == 'GET':
@@ -310,6 +330,12 @@ class BridgeNode(Node):
                 return self.propo_profiles.write(body.get('profile'), body.get('revision'), self.cache.propo_status())
             if path in ('/propo/reload', '/propo/configure') and method == 'POST':
                 return self.configure_propo(path, body)
+            if path == '/vehicle/status' and method == 'GET':
+                return self.cache.vehicle_status()
+            if path == '/vehicle/profile' and method == 'GET':
+                return self.vehicle_profiles.read(self.cache.vehicle_status())
+            if path == '/vehicle/profile' and method == 'PUT':
+                return self.vehicle_profiles.write(body.get('profile'), body.get('revision'), self.cache.vehicle_status())
             if path == '/input/profile' and method == 'GET':
                 return self.profiles.read()
             if path == '/input/profile' and method == 'PUT':

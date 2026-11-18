@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # 実装済みの構成だけを登録する。各 package の launch 内容はここに複製しない。
-# profile / host / package / launch file / 表示名（タブ区切り）。
+# profile / host / package / launch file / 表示名 / 設定TUI種別（タブ区切り）。
 atd_bringup_profiles() {
     printf '%s\n' \
-        $'input\tjetson\tatd_web_bridge\tinput.launch.py\tJoy・Pico入力、役割処理、観測・設定bridge' \
-        $'bridge\tjetson\tatd_web_bridge\tbridge.launch.py\t観測・設定bridgeのみ（入力は別途起動）'
+        $'input\tjetson\tatd_web_bridge\tinput.launch.py\tJoy・Pico入力、役割処理、観測・設定bridge\tplain' \
+        $'bridge\tjetson\tatd_web_bridge\tbridge.launch.py\t観測・設定bridgeのみ（入力は別途起動）\tplain' \
+        $'d455\tjetson\tatd_bringup\td455.launch.py\tD455・車両TF（bridgeなし）\tcamera' \
+        $'manual\tjetson\tatd_bringup\tmanual.launch.py\tD455・車両TF・既存入力一式\tcamera'
 }
 
 atd_bringup_lookup() {
-    local task_requested="$1" task_name task_host task_package task_launch task_label
-    while IFS=$'\t' read -r task_name task_host task_package task_launch task_label; do
+    local task_requested="$1" task_name task_host task_package task_launch task_label task_setup
+    while IFS=$'\t' read -r task_name task_host task_package task_launch task_label task_setup; do
         if [[ "$task_name" == "$task_requested" ]]; then
-            printf '%s\t%s\t%s\n' "$task_host" "$task_package" "$task_launch"
+            printf '%s\t%s\t%s\t%s\n' "$task_host" "$task_package" "$task_launch" "$task_setup"
             return 0
         fi
     done < <(atd_bringup_profiles)
@@ -19,16 +21,16 @@ atd_bringup_lookup() {
 }
 
 atd_bringup_list() {
-    local task_name task_host task_package task_launch task_label
-    while IFS=$'\t' read -r task_name task_host task_package task_launch task_label; do
+    local task_name task_host task_package task_launch task_label task_setup
+    while IFS=$'\t' read -r task_name task_host task_package task_launch task_label task_setup; do
         printf '%-8s %-6s %s\n' "$task_name" "$task_host" "$task_label"
     done < <(atd_bringup_profiles)
 }
 
 atd_bringup_choose() {
     local task_choices='' task_choice task_number task_index=0
-    local task_name task_host task_package task_launch task_label
-    while IFS=$'\t' read -r task_name task_host task_package task_launch task_label; do
+    local task_name task_host task_package task_launch task_label task_setup
+    while IFS=$'\t' read -r task_name task_host task_package task_launch task_label task_setup; do
         task_choices+="${task_name}"$'\t'"${task_label} (${task_host})"$'\n'
     done < <(atd_bringup_profiles)
     task_choices+=$'quit\t終了'

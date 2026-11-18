@@ -1,6 +1,6 @@
 # ATD 共通 Web アプリ
 
-Notebook の Chrome から使う React + TypeScript / Vite と FastAPI のローカルアプリ。Map・Transfer・Live・Input を同じ画面構成で扱う。Jetson ではブラウザ・Web frontend を起動せず、観測・設定用の ROS bridge と入力ノードを実行する。
+Notebook の Chrome から使う React + TypeScript / Vite と FastAPI のローカルアプリ。Map・Transfer・Live・Input・車両設定を同じ画面構成で扱う。Jetson ではブラウザ・Web frontend を起動せず、観測・設定用の ROS bridge と入力ノードを実行する。
 
 ## 起動
 
@@ -109,6 +109,16 @@ Jetson 側の「記録の開始・停止」「予備1」「予備2」は CH4〜C
 
 `atd_vehicle_interface` は Rev6 の監視用 CDC1 / if02 を USB 属性と Pico 固有 serial で識別し、`INFO` と `STREAM ON` だけを送信する。複数 Pico があれば自動選択せず、`./scripts/bringup.sh input pico_serial:=<ID>` で選ぶ。必要なら `pico_sensor_path:=/dev/serial/by-id/<CDC1>`・`pico_config:=<YAML>`・`rc_profile:=<YAML>` を指定できる。CDC0 と走行指令は使わず、firmware の制御処理は変更していない。firmware ソースは [Pico firmware](../../ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/README.md) として同じ ROS package 内で Git 管理する。詳細は [Pico 受信](../../ros2_ws/src/atd_vehicle_interface/README.md)、[プロポ役割](../../ros2_ws/src/atd_rc_input/README.md)、[要件3.10節](../../docs/project_requirements.md#310-rev6-pico-firmware-の確認2026-11-18)を参照する。ホスト検証と Jetson Docker・実 USB・実機の確認は別である。
 
+## 車両設定
+
+Jetson で `./scripts/build.sh --packages-up-to atd_bringup` 後、`./scripts/bringup.sh manual` を起動する。D455・車体static TF・入力・bridgeが起動する。センサだけの `d455` profile を使う場合は `bridge` を別ターミナルで起動する。
+
+「車両設定」では上面図・側面図に寸法線を表示し、入力欄と図の対応箇所を強調する。ホイールベース、前後トレッド、車体外形、後輪軸から後端までの長さと、D455の取付位置・姿勢を mm／度で編集する。寸法を説明する模式図と、入力値の同一縮尺プレビューを区別する。原点は後輪車軸中央（+X前／+Y左／+Z上）で、床面ではない。
+
+空欄は未測定として保持し、印刷フレームのCAD参考寸法を車体外形や取付TFへ自動転記しない。カメラ取付TFを有効にするには位置・姿勢の全6値が必要。RealSense内部TFはdriverが管理する。
+
+設定はSSH経由でJetsonの `/data/results/runs/vehicle/layout.yaml` に保存する。保存と適用は別で、static TF nodeを再起動するまで配信値は変わらない。画面では未保存・保存済み・再起動待ち・適用未確認・適用済みを区別し、通信断や古いnode状態を適用済みとして表示しない。接続先変更時も編集中の値を保持し、再取得してから保存する。走行操作やnode再起動はこの画面から行わない。[実測・TF確認の手順](../../docs/vehicle_layout.md)
+
 ## 構成と依存
 
 | 配置 | 責務 |
@@ -122,6 +132,9 @@ Jetson 側の「記録の開始・停止」「予備1」「予備2」は CH4〜C
 | `../../ros2_ws/src/atd_teleop/` | 軸・ボタンの役割を設定し、運転要求と操作イベントを生成する C++ component |
 | `../../ros2_ws/src/atd_vehicle_interface/` | Pico の監視用 USB CDC を受信する C++ component |
 | `../../ros2_ws/src/atd_rc_input/` | CH4〜CH16 の Jetson 側役割と記録要求を処理する C++ component |
+| `../../ros2_ws/src/atd_vehicle_description/` | 車両配置profileと車体・カメラ取付のstatic TF |
+| `../../ros2_ws/src/atd_sensors/` | D455の実機対応モード照会・TUI・検査付き起動 |
+| `../../ros2_ws/src/atd_bringup/` | D455・車体TF・入力監視の統合起動 |
 | `../../ros2_ws/src/atd_interfaces/` | 正規化した運転要求・操作イベントの ROS message 定義 |
 
 Docker の追加 apt 依存は [dependencies.apt](../../docker/dependencies.apt)、追加処理は [Dockerfile.atd](../../docker/Dockerfile.atd)。cuVSLAM・公式 mapping・visual mapping・VGL の apt package を使う。Node / pnpm と Web 用 Python 環境は Notebook 専用で、Jetson の通常起動では Web 依存を同期しない。
@@ -132,4 +145,4 @@ Docker の Web 用 Python は `docker/python/web/` の独立した uv project / 
 
 ## 検証の境界
 
-ローカルの API・保存競合・capture の資産整合と成功条件・geometry・worker・SSH 引数・入力 profile の単体テスト、実際の QP / IQP solver を使う小規模閉路テスト、frontend の型検査・build を確認した。teleop の C++ 単体検証、役割設定・bridge/API の単体テスト、疑似 Jetson データを使ったブラウザの保存・再読込・要求出力再開も確認した。実 GPU と実 bag による地図作成・localize・点群取得、ROS package の build / install・型生成・service 結合、Docker image build、実 SCP、Bluetooth / evdev、実走行は未検証であり、対象機で別に確認する。
+ローカルの API・保存競合・capture の資産整合と成功条件・geometry・worker・SSH 引数・入力 profile の単体テスト、実際の QP / IQP solver を使う小規模閉路テスト、frontend の型検査・build を確認した。teleop の C++ 単体検証、役割設定・bridge/API の単体テスト、疑似 Jetson データを使ったブラウザの保存・再読込・要求出力再開も確認した。車両配置のnull・単位換算・保存競合・適用判定、純粋C++のTF計算と、疑似APIによる上面／側面の寸法選択・保存・通信断時の編集保持も確認した。実 GPU と実 bag による地図作成・localize・点群取得、ROS package の build / install・型生成・service 結合、Docker image build、実 SCP、Bluetooth / evdev、実走行は未検証であり、対象機で別に確認する。

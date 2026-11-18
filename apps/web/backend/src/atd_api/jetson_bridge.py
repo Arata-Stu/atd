@@ -28,6 +28,7 @@ allowed = {
     '/teleop/reload': ('POST',), '/teleop/configure': ('POST',),
     '/propo/status': ('GET',), '/propo/profile': ('GET', 'PUT'),
     '/propo/reload': ('POST',), '/propo/configure': ('POST',),
+    '/vehicle/status': ('GET',), '/vehicle/profile': ('GET', 'PUT'),
 }
 if path not in allowed or request['method'] not in allowed[path]:
     raise ValueError('Unsupported bridge operation')

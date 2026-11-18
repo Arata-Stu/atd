@@ -1,0 +1,8 @@
+/**/atd_vehicle_description_node:
+  ros__parameters:
+    use_sim_time: false
+    profile_path: /data/results/runs/vehicle/layout.yaml
+    base_frame: base_link
+    rear_axle_frame: rear_axle
+    front_axle_frame: front_axle
+    camera_frame: camera_link

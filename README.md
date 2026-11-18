@@ -34,7 +34,7 @@ RealSense D455 を初期センサとし、Jetson Orin Nano 8GB を搭載した R
 setup・dev・build・vgl の PC / Jetson 判定は機種・BSP 情報を使い、必要な場合だけ `--host notebook`（`pc` と同義）/ `--host jetson` で上書きする。bringup の対象ホストは profile ごとに決める。実行予定の確認には `--dry-run` を使う。
 ホストのセットアップを最初から確認する場合は、[共通手順](docs/setup/README.md)、[Notebook](docs/setup/pc.md)、[Jetson](docs/setup/jetson.md)を参照する。
 
-Docker 起動時に共通 apt 依存、Fast DDS の UDPv4 / loopback 設定、ROS 用 uv 環境を準備する。カメラ・bag 記録・車両ノード・bridge は自動起動しない。構成更新時は利用中の処理を終了してコンテナを再作成する。
+共通 apt 依存や SDK を更新したら Docker イメージを再ビルドする。起動時は apt 依存の導入状態を検査し、Fast DDS の UDPv4 / loopback 設定と ROS 用 uv 環境を準備する。日常コマンドはマウント済み checkout から実行するので、編集は次の実行で反映される。カメラ・bag 記録・車両ノード・bridge は明示的に起動する。[更新後の操作](docs/setup/README.md#git-pull)
 
 ## ソースと workspace
 

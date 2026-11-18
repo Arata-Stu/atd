@@ -26,10 +26,22 @@ function IntervalEvidence({candidate}: {candidate: LimitCandidate}) {
   </details>;
 }
 
-function FeedforwardTable({proposal}: {proposal: VehicleCandidates}) {
+function FeedforwardTable({proposal, onRefresh}: {proposal: VehicleCandidates; onRefresh: () => void}) {
   const ff = proposal.feedforward;
-  const url = '/api/calibration/runs/' + encodeURIComponent(proposal.run_id) + '/feedforward.json?' +
-    new URLSearchParams({proposal_sha256: proposal.proposal_sha256});
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  async function download() {
+    if (busy || !ff.usable) return;
+    setBusy(true); setError('');
+    try {
+      const file = await api('calibration/runs/' + encodeURIComponent(proposal.run_id) + '/feedforward.json?' +
+        new URLSearchParams({proposal_sha256: proposal.proposal_sha256}));
+      const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2) + '\n'], {type: 'application/json'}));
+      const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = 'throttle-ff-' + proposal.run_id + '.json'; anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
   return <section className="candidate-section" aria-label="速度フィードフォワード">
     <h4>速度フィードフォワード</h4>
     <p>前進時の目標速度に対応するプロポのスロットル入力（S.BUS CH2 raw）です。</p>
@@ -44,7 +56,10 @@ function FeedforwardTable({proposal}: {proposal: VehicleCandidates}) {
         <td>{displayValue.format(point.speed_min_mps)} 〜 {displayValue.format(point.speed_max_mps)}</td>
         <td>{point.episodes}</td><td>{point.samples.toLocaleString()}</td></tr>)}</tbody>
     </table></div>}
-    {ff.usable && <a className="button small" href={url} download><Icon name="download" size={14}/>フィードフォワード表を JSON で保存</a>}
+    {error && <div className="inline-note" role="alert">{error}<button className="button small" onClick={onRefresh}>候補を再取得</button></div>}
+    {ff.usable && <button className="button small" disabled={busy || !!error} onClick={() => void download()}>
+      <Icon name="download" size={14}/>{busy ? '保存準備中…' : 'フィードフォワード表を JSON で保存'}
+    </button>}
   </section>;
 }
 
@@ -127,7 +142,7 @@ function CandidateReview({runId, onOpenMap}: {runId: string; onOpenMap: (id: str
         {map && adopted && <button className="button" disabled={saving} onClick={() => onOpenMap(map.id)}>Raceline 生成画面を開く<Icon name="arrow" size={15}/></button>}
       </div>
     </section>
-    <FeedforwardTable proposal={proposal}/>
+    <FeedforwardTable proposal={proposal} onRefresh={refresh}/>
   </>;
 }
 

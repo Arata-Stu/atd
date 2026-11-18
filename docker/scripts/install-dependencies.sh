@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# コンテナの root 起動処理から呼び出す。不足する apt 依存だけを導入する。
+# Docker build は --install、起動時は --check（既定）で導入状態を確認する。
 set -euo pipefail
 
 fail() {
@@ -8,8 +8,14 @@ fail() {
 }
 
 [[ "${ROS_DISTRO:-}" == lyrical ]] || fail 'ROS_DISTRO=lyrical が必要です'
-[[ "$(id -u)" == 0 ]] || fail 'コンテナの root 起動処理から実行してください'
-(($# <= 1)) || fail '使い方: install-dependencies.sh [dependencies.apt]'
+task_action=--check
+case "${1:-}" in
+    --install|--check) task_action="$1"; shift ;;
+esac
+if [[ "$task_action" == --install ]]; then
+    [[ "$(id -u)" == 0 ]] || fail 'apt 依存の導入は Docker build で root として実行してください'
+fi
+(($# <= 1)) || fail '使い方: install-dependencies.sh [--check|--install] [dependencies.apt]'
 task_script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 task_manifest="${1:-${task_script_dir}/../dependencies.apt}"
 [[ -f "$task_manifest" && -r "$task_manifest" ]] || fail "依存一覧を読めません: $task_manifest"
@@ -41,6 +47,9 @@ done
 if ((${#task_missing[@]} == 0)); then
     printf 'ATD dependencies: 導入済み（追加インストールなし）\n'
     exit 0
+fi
+if [[ "$task_action" == --check ]]; then
+    fail "イメージに不足しているパッケージ: ${task_missing[*]}。ホストで ./scripts/dev.sh --build を実行してください"
 fi
 
 printf 'ATD dependencies: 不足する %d パッケージを導入します\n' "${#task_missing[@]}"

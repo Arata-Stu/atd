@@ -54,10 +54,14 @@ class StartupTests(unittest.TestCase):
             'printf "python\\n" >> "$ATD_TEST_LOG"\n'
             '[[ ${ATD_TEST_FAIL:-} != python ]] || exit 12\n')
         (self.bin / 'gosu').chmod(0o755)
-        (self.runtime / "scripts/install-dependencies.sh").write_text(
-            '#!/bin/bash\nprintf "dependencies\\n" >> "$ATD_TEST_LOG"\n'
-            '[[ ${ATD_TEST_FAIL:-} != dependencies ]] || exit 7\n'
-        )
+        for directory in (self.runtime, self.image):
+            (directory / "dependencies.apt").write_text("cmake\n")
+            (directory / "scripts/install-dependencies.sh").write_text(
+                '#!/bin/bash\n'
+                '[[ "$0" == "$ATD_IMAGE_DIR/scripts/install-dependencies.sh" && "$1" == --check ]] || exit 14\n'
+                'printf "dependencies\\n" >> "$ATD_TEST_LOG"\n'
+                '[[ ${ATD_TEST_FAIL:-} != dependencies ]] || exit 7\n'
+            )
         (self.runtime / "scripts/configure-serial-access.sh").write_text(
             '#!/bin/bash\nprintf "serial\\n" >> "$ATD_TEST_LOG"\n'
             '[[ ${ATD_TEST_FAIL:-} != serial ]] || exit 13\n'
@@ -123,7 +127,8 @@ class StartupTests(unittest.TestCase):
         self.assertFalse(self.log.exists())
 
     def test_image_specific_changes_require_rebuild_before_tasks(self):
-        for relative in ("Dockerfile.atd", "scripts/atd-entrypoint.sh", "scripts/atd-dispatch.sh"):
+        for relative in ("Dockerfile.atd", "scripts/atd-entrypoint.sh", "scripts/atd-dispatch.sh",
+                         "dependencies.apt", "scripts/install-dependencies.sh"):
             with self.subTest(file=relative):
                 path = self.runtime / relative
                 original = path.read_text()

@@ -113,10 +113,13 @@ CLI 設定テンプレートは `docker/isaac_ros/`、Docker の生成物は `<A
 
 | 更新したもの | 反映方法 |
 | --- | --- |
-| `docker/scripts/atd-{web,build,vgl,shell}.sh`、`atd.bashrc` | 次にそのコマンドやシェルを開くと反映される。例として、実行中の Web サーバーは終了して `atd-web` を再実行する。 |
-| 起動 hook、USB serial の初期化、起動時の ROS 用 Python 同期 | 利用中の処理を終了してコンテナを停止し、ホストで `./scripts/dev.sh` を実行する。同じイメージで初期化が走る。 |
-| Dockerfile、apt 依存・導入スクリプト、ビルド時にも使う DDS 設定、固定入口 | コンテナを停止し、ホストで `./scripts/dev.sh --build` を実行する。以前のイメージから今回の固定入口へ移るときも各ホストで一度必要。 |
-| ROS package | コンテナ内で `./scripts/build.sh --packages-up-to <package>` を実行する。 |
+| `docker/scripts/atd-{web,build,vgl,shell}.sh`、`atd.bashrc`、`tools/vgl/*.py` | 同じコンテナでコマンドを再実行する。Web サーバーなら終了して `atd-web` を再実行する。 |
+| Web・Raceline・VGL export・学習の Python 依存、Web frontend の依存 | 同じコンテナで該当コマンドを実行し、マウントした workspace の venv や `node_modules` に同期する。 |
+| 起動 hook、DDS の XML・配置処理、USB serial の初期化、起動時の ROS 用 Python 同期・lock | 利用中の処理を終了してコンテナを停止し、ホストで `./scripts/dev.sh` を実行する。同じイメージで初期化が走る。 |
+| Dockerfile、apt 依存・導入スクリプト、SDK、uv・Node・pnpm 本体、イメージの固定入口 | コンテナを停止し、ホストで `./scripts/dev.sh --build` を実行する。旧イメージからこの構成に移るときも、各ホストで一度必要。 |
+| 自作 ROS package のソース | コンテナ内で `./scripts/build.sh --packages-up-to <package>` を実行し、workspace にビルドする。 |
+
+自作 ROS package が新しい apt パッケージを使う場合は、その名前を `docker/dependencies.apt` に追加し、対象ホストで `./scripts/dev.sh --build` を実行する。その後、コンテナ内で自作 package をビルドする。
 
 ホストで `unable to access '~/.gitconfig': Is a directory` が出た場合は、ログインユーザーで次を実行する。上流の既定引数は `~/.gitconfig` を `-v` で共有するため、元ファイルがない状態で起動すると Docker が同名のディレクトリを作る場合がある。次の例は既存のディレクトリを内容ごと退避し、所有者だけが読み書きできる空の設定ファイルを用意する。[Docker の bind mount](https://docs.docker.com/engine/storage/bind-mounts/#syntax)
 
@@ -202,11 +205,9 @@ PC と Jetson のディレクトリは別々の実体であり、bag や地図�
 ```
 
 短い入口として `./scripts/dev.sh` も使える。新規起動に成功すると、そのままコンテナ内の `atd-shell` を開く。稼働中の場合は同じシェルへ再接続する。ホスト側の準備だけを行って終了するコマンドではない。
-Dockerfile・起動用スクリプト等を更新した場合は、利用中の処理を終了してからメニューの build を実行する。
-初回やローカルイメージがない場合は `./scripts/dev.sh --build` で ATD の追加層を build してから起動する。
+初回、システム依存を更新したとき、またはローカルイメージがない場合は `./scripts/dev.sh --build` で ATD の追加層を build してから起動する。日常コマンドや設定の編集後は[変更別の反映方法](#git-pull)に従う。
 
-Docker 起動時には root の `.sh` が追加依存の不足分を確認し、Fast DDS の UDPv4 / loopback 設定を適用する。
-依存が揃っていれば apt 操作を省略する。再接続時は初期化を繰り返さず、設定の整合を確認して `atd-shell` を開く。
+Docker 起動時は root hook が追加 apt 依存の導入状態を検査する。不足やイメージと依存一覧の不一致があれば起動を止め、再ビルドを案内する。検査を通ると Fast DDS の UDPv4 / loopback 設定を適用する。再接続時は設定の整合を確認し、`atd-shell` を開く。
 詳細は [CLI・Docker のビルド方針](../isaac_ros_build_strategy.md)を参照する。
 
 Jetson の入力・監視を起動する場合は、別端末から次を実行する。Docker の起動だけでは ROS node は起動しない。

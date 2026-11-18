@@ -1,4 +1,4 @@
-"""起動時依存導入の契約。apt / dpkg は偽物で、ホストへは導入しない。"""
+"""Docker build 時の apt 導入と起動時の読取専用検査を模擬する。"""
 
 import json
 import os
@@ -68,9 +68,10 @@ class DependencyScriptTests(unittest.TestCase):
             "ATD_TEST_LOG": str(self.log),
         }
 
-    def invoke(self, env=None, manifest=None):
+    def invoke(self, env=None, manifest=None, action="--install"):
+        flags = [action] if action else []
         return subprocess.run(
-            ["/bin/bash", str(SCRIPT), str(manifest or self.manifest)],
+            ["/bin/bash", str(SCRIPT), *flags, str(manifest or self.manifest)],
             env={**self.env, **(env or {})}, text=True, capture_output=True, timeout=10,
         )
 
@@ -83,7 +84,7 @@ class DependencyScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [])
 
-    def test_only_missing_packages_are_installed_and_second_start_skips_apt(self):
+    def test_only_missing_packages_are_installed_and_next_check_skips_apt(self):
         self.installed.write_text("cmake\n")
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -91,11 +92,21 @@ class DependencyScriptTests(unittest.TestCase):
             ["update"], ["install", "-y", "--no-install-recommends", "fzf", "ros-lyrical-joy"],
         ])
         self.log.unlink()
-        result = self.invoke()
+        result = self.invoke(action="--check")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [])
 
-    def test_apt_failure_stops_startup_and_retries_on_next_invocation(self):
+    def test_check_lists_missing_packages_without_running_apt(self):
+        self.installed.write_text("cmake\n")
+        for action in ("--check", None):
+            with self.subTest(action=action):
+                result = self.invoke({"ATD_TEST_UID": "1000"}, action=action)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("fzf ros-lyrical-joy", result.stderr)
+                self.assertIn("--build", result.stderr)
+                self.assertEqual(self.calls(), [])
+
+    def test_apt_failure_stops_build_and_retries_on_next_invocation(self):
         for stage in ("update", "install"):
             with self.subTest(stage=stage):
                 self.log.unlink(missing_ok=True)

@@ -34,8 +34,8 @@
 - Isaac ROS CLI は apt 版を採用し、Docker のカスタムは YAML と追加 Dockerfile で行う。CLI 本体の改修が必要になった場合に source build を検討する。詳細は [ビルド方針](docs/isaac_ros_build_strategy.md) を参照する。
 - RealSense はローカルの `realsense455` layer を使い、librealsense SDK のみ CUDA 無効で構築する。ベースの CUDA と他の Isaac ROS GPU 処理は無効化しない。
 - イベントカメラは今後使用しない。関連 SDK・driver・ROS package・Python 依存を導入せず、将来の追加候補にも含めない。
-- 共通依存と DDS 設定は Docker の root 起動処理から `.sh` で自動適用する。依存は `docker/dependencies.apt` を基準に不足分だけ導入し、毎回の apt upgrade は行わない。
-- 同じ依存導入スクリプトを Docker build 時にも実行し、既知の依存をイメージにキャッシュする。起動時の不足確認は省略しない。
+- OS・配布済み ROS パッケージ、SDK、uv 本体、Notebook の Node / pnpm などコンテナのシステムに導入する依存は Docker build で準備する。共通 apt 依存は `docker/dependencies.apt` で管理し、起動時は導入状態を検査する。不足やイメージとの不一致があれば起動を止め、再ビルドを案内する。
+- 日常コマンドは `/workspaces/atd` にマウントした checkout から実行し、編集は次の実行で反映する。DDS・USB serial・ROS 用 Python 同期など起動時に適用する設定の変更はコンテナを再作成して反映する。uv の venv、Web の node_modules、自作 ROS package の colcon 成果物は各ホストのマウント済み workspace に置く。
 - DDS は Fast DDS の UDPv4 / loopback 設定を使う。生成先は `/etc/atd/fastdds.xml` と `/etc/atd/dds.env.sh` とし、起動時の root スクリプトで配置する。
 - 初回準備は `scripts/setup.sh` と [セットアップ手順](docs/setup/README.md) を入口とする。Notebook（x86_64 / amd64）と Jetson（aarch64 / arm64 と BSP）を区別し、既存 Docker・CLI 設定を不用意に置換しない。
 - ROS workspace は setup の workspace 操作で対話的に指定し、未設定時は実際の clone 配下の `ros2_ws` を使う。標準 clone 位置なら `~/workspaces/atd/ros2_ws` となる。`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存する。保存済み指定と引数・環境変数の上書きを優先し、旧設定や既存データを自動移行しない。コンテナでは `/workspaces/isaac_ros-dev` を使い、`ISAAC_ROS_WS` は `dev.sh` が設定する。Notebook / Jetson のホストパスやビルド成果物を同一視しない。別の workspace を使う場合、その `src/atd` はリポジトリの `ros2_ws/src/` を mount する予約先とし、編集元を別々に管理しない。

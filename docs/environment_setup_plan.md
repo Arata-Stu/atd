@@ -65,7 +65,7 @@ ATD の Git checkout を `/workspaces/atd` に、ホストの記録・解析結�
 ## 4. 共通依存と起動処理の実装
 
 共通の apt 依存は [dependencies.apt](../docker/dependencies.apt) で管理する。
-`install-dependencies.sh` が root / Lyrical と依存一覧を検査し、`dpkg-query` で不足したものだけ導入する。すべて導入済みなら apt 操作を行わず、毎回の apt upgrade も行わない。
+Docker build 時は `install-dependencies.sh --install` が root / Lyrical と依存一覧を検査し、`dpkg-query` で不足したパッケージを導入する。コンテナ起動時は `--check` で導入状態を検査し、不足があれば再ビルドを案内する。
 対象ホストでの apt 配布・版の整合と実際のインストール成功は、Docker build と実起動で確認する。
 
 | 用途 | 依存の例・方針 |
@@ -80,10 +80,9 @@ ATD の Git checkout を `/workspaces/atd` に、ホストの記録・解析結�
 
 `fzf` はコンテナ内だけでなく、ホストの起動メニューでも使えるようにする。
 変更頻度の低い RealSense の build を前に置き、日常ツールや軽いプロジェクト依存は後ろに置く。
-依存一覧と導入スクリプトを Dockerfile でも実行し、既知の依存をイメージにキャッシュする。新規コンテナ起動時にも同じスクリプトを必ず実行し、不足分を確認する。
-上流 CLI の `--rm` によりコンテナが再作成される場合でも、既知の依存の毎回の再導入を減らす。
+Dockerfile は共通 apt 依存をイメージに保持する。日常コマンドはマウントした checkout から実行するので、`atd-web.sh` や `tools/vgl/` のコマンドの編集は次回実行で反映できる。
 
-起動時の処理は `10-atd-runtime.sh → install-dependencies.sh → configure-dds.sh → gosu admin 経由の atd-python ros sync` とする。
+起動時は `10-atd-runtime.sh` が共通 apt 依存を検査し、USB serial と DDS を設定してから `gosu admin` で `atd-python ros sync` を実行する。
 DDS の生成先は `/etc/atd/fastdds.xml` と `/etc/atd/dds.env.sh` であり、依存と設定の準備成功後に `runtime.ready` を記録する。
 `atd-shell` はこれらの環境を利用し、ホストの旧 `.bashrc` を読み込まない。Docker ENV と `BASH_ENV` も設定する。
 
@@ -177,7 +176,7 @@ Jetson の build 並列数は 8GB の実メモリ使用量を見ながら調整�
 | 対象 | 状況 |
 | --- | --- |
 | [Dockerfile.atd](../docker/Dockerfile.atd) | 依存・DDS の事前準備、root 起動 hook、専用シェル、Docker ENV を実装 |
-| [dependencies.apt](../docker/dependencies.apt) と [install-dependencies.sh](../docker/scripts/install-dependencies.sh) | 共通依存一覧と不足分だけの導入を実装 |
+| [dependencies.apt](../docker/dependencies.apt) と [install-dependencies.sh](../docker/scripts/install-dependencies.sh) | build 時に共通 apt 依存を導入し、起動時に導入状態を検査する |
 | [10-atd-runtime.sh](../docker/scripts/10-atd-runtime.sh) と [configure-dds.sh](../docker/scripts/configure-dds.sh) | 起動時の準備と DDS 配置、準備完了記録を実装 |
 | [fastdds.xml](../docker/middleware_profiles/fastdds.xml) | Fast DDS / UDPv4 / loopback のプロファイルを実装 |
 | [scripts/dev.sh](../scripts/dev.sh) | 新規起動・構成の整合確認・専用シェルへの再接続を実装 |

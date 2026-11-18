@@ -208,7 +208,7 @@ def _feedforward(episodes, bin_width):
 
 
 def derive_candidates(summary, rows):
-    """Read one calibration v1 summary and its CSV DictReader, including completed old runs."""
+    """校正 v1 の summary と同じ走行の CSV 行から制限候補・速度別入力表を作る。"""
     minimum_speed, duration, gap, tolerance, bin_width = _summary_settings(summary)
     intervals = defaultdict(list)
     for key, episode in _measured_intervals(_read_rows(summary, rows, minimum_speed), duration, gap, tolerance):

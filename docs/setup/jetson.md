@@ -82,7 +82,7 @@ workspace は対話入力した場所に CLI 設定を準備し、`config/worksp
 `./scripts/tools/docker.sh` で項目別診断を保存し、`./scripts/tools/docker.sh --action logs` で Jetson の過去の結果を確認できる。
 初回 build は `isaac_ros → realsense455 → atd` の順で行う。
 verify は Docker 接続、CLI の Docker モード、`--gpus all` による `/bin/true` のコンテナ起動までを確認する。CUDA 演算やセンサ取得は別途検証する。
-Docker 起動時には不足依存の導入と Fast DDS の loopback 設定を `.sh` で自動適用する。カメラ・録画・車両ノードは自動起動しない。
+Docker 起動時にはシステム依存の導入状態を検査し、Fast DDS の loopback 設定を適用する。パッケージ不足の場合はホストで `./scripts/dev.sh --build` を実行する。カメラ・録画・車両ノードは明示的に起動する。
 次回は `./scripts/setup.sh --action start` または `./scripts/dev.sh` を使う。
 入室後は `git pull --ff-only` で Jetson ホストと同じ ATD checkout を更新できる。ホストで `.gitconfig` がディレクトリになった場合の復旧は[共通の Git 手順](README.md#git-pull)を参照する。
 

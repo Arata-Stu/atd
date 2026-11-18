@@ -11,7 +11,7 @@
 ユーザーの指定に従い、Isaac ROS CLI は apt 版を採用し、Docker のカスタムは YAML と追加 Dockerfile で行う。
 PC / Jetson を自動判定する起動スクリプト、保存先設定の例、Docker 構成を作成した。記録先・解析結果は毎回読書き可能で mount する。
 RealSense はローカルの `realsense455` layer を使い、librealsense SDK のみ CUDA 無効で構築する。
-共通依存と Fast DDS の loopback UDP 設定は、Docker の root 起動処理からスクリプトで自動適用する。
+共通 apt 依存は Docker build 時に導入する。コンテナ起動時は導入状態を検査し、Fast DDS の loopback UDP 設定を適用する。
 イベントカメラは今後使用せず、関連依存を将来の候補からも除外する。
 CLI 本体は変更せず、以前の `kart` の独自 mount・起動処理も移植していない。CLI 本体の改修が必要になった場合に source build を検討する。
 これらは初期実装であり、対象ホストへの CLI 導入、Docker build、実機検証は未実施である。
@@ -98,7 +98,7 @@ Isaac ROS 5.0 / ROS 2 Lyrical / JetPack 7.2 を対象とし、上流に対して
 | [`../docker/Dockerfile.realsense455`](../docker/Dockerfile.realsense455) | 標準 RealSense layer の置換。librealsense SDK のみ CUDA 無効で構築する |
 | [`../docker/Dockerfile.atd`](../docker/Dockerfile.atd) | 共通依存・DDS の build 時準備、固定版 uv、root 起動 hook、専用シェル、Docker ENV を配置する |
 | [`../docker/dependencies.apt`](../docker/dependencies.apt) | 起動時に不足分を確認する共通 apt 依存一覧。イベントカメラ関連は含めない |
-| [`../docker/scripts/install-dependencies.sh`](../docker/scripts/install-dependencies.sh) | root / Lyrical と依存一覧を確認し、不足パッケージだけ apt 導入する |
+| [`../docker/scripts/install-dependencies.sh`](../docker/scripts/install-dependencies.sh) | Docker build 時には不足パッケージを apt で導入し、起動時には導入状態を検査する |
 | [`../docker/scripts/configure-dds.sh`](../docker/scripts/configure-dds.sh) | Fast DDS XML と環境ファイルを `/etc/atd` へ配置する |
 | [`../docker/scripts/10-atd-runtime.sh`](../docker/scripts/10-atd-runtime.sh) | 依存・DDS を順に準備し、成功後に `runtime.ready` を記録する root hook |
 | [`../docker/scripts/atd-shell.sh`](../docker/scripts/atd-shell.sh) | 専用 `atd-shell` の入口。ホストの旧 bashrc を読み込まず ATD 環境で対話シェルを開く |
@@ -139,23 +139,24 @@ D455 の IR・RGB・IMU・Depth の利用候補は維持し、実際の起動、
 変更を反映するには、利用中の処理を終了し、同名の実行中コンテナを停止してから `./scripts/dev.sh --build` で再構築・起動する。
 既存コンテナへの再接続だけでは新しい SDK 構成は反映されない。
 
-### 起動時の依存・DDS 設定
+### イメージ内の依存と起動時の設定
 
-Dockerfile は既知の共通依存を同じ `install-dependencies.sh` で事前導入し、Fast DDS の設定と root hook を配置する。
-上流 CLI の `--rm` により終了後に新規コンテナを作成する場合でも、既知の依存を毎回インストールし直さないためである。
+Docker build 時に `install-dependencies.sh --install` が共通 apt パッケージを導入する。D455 SDK / driver、uv 本体、Notebook の Node / pnpm もイメージに置く。これらを更新した場合は各ホストで `./scripts/dev.sh --build` を実行する。
 イメージの固定入口 `atd-entrypoint.sh` が、mount された `/workspaces/atd/docker/scripts/10-atd-runtime.sh` を root のシェルで読み込む。hook はイメージの Dockerfile・固定入口との整合と uv `0.13.8` を確認する。
 
-1. `install-dependencies.sh` が依存一覧を検査し、`dpkg-query` で不足を調べる。不足時だけ `apt-get update` と `apt-get install` を実行する。
+1. apt の依存一覧・導入スクリプトをイメージと照合し、`install-dependencies.sh --check` で各パッケージの導入状態を検査する。不一致または不足があれば、起動を止めてイメージの再ビルドを案内する。
 2. `configure-serial-access.sh` が Jetson の USB serial アクセスを準備し、`configure-dds.sh` が `/etc/atd/fastdds.xml` と `/etc/atd/dds.env.sh` を配置する。
 3. `gosu admin` 経由で ROS 2 用の追加 Python 依存を同期する。学習用環境は明示操作で準備する。
 4. 環境を読み込み、すべての処理の成功後に `/etc/atd/runtime.ready` へ起動時の構成識別子を記録する。
 
-依存導入や DDS 設定に失敗した場合は起動を失敗させる。毎回の apt upgrade は実行しない。
+DDS の配置や環境の同期に失敗した場合も初期化を中断する。
 依存一覧のイベントカメラ関連名は拒否する。現行 ATD にはこれらの導入処理はなく、参照先 kart の関連 SDK・driver を移植しない。
 
-`dev.sh` が生成する `.cache/docker/<runtime revision>/Dockerfile.atd` には、Dockerfile、apt の依存一覧と導入スクリプト、DDS の生成スクリプトと XML、固定入口2本の内容を hash したコメントを付ける。上流 CLI はこの Dockerfile を使ってイメージを識別する。build context は `context_overrides.atd: ../../../docker` で元の `docker/` を指定する。
+`dev.sh` が生成する `.cache/docker/<runtime revision>/Dockerfile.atd` には、Dockerfile、apt の依存一覧と導入スクリプト、固定入口2本の内容を hash したコメントを付ける。上流 CLI はこの Dockerfile を使ってイメージを識別する。build context は `context_overrides.atd: ../../../docker` で元の `docker/` を指定する。
 
-`atd-shell`、`atd-build`、`atd-web`、`atd-vgl`、`atd-python` は、固定入口 `atd-dispatch.sh` からマウント中の checkout の実装を呼ぶ。checkout を付けずにイメージを使う場合は、ビルド時点で `/opt/atd` に保存した実装を使う。起動時の構成検査には別の `ATD_RUNTIME_REV` を使う。例えば `atd-web.sh` の編集は次回実行で反映され、USB serial の初期化や `atd-python` を使う ROS 環境同期の変更はコンテナを再作成すると反映される。操作別の手順は[セットアップ手順](setup/README.md#git-pull)を参照する。
+`atd-shell`、`atd-build`、`atd-web`、`atd-vgl`、`atd-python` は、固定入口 `atd-dispatch.sh` からマウント中の checkout の実装を呼ぶ。checkout を付けずにイメージを使う場合は、ビルド時点で `/opt/atd` に保存した実装を使う。
+
+起動時の構成検査には `ATD_RUNTIME_REV` を使う。DDS の XML・配置スクリプト、USB serial の初期化、ROS 用 Python 同期やその lock の変更は、同じイメージからコンテナを再作成して反映する。日常コマンドや `tools/vgl/*.py` の編集は次の実行から、ROS 以外の uv profile の lock 更新はその環境を使う次の同期から反映される。具体的な操作は[更新手順](setup/README.md#git-pull)を参照する。
 
 Fast DDS は `rmw_fastrtps_cpp` とし、独自 UDPv4 transport の interface、探索 peer、unicast locator を `127.0.0.1` に限定する。
 既定 transport を無効にし、XML を使うため `ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT` とする。
@@ -213,8 +214,8 @@ source build の具体例として、Isaac ROS 5 の `isaac_ros_cuvslam` は cuV
 - CUDA 無効指定の模擬検証済み: 新 Dockerfile の引数で公式 helper のオプション処理を実行し、CMake 呼出しに `BUILD_WITH_CUDA=false`、`FORCE_RSUSB_BACKEND=true` が渡ることを確認した。7 個の `RUN` の Bash 構文、helper の Debian 配置定義も確認した。実 CMake・コンパイル・apt 導入・D455 I/O は実行していない。
 - 起動・依存・DDS の検証済み: 自動テストで CLI・Docker・apt を偽物に置き換え、初期化の順序、失敗時停止、不足分導入、再接続・revision / ready の検査、生成 Dockerfile、ホスト rc の回避、ROS 環境と DDS の読込みを確認した。テストは [tests/](../tests/) を参照する。
 - XML の検証済み: `ATD_FASTDDS_XSD` に Fast DDS v3.6.2 の公式 `fastdds_profiles.xsd` を指定し、公式 XSD による受理を確認した。未指定の場合は XSD 検証を skip する。XML の受理確認と、実 ROS の探索・データ通信・外部パケット確認は区別する。
-- 生成 Dockerfile の模擬検証済み: 上流の `Config.load_shell_common_config` / `load_yaml`、`resolve_dockerfiles`、`generate_bake_dict` を使用し、生成版の優先探索、元 `docker/` への context 解決、DDS helper 更新による ATD 層・最終イメージ hash の変化、Isaac ROS / RealSense 層の選択・hash の維持を確認した。表示と YAML parser、Linux の CLI 探索先をローカルで代替した検証であり、実 Docker build ではない。
-- 公式 apt 版 CLI 2.7.0 のイメージ名計算に、テスト用 checkout で生成した Dockerfile を渡して確認した。`atd-web.sh` の編集ではイメージ・起動構成の hash とも維持し、USB serial 初期化の編集では起動構成のみ、`dependencies.apt` の編集では両方が変化した。実機での export 時間は未計測。
+- 生成 Dockerfile の模擬検証では、上流の `Config.load_shell_common_config` / `load_yaml`、`resolve_dockerfiles`、`generate_bake_dict` を使用し、生成版の優先探索、元 `docker/` への context 解決、Isaac ROS / RealSense 層の選択を確認した。表示と YAML parser、Linux の CLI 探索先はローカルで代替した。
+- 公式 apt 版 CLI 2.7.0 のイメージ名計算に、テスト用 checkout で生成した Dockerfile を渡した。`amd64` と `arm64-jetpack` の両方で、`atd-web.sh` の編集ではイメージタグ・起動構成とも維持された。`configure-dds.sh` と `fastdds.xml` はそれぞれ起動構成だけを更新し、`dependencies.apt` へのパッケージ追加では両方が変わった。実機での export 時間は未計測。
 - 現在の Mac ホストでは、保存先を一時ディレクトリに指定した `--dry-run` で `host: pc (auto)` と設定選択を確認した。Ubuntu PC / Jetson の実起動検証とは区別する。
 - 未実施: 対象ホストへの CLI 導入、実際の Docker build、ROS build / bag 再生、D455・Joy・車両 I/O、bridge 接続、実走行。
 - 現在の Mac では Docker デーモンへ接続できず、今回の Docker build・実コンテナ検証は実行できなかった。

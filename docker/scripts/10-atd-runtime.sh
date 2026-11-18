@@ -21,8 +21,9 @@ _atd_prepare_runtime() {
     # 前回の成功記録を残して途中失敗を成功扱いにしない。
     if ! rm -f -- "${task_config_dir}/runtime.ready"; then return 1; fi
 
-    # checkout から差し替えられないイメージ本体・固定入口の互換性を確認する。
-    for task_file in Dockerfile.atd scripts/atd-entrypoint.sh scripts/atd-dispatch.sh; do
+    # 固定入口と、build 時にシステムへ導入した依存定義を照合する。
+    for task_file in Dockerfile.atd scripts/atd-entrypoint.sh scripts/atd-dispatch.sh \
+        dependencies.apt scripts/install-dependencies.sh; do
         if ! cmp -s -- "${task_runtime_dir}/${task_file}" "${task_image_dir}/${task_file}"; then
             printf 'ATD runtime: イメージ内の起動設定が古いか不足しています: %s\n--build で再構築してください。\n' \
                 "$task_file" >&2
@@ -35,8 +36,8 @@ _atd_prepare_runtime() {
         return 1
     fi
 
-    if ! bash "${task_runtime_dir}/scripts/install-dependencies.sh"; then
-        printf 'ATD runtime: 依存関係の準備に失敗しました。\n' >&2
+    if ! bash "${task_image_dir}/scripts/install-dependencies.sh" --check; then
+        printf 'ATD runtime: イメージの apt 依存を確認できません。\n' >&2
         return 1
     fi
     if ! bash "${task_runtime_dir}/scripts/configure-serial-access.sh"; then

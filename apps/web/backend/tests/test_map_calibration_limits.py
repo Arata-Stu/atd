@@ -3,8 +3,10 @@ import os
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from atd_api.exports import export_map
+from atd_api.main import create_app
 from atd_api.store import Store, atomic_json
 from atd_processing.geometry import generate
 
@@ -49,7 +51,8 @@ def test_generated_geometry_and_speed_profile_use_selected_limits(tmp_path, meth
     if not helper or not Path(helper).is_file():
         pytest.skip('固定版 Raceline helper の Python が必要です')
     monkeypatch.setenv('ATD_RACELINE_PYTHON', helper)
-    store = Store(tmp_path / 'record', tmp_path / 'results')
+    app = create_app(tmp_path / 'record', tmp_path / 'results')
+    store = app.state.store
     doc = store.create_map('circuit')
     def ellipse(a, b):
         return [[a*math.cos(i*math.tau/60), b*math.sin(i*math.tau/60)] for i in range(60)]
@@ -60,7 +63,15 @@ def test_generated_geometry_and_speed_profile_use_selected_limits(tmp_path, meth
     assert center['settings']['accel'] == .9 and 'raceline_calibration' not in center
     doc = store.save_line('circuit', doc['revision'], 'centerline', center)
     request = dict(spacing=.25, optimizer=method, max_speed=5, curvature_limit=.01, accel=5, decel=5)
-    line = generate(doc, 'raceline', request)
+    with TestClient(app) as api:
+        response = api.post('/api/maps/circuit/generate',
+                            json=dict(kind='raceline', revision=doc['revision'], settings=request))
+        assert response.status_code == 200, response.text
+        job_id = response.json()['id']
+        app.state.jobs.children[job_id].wait(timeout=90)
+        assert api.get('/api/jobs/' + job_id).json()['status'] == 'succeeded', api.get('/api/jobs/' + job_id + '/log').text
+        saved = api.get('/api/maps/circuit').json()
+    line = saved['lines']['raceline']
     assert line['method'] == 'tph_' + method
     assert line['raceline_calibration'] == doc['raceline_calibration']
     assert all(line['settings'][k] == v for k, v in limits.items())
@@ -70,7 +81,6 @@ def test_generated_geometry_and_speed_profile_use_selected_limits(tmp_path, meth
     acceleration = [row[6] for row in line['profile']]
     assert max(acceleration) == pytest.approx(limits['accel'])
     assert min(acceleration) == pytest.approx(-limits['decel'])
-    saved = store.save_line('circuit', doc['revision'], 'raceline', line)
     assert export_map(store, 'circuit')['revision'] == saved['revision']
     atomic_json(store.folder('circuit') / 'lines/raceline.json', dict(points=[], speeds=[]))
     with pytest.raises(ValueError, match='再生成'):

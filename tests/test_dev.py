@@ -784,6 +784,10 @@ class DevScriptTests(unittest.TestCase):
     def test_mounted_commands_startup_settings_and_build_inputs_invalidate_only_their_consumers(self):
         fixture = self.detector_fixture("revision-fixture", [])
         script = self.auto_project("revision-project", fixture)
+        project = script.parent.parent
+        vgl_source = project / "tools/vgl/cli.py"
+        vgl_source.parent.mkdir(parents=True)
+        vgl_source.write_text("# VGL command\n")
 
         def activate():
             self.reset_calls()
@@ -794,19 +798,24 @@ class DevScriptTests(unittest.TestCase):
 
         current = activate()
         for relative, runtime_changed, image_changed in (
-            ("scripts/atd-web.sh", False, False),
-            ("scripts/atd-shell.sh", False, False),
-            ("scripts/configure-serial-access.sh", True, False),
-            ("scripts/10-atd-runtime.sh", True, False),
-            ("python/ros/uv.lock", True, False),
-            ("dependencies.apt", True, True),
-            ("scripts/install-dependencies.sh", True, True),
-            ("scripts/atd-dispatch.sh", True, True),
+            ("docker/scripts/atd-web.sh", False, False),
+            ("docker/scripts/atd-shell.sh", False, False),
+            ("tools/vgl/cli.py", False, False),
+            ("docker/python/web/uv.lock", False, False),
+            ("docker/scripts/configure-dds.sh", True, False),
+            ("docker/middleware_profiles/fastdds.xml", True, False),
+            ("docker/scripts/configure-serial-access.sh", True, False),
+            ("docker/scripts/10-atd-runtime.sh", True, False),
+            ("docker/python/ros/uv.lock", True, False),
+            ("docker/dependencies.apt", True, True),
+            ("docker/scripts/install-dependencies.sh", True, True),
+            ("docker/scripts/atd-dispatch.sh", True, True),
         ):
             with self.subTest(file=relative):
-                path = script.parent.parent / "docker" / relative
+                path = project / relative
                 with path.open("a") as stream:
-                    stream.write("\n# changed in checkout\n")
+                    comment = "<!-- changed in checkout -->" if path.suffix == ".xml" else "# changed in checkout"
+                    stream.write(f"\n{comment}\n")
                 previous = current
                 current = activate()
                 self.assertEqual(current["runtime"] != previous["runtime"], runtime_changed)

@@ -91,9 +91,9 @@
 - 起動時に PC / Jetson を自動判定し、記録先と解析結果の保存先をホストごとに選択する。必要な場合だけ `--host pc|jetson` で上書きできるようにする。
 - 記録先と解析結果は毎回読書き可能で mount する。記録・解析による起動時の切替は不要とする。ホスト上の実際の保存先は環境ごとに設定する。
 - データ整理のため記録先と解析結果の保存先を別々にすることを推奨するが、ディレクトリの同一・親子関係を起動条件として制限しない。
-- 共通依存と DDS 設定は、Docker 起動時に root の `.sh` から自動適用する。
-- 依存一覧 `docker/dependencies.apt` を基準に不足パッケージだけを apt で導入し、揃っている場合は apt 操作を行わない。毎回の apt upgrade は行わない。
-- Docker build 時にも同じ依存導入スクリプトを実行し、既知の依存をキャッシュする。D455 SDK / driver は既存の `realsense455` build 層で準備する。
+- OS・配布済み ROS パッケージ、SDK、共通ツールなどコンテナのシステムに入る依存の変更には Docker build を必須とする。共通 apt パッケージは `docker/dependencies.apt` に記載し、D455 SDK / driver は `realsense455` 層で準備する。
+- 起動時は root の hook で apt 依存の導入状態を検査する。不足時は起動を止めて再ビルドを案内する。DDS 設定、USB serial の初期化、ROS 用 uv 環境の同期は新規コンテナの起動時に適用する。
+- 日常コマンドはホストと共有した checkout から実行する。コマンドの編集や、マウント済み workspace 内で行う用途別 venv の同期・Web 依存の導入・自作 ROS package の colcon build によって Docker イメージを再ビルドする必要はない。
 - 稼働中コンテナへの再接続では依存や DDS を更新せず、起動時構成との整合を確認する。構成が変わった場合や旧コンテナは、処理終了後に再作成する。
 - 対話シェルは ATD の `atd-shell` を使用し、ホストの旧 DDS 設定を含む `.bashrc` に依存しない。
 
@@ -357,6 +357,8 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 | `../config/storage.env.example` | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
 
 ## 7. 更新履歴
+
+- 2026-11-19 にシステム依存の導入を Docker build に集約した。起動時は apt 依存を検査し、日常コマンドはマウントした checkout から実行する。
 
 - 2026-11-18: `atd_recording` と `bringup.sh` に Joy・プロポによる MCAP 記録と Notebook からの状態観測を追加した。車両校正用の `calibration` profile は両 IR・CameraInfo、静的 TF、分離 IMU、Pico テレメトリを必須とする。Notebook の `atd_vehicle_calibration` は同じ走行の VO 軌跡から基準速度と加速度を求め、プロポ手動区間の入力応答を出力する。対象環境での ROS 結合・実走行データによる同定は別途確認する。
 

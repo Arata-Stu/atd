@@ -6,33 +6,26 @@ atd_runtime_revision() { _atd_revision "$1" runtime; }
 _atd_revision() {
     python3 - "$1" "$2" <<'PY'
 import hashlib
-import os
 from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
 paths = [
     'docker/Dockerfile.atd', 'docker/dependencies.apt',
-    'docker/scripts/install-dependencies.sh', 'docker/scripts/configure-dds.sh',
-    'docker/middleware_profiles/fastdds.xml',
+    'docker/scripts/install-dependencies.sh',
     'docker/scripts/atd-entrypoint.sh', 'docker/scripts/atd-dispatch.sh',
 ]
-directories_to_hash = []
 if sys.argv[2] == 'runtime':
-    # atd-python と共通ライブラリは root hook が gosu admin で実行する ROS 環境同期にも使う。
+    # 起動時に適用する設定。手動で呼ぶコマンドや用途別 venv は checkout の次回実行で更新する。
     paths.extend([
         'docker/Dockerfile.realsense455', 'docker/dev.dockerargs',
         'docker/scripts/10-atd-runtime.sh', 'docker/scripts/configure-serial-access.sh',
+        'docker/scripts/configure-dds.sh', 'docker/middleware_profiles/fastdds.xml',
         'docker/scripts/atd-python.sh', 'docker/scripts/lib/python-environment.sh',
+        'docker/python/ros/pyproject.toml', 'docker/python/ros/uv.lock',
+        'docker/isaac_ros/build_image_layers.yaml', 'docker/isaac_ros/common-config.sh',
+        'docker/isaac_ros/config.yaml',
     ])
-    directories_to_hash = ['docker/python', 'docker/isaac_ros', 'tools/vgl']
-for directory in directories_to_hash:
-    for current, directories, files in os.walk(root / directory):
-        directories[:] = sorted(name for name in directories
-                                if name not in ('.venv', '.atd-python', '__pycache__'))
-        paths.extend(str((Path(current) / name).relative_to(root))
-                     for name in sorted(files) if not name.endswith('.pyc')
-                     and (directory != 'tools/vgl' or name.endswith('.py')))
 digest = hashlib.sha256()
 for relative in paths:
     try:

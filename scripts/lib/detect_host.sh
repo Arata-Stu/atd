@@ -28,3 +28,8 @@ detect_atd_host() {
     fi
     printf 'pc\n'
 }
+
+atd_in_container() {
+    [[ "${ATD_RUNTIME_API:-}" = 1 || -e /.dockerenv || -e /run/.containerenv ]] ||
+        { command -v systemd-detect-virt >/dev/null && systemd-detect-virt --quiet --container; }
+}

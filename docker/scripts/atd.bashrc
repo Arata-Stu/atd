@@ -18,6 +18,13 @@ if [[ -r "${ISAAC_ROS_WS:-/workspaces/isaac_ros-dev}/install/setup.bash" ]]; the
     source "${ISAAC_ROS_WS:-/workspaces/isaac_ros-dev}/install/setup.bash"
 fi
 
+# ATD shell では、OS の同名コマンドよりマウント中のランチャーを優先する。
+atd_project_scripts="${ATD_PROJECT_DIR:-/workspaces/atd}/scripts"
+if [[ -x "$atd_project_scripts/atd" && ${PATH%%:*} != "$atd_project_scripts" ]]; then
+    export PATH="$atd_project_scripts:$PATH"
+fi
+unset atd_project_scripts
+
 # ROS / overlay の読込み後にも、このコンテナの通信設定を適用する。
 if [[ ! -r "${ATD_DDS_CONFIG_DIR:-/etc/atd}/dds.env.sh" ]]; then
     printf 'ATD shell: DDS 環境ファイルがありません。\n' >&2

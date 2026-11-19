@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# ホストとコンテナで共有する日常操作の入口。
+set -euo pipefail
+
+launcher="${BASH_SOURCE[0]}"
+while [[ -L "$launcher" ]]; do
+    target="$(readlink "$launcher")"
+    if [[ "$target" = /* ]]; then launcher="$target"; else launcher="$(dirname -- "$launcher")/$target"; fi
+done
+scripts_dir="$(CDPATH= cd -- "$(dirname -- "$launcher")" && pwd -P)"
+source "$scripts_dir/lib/detect_host.sh"
+
+host="$(detect_atd_host)"
+if atd_in_container; then location=Docker; else location=ホスト; fi
+if [[ "$host" = jetson ]]; then device=Jetson; else device=Notebook; fi
+
+commands=()
+paths=()
+labels=()
+add_command() {
+    commands+=("$1")
+    paths+=("$2")
+    labels+=("$3")
+}
+
+if [[ "$location" = ホスト ]]; then
+    add_command dev dev.sh '開発コンテナに入る'
+fi
+add_command build build.sh 'ROS パッケージをビルド'
+if [[ "$host" = jetson ]]; then
+    add_command bringup bringup.sh '車両の起動構成を選ぶ'
+    if [[ "$location" = ホスト ]]; then
+        add_command bluetooth bluetooth.sh 'DualSense の接続・状態確認'
+        add_command hotspot hotspot.sh 'Wi-Fi アクセスポイントの起動・帯域切替・停止'
+        add_command display jetson_display_mode.sh 'GUI / CUI 起動モードを設定'
+        add_command performance jetson_max_performance.sh '最大クロック・ファンの確認と適用'
+    fi
+elif [[ "$location" = ホスト || "$(uname -m)" = x86_64 ]]; then
+    add_command web webui.sh 'Notebook の Web UI を起動・準備'
+fi
+add_command python tools/python.sh 'Python 環境を選ぶ'
+if [[ "$location" = ホスト ]]; then
+    add_command vgl vgl.sh 'VGL モデルを準備・転送'
+    add_command setup setup.sh 'ホストのセットアップ'
+    add_command docker tools/docker.sh 'Docker 環境を診断'
+    add_command cache tools/clean-docker-cache.sh 'Docker キャッシュの確認・整理'
+fi
+
+usage() {
+    cat <<'EOF'
+使い方: atd                       日常操作のメニューを開く
+        atd --list                この環境で使えるコマンドを表示
+        atd COMMAND [引数...]     選択したスクリプトを直接実行
+
+例: atd build --packages-up-to atd_bringup
+    atd bluetooth status
+    atd hotspot on --band 5
+    atd web prepare
+各コマンドの使い方は atd COMMAND --help で確認できます。
+EOF
+}
+
+# key、表示名の組を受け取り、選択した key だけを標準出力に返す。
+choose() {
+    local title="$1" line entry reply index
+    local -a entries=()
+    shift
+    while (($#)); do
+        entries+=("$1"$'\t'"$2")
+        shift 2
+    done
+    if command -v fzf >/dev/null 2>&1; then
+        line="$(printf '%s\n' "${entries[@]}" | fzf --height=70% --layout=reverse --border \
+            --delimiter=$'\t' --prompt="$title > " --header='入力で検索 / ↑↓ で選択 / Enter で決定 / Esc で戻る')" || return 1
+        for entry in "${entries[@]}"; do
+            if [[ "$line" = "$entry" ]]; then
+                printf '%s\n' "${entry%%$'\t'*}"
+                return
+            fi
+        done
+        printf 'fzf で候補を一つ選んでください。\n' >&2
+        return 1
+    fi
+    printf '\n%s\n' "$title" >&2
+    for index in "${!entries[@]}"; do
+        printf '  %2d) %s\n' "$((index + 1))" "${entries[index]}" >&2
+    done
+    while true; do
+        printf '番号を選択（空 Enter で戻る）> ' >&2
+        IFS= read -r reply || return 1
+        [[ -n "$reply" ]] || return 1
+        for index in "${!entries[@]}"; do
+            if [[ "$reply" = "$((index + 1))" ]]; then
+                printf '%s\n' "${entries[index]%%$'\t'*}"
+                return
+            fi
+        done
+        printf '表示された番号を入力してください。\n' >&2
+    done
+}
+
+run_from_menu() {
+    local key="$1" script="$2" title="$device $location / $1" action manifest package
+    local -a options=()
+    case "$key" in
+        build)
+            options=(all 'ワークスペース全体')
+            for manifest in "$scripts_dir"/../ros2_ws/src/atd_*/package.xml; do
+                [[ -f "$manifest" ]] || continue
+                package="${manifest%/package.xml}"
+                package="${package##*/}"
+                options+=("$package" 'このパッケージと依存先まで')
+            done ;;
+        bluetooth)
+            options=(connect 'DualSense を接続' status '接続状態を表示') ;;
+        hotspot)
+            options=(status '接続状態を表示' on '保存済み設定で起動' 2.4 '2.4 GHz で起動・切替'
+                     5 '5 GHz で起動・切替' off 'アクセスポイントを停止') ;;
+        web)
+            options=(serve 'Web UI を起動' prepare '初回・更新時のオンライン準備' check '準備状態を確認') ;;
+        display)
+            options=(status '現在の設定を表示' cui '次回起動を CUI に設定' gui '次回起動を GUI に設定') ;;
+        performance)
+            options=(check 'クロックとファンを確認' apply '最大クロック・最大ファンを適用') ;;
+        cache)
+            options=(inspect '使用量と削除候補を確認' prune '未使用のビルドキャッシュを整理（確認あり）') ;;
+        *) "$script"; return ;;
+    esac
+    action="$(choose "$title" "${options[@]}" back '前のメニューへ')" || return 0
+    [[ "$action" != back ]] || return 0
+    case "$key/$action" in
+        build/all|performance/apply|cache/prune) "$script" ;;
+        build/*) "$script" --packages-up-to "$action" ;;
+        hotspot/2.4|hotspot/5) "$script" on --band "$action" ;;
+        performance/check) "$script" --check ;;
+        cache/inspect) "$script" --dry-run ;;
+        *) "$script" "$action" ;;
+    esac
+}
+
+if (($#)); then
+    case "$1" in
+        --help|-h) usage; exit 0 ;;
+        --list)
+            for i in "${!commands[@]}"; do printf '%s\t%s\n' "${commands[i]}" "${labels[i]}"; done
+            exit 0 ;;
+    esac
+    for i in "${!commands[@]}"; do
+        if [[ "$1" = "${commands[i]}" ]]; then
+            shift
+            exec "$scripts_dir/${paths[i]}" "$@"
+        fi
+    done
+    printf 'atd: %s %s で選べないコマンドです: %s（atd --list で一覧）\n' "$device" "$location" "$1" >&2
+    exit 2
+fi
+
+if [[ ! -t 0 || ! -t 1 ]]; then usage >&2; exit 2; fi
+menu=()
+for i in "${!commands[@]}"; do menu+=("${commands[i]}" "${labels[i]}"); done
+while selected="$(choose "ATD / $device $location" "${menu[@]}" quit '終了')"; do
+    [[ "$selected" != quit ]] || break
+    for i in "${!commands[@]}"; do
+        if [[ "${commands[i]}" = "$selected" ]]; then
+            run_from_menu "$selected" "$scripts_dir/${paths[i]}" ||
+                printf 'atd: %s は終了コード %d で終了しました。\n' "$selected" "$?" >&2
+            break
+        fi
+    done
+done

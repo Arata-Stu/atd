@@ -34,7 +34,7 @@ atd-web --port 8769                # 通常 UI / API の port を変更
 atd-web --dry-run                 # 起動予定を表示
 ```
 
-Notebook ホストから準備する場合は、コンテナを起動してから `./scripts/setup.sh --action web` または `./scripts/tools/webui.sh prepare` を実行する。ホストからの通常起動は `./scripts/tools/webui.sh` を使う。いずれも同じコンテナ内の `atd-web` に委譲する。
+Notebook ホストから準備する場合は、コンテナを起動してから `./scripts/setup.sh --action web` または `./scripts/webui.sh prepare` を実行する。ホストからの通常起動は `./scripts/webui.sh` を使う。いずれも同じコンテナ内の `atd-web` に委譲する。
 
 コンテナ・センサ・車両・記録はこの入口では自動起動しない。API は loopback 待受。通常利用はビルド済み frontend と API を同じ origin で配信する。
 

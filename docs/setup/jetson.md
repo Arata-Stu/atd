@@ -37,6 +37,37 @@ docker グループへの追加は、実行中の setup や親シェルには即
 runtime の設定変更で Docker の再起動が必要な場合は、既存のコンテナで作業が動いていないことを確認してから反映する。
 保存先は storage の対話入力、または `--record-dir` / `--result-dir` で mount 済み SSD 等の絶対パスを指定する。
 
+<a id="jetson-host-tools"></a>
+
+### Jetson ホストの操作
+
+次のコマンドは Jetson ホストのリポジトリ直下で実行する。
+
+| 操作 | コマンド |
+| --- | --- |
+| 次回起動時の GUI / CUI 設定を表示 | `./scripts/jetson_display_mode.sh status` |
+| 次回起動を CUI にする / GUI に戻す | `./scripts/jetson_display_mode.sh cui` / `./scripts/jetson_display_mode.sh gui` |
+| 電力モード・クロック・ファン PWM を確認 | `./scripts/jetson_max_performance.sh --check` |
+| 最大クロック・ファン PWM を適用して確認 | `./scripts/jetson_max_performance.sh` |
+
+現在の起動モードもすぐに切り替える場合は `cui --now` または `gui --now` を指定する。`cui --now` は現在の GUI セッションを終了するので、作業を保存して SSH またはテキスト端末から実行する。
+
+クロックとファンの設定は `nvpmodel -q` で `MAXN` または `MAXN_SUPER` が選択されている場合に適用できる。別の電力モードが表示された場合は、その Jetson の `/etc/nvpmodel.conf` に記載されたモード名と ID を確認して選択する。確認結果は CPU・GPU・EMC のクロック設定とファンに指示した PWM を表す。[NVIDIA の電力・性能設定](https://docs.nvidia.com/jetson/archives/r39.2/DeveloperGuide/SD/PlatformPowerAndPerformance/JetsonOrinNanoSeriesJetsonOrinNxSeriesAndJetsonAgxOrinSeries.html)
+
+### Notebook 接続用 Hotspot
+
+| 操作 | コマンド |
+| --- | --- |
+| 状態確認 | `./scripts/hotspot.sh status` |
+| 初回作成または保存した設定で起動 | `./scripts/hotspot.sh on` |
+| 2.4 GHz に切替 | `./scripts/hotspot.sh on --band 2.4` |
+| 5 GHz でチャネルを指定 | `./scripts/hotspot.sh on --band 5 --channel 36` |
+| 停止 | `./scripts/hotspot.sh off` |
+
+既定のインターフェースは `wlP1p1s0`。他のアダプターには `--ifname`、保存済み AP の選択には `--profile` で接続名か UUID を渡す。同じ Wi-Fi 上の SSH は切替時に切断されることがある。起動・停止・帯域変更は USB 経由の SSH または Jetson の端末から操作する。
+
+新規 AP の SSID は `ATD-Hotspot`、Jetson の IP は `10.42.0.1`。初回は端末に Wi-Fi パスワードを入力する。Notebook をこの SSID に接続し、Web UI の「データ転送」で Hotspot のプリセットを選ぶ。既存の AP を使う場合はその SSID と `status` に表示される IP を使う。新規作成時は 5 GHz の ch 36 を使い、2.4 GHz を指定したときの既定は ch 6。利用可能な帯域・チャネルはアダプターと設置地域に依存する。[NetworkManager の無線設定](https://networkmanager.dev/docs/api/latest/nm-settings-nmcli.html)
+
 ## 3. D455 と DualSense
 
 ```bash
@@ -54,11 +85,14 @@ IR・RGB・IMU・Depth は利用候補として残す。全ストリームの常
 
 ### DualSense
 
-- Bluetooth daemon とペアリング情報は Jetson ホスト側で管理する。
-- DualSense をペアリングモードにし、ホスト側で Bluetooth 接続する。接続済みの表示と、実際の入力取得は別に確認する。
-- ROS Joy node の入力取得はコンテナ側で行う。`joy` は SDL の入力を使うため、`/dev/input/js0` の存在だけでなく input event デバイスと一般ユーザーのアクセス権も確認する。[公式 joy 資料](https://github.com/ros-drivers/joystick_drivers/blob/ros2/joy/README.md)
+Jetson ホストで、登録対象の DualSense（`4C:B9:9B:E0:EF:24`）に接続する。初回はコントローラーから USB ケーブルを抜き、電源が切れた状態からクリエイトボタンと PS ボタンをライトバーが点滅するまで長押しする。ペアリング済みなら PS ボタンで電源を入れる。[PlayStation のペアリング手順](https://www.playstation.com/ja-jp/support/hardware/pair-dualsense-controller-bluetooth/)
 
-独自 firmware、ESC・サーボへの出力、手動 / 自律の切替・停止仕様は後工程で検討する。この段階では入力デバイスの確認までを扱う。
+```bash
+./scripts/bluetooth.sh         # 初回のペアリング・普段の再接続
+./scripts/bluetooth.sh status  # 接続状態を表示
+```
+
+Bluetooth 接続後、ROS 側の入力は Jetson コンテナ内の `atd_joy` が `/dev/input/event*` から読み取る。入力用 bringup を起動し、Notebook の「コントローラ」画面で実際にボタンや軸を動かして確認する。[入力ノードの起動と設定](../../ros2_ws/src/atd_joy/README.md)
 
 ## 4. ROS workspace・初回 build・通常起動
 

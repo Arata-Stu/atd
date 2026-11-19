@@ -23,6 +23,7 @@ class EntryTests(unittest.TestCase):
         (self.scripts / 'tools').mkdir()
         shutil.copyfile(PROJECT / 'scripts/bringup.sh', self.scripts / 'bringup.sh')
         shutil.copyfile(PROJECT / 'scripts/lib/bringup.sh', self.scripts / 'lib/bringup.sh')
+        shutil.copy2(PROJECT / 'scripts/webui.sh', self.scripts / 'webui.sh')
         shutil.copyfile(PROJECT / 'scripts/tools/webui.sh', self.scripts / 'tools/webui.sh')
         (self.scripts / 'lib/detect_host.sh').write_text('detect_atd_host() { printf "%s\\n" "${ATD_TEST_HOST:-pc}"; }\n')
         (self.scripts / 'lib/container.sh').write_text('atd_container_exec() { shift; printf "%s\\0" "$@" > "$ATD_TEST_ARGS"; }\n')
@@ -243,13 +244,15 @@ class EntryTests(unittest.TestCase):
                 self.assertIn(expected, self.args())
 
     def test_web_is_pc_only_and_delegates_without_python_sync(self):
-        result = self.invoke('tools/webui.sh', ATD_TEST_HOST='jetson')
+        result = self.invoke('webui.sh', ATD_TEST_HOST='jetson')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.output.exists())
-        result = self.invoke('tools/webui.sh', 'serve', '--dry-run', '--port', '8877')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.args(), ['pc', 'true', '/usr/local/bin/atd-web', 'serve', '--port', '8877'])
-        result = self.invoke('tools/webui.sh', 'prepare')
+        for entry in ('webui.sh', 'tools/webui.sh'):
+            with self.subTest(entry=entry):
+                result = self.invoke(entry, 'serve', '--dry-run', '--port', '8877')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.args(), ['pc', 'true', '/usr/local/bin/atd-web', 'serve', '--port', '8877'])
+        result = self.invoke('webui.sh', 'prepare')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.args(), ['pc', 'false', '/usr/local/bin/atd-web', 'prepare'])
 

@@ -8,7 +8,19 @@ RealSense D455 を初期センサとし、Jetson Orin Nano 8GB を搭載した R
 
 ## 操作の入口
 
-プロジェクト直下から通常ユーザーで実行する。日常の入口は次の5本にまとめる。
+日常の操作は `atd` で選ぶ。既にセットアップ済みの Notebook・Jetson では、各ホストのプロジェクト直下で一度だけ登録する。
+
+```bash
+./scripts/setup.sh --action launcher
+export PATH="$HOME/.local/bin:$PATH"
+atd
+```
+
+メニューではコマンド名を入力して絞り込み、Enter で選択する。fzf がない場合は番号で選べる。Jetson ホストでは `bluetooth` から DualSense の接続、`hotspot` から起動・帯域切替・停止を選べる。`build` ではワークスペース全体または対象パッケージとその依存先を選ぶ。Notebook の Web UI は `web` から開く。
+
+ホストから `build` や `web` を使うには、先に `dev` で開発コンテナを起動する。コンテナ内でも再入室すると `atd` が使える。今いる環境の一覧は `atd --list` で確認でき、`atd build --packages-up-to atd_bringup` のように直接実行もできる。登録前はプロジェクト直下の `./scripts/atd` で開ける。
+
+個別のスクリプトを直接使う場合は、次の入口がある。
 
 | 入口 | 用途 |
 | --- | --- |
@@ -16,7 +28,12 @@ RealSense D455 を初期センサとし、Jetson Orin Nano 8GB を搭載した R
 | `scripts/dev.sh` | Docker image の build、コンテナの起動・再接続 |
 | `scripts/build.sh` | 起動済みコンテナで ROS package を build |
 | `scripts/vgl.sh` | VGL export・SCP 転送・Jetson engine build |
+| `scripts/bluetooth.sh` | Jetson ホストで DualSense に接続 |
+| `scripts/hotspot.sh` | Jetson の Wi-Fi アクセスポイントを起動・停止し、帯域を選ぶ |
+| `scripts/jetson_display_mode.sh` | Jetson の CUI / GUI 起動を切り替える |
+| `scripts/jetson_max_performance.sh` | Jetson の MAXN 系モードで最大クロック・ファンを適用、確認する |
 | `scripts/bringup.sh` | Jetson の実装済み起動 profile を選択・実行 |
+| `scripts/webui.sh` | Notebook の Web UI を起動 |
 
 ```bash
 ./scripts/setup.sh
@@ -32,7 +49,7 @@ RealSense D455 を初期センサとし、Jetson Orin Nano 8GB を搭載した R
 
 `bringup.sh` は引数なしの対話端末では profile を fzf で選択し、未導入時は番号選択を使う。D455を含む `manual` / `d455` では、各ストリームのOFF・解像度・Hzを実機の対応モードから選択する。初期値はInfra1/2 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。`--list` は一覧、`--dry-run manual` は Notebook からも実行予定だけを確認できる。実際の起動は Jetson の既存 Docker 内で行い、車両出力や bag 記録は自動開始しない。`manual` / `input` は記録managerを待機させ、割り当てたJoy・プロポ操作で開始・停止する。[bringup の操作と拡張方針](docs/bringup.md)を参照する。
 
-診断・Python 環境管理・Web のホスト側補助入口は `scripts/tools/{docker,python,webui}.sh` に置く。Web UI は初回とフロントエンド・依存の更新後に、オンラインの Notebook Docker 内で `atd-web prepare` を実行する。その後は `atd-web` でオフラインでも起動できる。Notebook ホストの Chrome で [Web UI](http://127.0.0.1:8766) を開く。起動済みコンテナを使ってホストから準備するには `./scripts/setup.sh --action web`、通常起動には `./scripts/tools/webui.sh` を使う。
+診断・Python 環境管理の入口は `scripts/tools/{docker,python}.sh` に置く。Web UI は初回とフロントエンド・依存の更新後に、オンラインの Notebook Docker 内で `atd-web prepare` を実行する。その後は `atd-web` でオフラインでも起動できる。Notebook ホストの Chrome で [Web UI](http://127.0.0.1:8766) を開く。起動済みコンテナを使って Notebook ホストから準備するには `./scripts/webui.sh prepare`、通常起動には `./scripts/webui.sh` を使う。
 
 setup・dev・build・vgl の PC / Jetson 判定は機種・BSP 情報を使い、必要な場合だけ `--host notebook`（`pc` と同義）/ `--host jetson` で上書きする。bringup の対象ホストは profile ごとに決める。実行予定の確認には `--dry-run` を使う。
 ホストのセットアップを最初から確認する場合は、[共通手順](docs/setup/README.md)、[Notebook](docs/setup/pc.md)、[Jetson](docs/setup/jetson.md)を参照する。

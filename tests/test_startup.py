@@ -228,6 +228,28 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "rmw_fastrtps_cpp|argument with spaces\n")
 
+    def test_atd_shell_uses_checkout_menu_before_system_atd(self):
+        self.assertEqual(self.run_hook().returncode, 0)
+        checkout = self.root / "mounted checkout"
+        scripts = checkout / "scripts"
+        scripts.mkdir(parents=True)
+        menu = scripts / "atd"
+        menu.write_text('#!/bin/sh\nprintf "checkout=%s|%s\\n" "$1" "$2"\n')
+        menu.chmod(0o755)
+        system_atd = self.bin / "atd"
+        system_atd.write_text('#!/bin/sh\nexit 19\n')
+        system_atd.chmod(0o755)
+        for args, stdin in ((["atd", "build", "arg with spaces"], ""),
+                            ([], 'atd build "arg with spaces"\nexit\n')):
+            with self.subTest(args=args):
+                result = subprocess.run(
+                    [str(self.bin / "atd-shell"), *args], cwd=self.root,
+                    env={**self.env, "ATD_PROJECT_DIR": str(checkout)},
+                    input=stdin, capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("checkout=build|arg with spaces", result.stdout.splitlines())
+
     def test_interactive_shell_opens_checkout_from_default_workspace(self):
         self.assertEqual(self.run_hook().returncode, 0)
         workspace = self.root.resolve() / "ros workspace"

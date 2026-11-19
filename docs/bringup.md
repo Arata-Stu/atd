@@ -25,7 +25,7 @@
 
 ## DualSense で手動走行する
 
-1. Jetson に Rev6 Pico を USB 接続し、DualSense を Jetson ホストに Bluetooth 接続する。初回は駆動輪を浮かせ、プロポの CH3 をプロポ側、スロットルを中立にする。
+1. Jetson に Rev6 Pico を USB 接続し、Jetson ホストで `./scripts/bluetooth.sh` を実行して DualSense に接続する。初回は駆動輪を浮かせ、プロポの CH3 をプロポ側、スロットルを中立にする。[DualSense のペアリング手順](setup/jetson.md#dualsense)
 2. Jetson ホストで上記の build 後、`./scripts/bringup.sh joy-drive` を実行する。初回の軸設定には Notebook の「コントローラ」で物理配置と「操作の役割」を保存し、全入力を離して「操作要求を再開」を使う。たとえば操舵は左スティック、スロットルは R2 から L2 を引く割り当てにできる。
 3. CH3 を Jetson 側に切り替え、Joy の操舵とスロットルを一度中立にする。運転許可ボタンを割り当てた場合は、中立のままボタンを押し、運転中は保持する。Jetson の端末で HOST の有効化を確認してから小さく操作し、左右と前進側の向きを確かめる。
 4. CH3 をプロポ側に戻すと、Pico が受信機の CH1・CH2 でサーボと ESC を直接駆動する。再び Jetson を選択したときや USB・Joy の再接続後は、新しい中立入力から再開する。制動から後退への中立操作は運転者が行う。

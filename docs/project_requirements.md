@@ -130,7 +130,8 @@ bag の記録対象や各 bag の topic / frame は実データに合わせて�
 ### 2.7. シェルスクリプト・TUI・ブラウザ UI の操作方針
 
 - ノート PC と Jetson の日常操作では、シェルスクリプト（`.sh`）や UI を基本とし、ターミナルコマンドを繰り返し手入力する負担を減らす。
-- よく使う日常入口を `scripts/` 直下に置き、現在は `setup.sh`・`dev.sh`・`build.sh`・`vgl.sh`・`bringup.sh` の5本にまとめる。診断・Python 環境管理・Web のホスト側補助入口は `scripts/tools/`、ホスト判定等の共通関数は `scripts/lib/` に置く。
+- 共通コマンド `atd` で日常操作の選択メニューを開く。Notebook・Jetson とホスト・Docker に応じて選択肢を表示し、`atd build` などの直接指定も既存のスクリプトに渡す。
+- よく使う日常入口を `scripts/` 直下に置き、現在は `setup.sh`・`dev.sh`・`build.sh`・`vgl.sh`・`bluetooth.sh`・`hotspot.sh`・`jetson_display_mode.sh`・`jetson_max_performance.sh`・`bringup.sh`・`webui.sh` を置く。診断・Python 環境管理の補助入口は `scripts/tools/`、ホスト判定等の共通関数は `scripts/lib/` に置く。
 - ユーザーは CUI であっても対話形式や TUI を好む。ユーザー向けの CLI・補助スクリプトでは、この操作方針を優先する。
 - `fzf` を用いた TUI を積極的に活用し、候補を検索・選択して対話的に実行できるようにする。
 - 対象となる操作の例は、実行する処理、bag、地図、設定の選択である。具体的な画面や操作は各機能の実装時に設計する。
@@ -271,7 +272,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - Centerline の region と、独立した `raceline` 環境による mincurv / mincurv_iqp を実装した。旧 paired / local への fallback は設けない。単体テスト、小規模閉路で実 QP / IQP solver を使うテスト、frontend の型検査・build はローカルで確認した。
 - Jetson 側に C++ component の `atd_joy` と、観測・設定用の `atd_web_bridge` を追加した。Notebook API は SSH から Jetson loopback HTTP へアクセスし、車載 DDS に直接参加しない。
 - `atd_interfaces` に正規化運転要求と操作イベント、`atd_teleop` に設定可能な役割割り当てを追加した。Notebook の入力画面に物理配置と役割設定を統合し、保存済みと反映済みを区別する。観測用の操作要求を保持し、Jetson 内の手動走行用 topic に有効な軸と任意の enable ボタンの状態を反映する。記録実行は `atd_recording` が担当し、操作イベントと記録結果を分ける。仕様と検証境界は [atd_teleop](../ros2_ws/src/atd_teleop/README.md)を参照する。
-- Web UI は Notebook の Docker 内で `atd-web` を実行して起動し、ブラウザだけを Notebook ホストで開く。ホスト用の `scripts/tools/webui.sh` は `docker exec` による補助入口とする。Jetson の入力起動は `scripts/bringup.sh input`、手順・初期 schema・生成方式・制約は [Web アプリ](../apps/web/README.md)と package の README に記録する。
+- Web UI は Notebook の Docker 内で `atd-web` を実行して起動し、ブラウザだけを Notebook ホストで開く。Notebook ホストからは `scripts/webui.sh` で起動済みコンテナへ委譲する。Jetson の入力起動は `scripts/bringup.sh input`、手順・初期 schema・生成方式・制約は [Web アプリ](../apps/web/README.md)と package の README に記録する。
 - Docker build、ROS build / install、実 bag / GPU での公式処理、実 SCP、Bluetooth / evdev、実走行は対象機で別に確認する。ローカルのコード検証だけでこれらを検証済みとはしない。
 
 ### 3.10. Rev6 Pico firmware の確認（2026-11-18）

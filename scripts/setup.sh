@@ -7,10 +7,11 @@ usage() {
 使い方: scripts/setup.sh [--host notebook|pc|jetson] [--action ACTION] [--dry-run]
 
 引数なし: fzf の対話メニュー（未導入時は番号選択）
-ACTION: menu, check, tools, docker, runtime, isaac, storage, workspace, devices,
+ACTION: menu, check, tools, launcher, docker, runtime, isaac, storage, workspace, devices,
         verify, build, start, web, all
   check       ホスト・GPU・Docker 等の状態を表示
-  tools       ホストの基本ツール・fzf を準備
+  tools       ホストの基本ツール・fzf を準備し、atd コマンドを登録
+  launcher    この checkout の atd コマンドを ~/.local/bin/atd に登録
   docker      Docker を準備（既存導入は維持）
   runtime     NVIDIA Container Toolkit / Docker runtime を準備
   isaac       apt 版 Isaac ROS CLI を準備・Docker モードを確認
@@ -65,7 +66,7 @@ while (($#)); do
 done
 if [[ "$task_host" = notebook ]]; then task_host=pc; fi
 case "$task_host" in ""|pc|jetson) ;; *) fail '--host は notebook、pc または jetson を指定してください'; exit 1 ;; esac
-case "$task_action" in menu|check|tools|docker|runtime|isaac|storage|workspace|devices|verify|build|start|web|all) ;;
+case "$task_action" in menu|check|tools|launcher|docker|runtime|isaac|storage|workspace|devices|verify|build|start|web|all) ;;
     *) fail "不明な action: $task_action"; exit 1 ;;
 esac
 
@@ -92,6 +93,32 @@ run_command() {
     printf '\n'
     if $task_dry_run; then return 0; fi
     "$@"
+}
+
+install_launcher() {
+    local task_source="${task_project_dir}/scripts/atd" task_bin_dir="${HOME}/.local/bin"
+    local task_link="${task_bin_dir}/atd" task_resolved
+    if $task_dry_run; then
+        printf 'atd コマンドを登録予定: %s -> %s\n' "$task_link" "$task_source"
+        return 0
+    fi
+    [[ -f "$task_source" && -x "$task_source" ]] || { fail "実行可能なファイルが見つかりません: $task_source"; return 1; }
+    if [[ -e "$task_link" || -L "$task_link" ]]; then
+        [[ -L "$task_link" && "$task_link" -ef "$task_source" ]] || {
+            fail "$task_link は使用中です。この checkout のメニューは $task_source で開けます"
+            return 1
+        }
+    else
+        mkdir -p -- "$task_bin_dir" || return $?
+        ln -s -- "$task_source" "$task_bin_dir/" || return $?
+    fi
+    printf 'atd コマンド: %s -> %s\n' "$task_link" "$task_source"
+    task_resolved="$(command -v atd || true)"
+    if [[ ! "$task_resolved" -ef "$task_source" ]]; then
+        if [[ -n "$task_resolved" ]]; then printf '現在 PATH で選ばれる atd: %s\n' "$task_resolved"; fi
+        printf '%s\n' 'ホストで atd を呼び出すには、シェルで以下を実行してください。' \
+            '  export PATH="$HOME/.local/bin:$PATH"'
+    fi
 }
 
 validate_storage_path() {
@@ -269,7 +296,12 @@ run_action() {
             run_command bash "${task_project_dir}/scripts/setup/host.sh" --host "$task_host" --action check || return $?
             show_workspace
             ;;
-        tools|docker|runtime|isaac|devices)
+        tools)
+            run_command bash "${task_project_dir}/scripts/setup/host.sh" --host "$task_host" --action tools || return $?
+            install_launcher
+            ;;
+        launcher) install_launcher ;;
+        docker|runtime|isaac|devices)
             run_command bash "${task_project_dir}/scripts/setup/host.sh" --host "$task_host" --action "$task_selected"
             ;;
         storage) configure_storage ;;
@@ -277,7 +309,7 @@ run_action() {
         verify) verify_environment ;;
         web)
             [[ "$task_host" = pc ]] || { fail 'Web UI の事前準備は Notebook 専用です'; return 1; }
-            run_command bash "${task_project_dir}/scripts/tools/webui.sh" prepare
+            run_command bash "${task_project_dir}/scripts/webui.sh" prepare
             ;;
         build|start)
             task_dev_command=(bash "${task_project_dir}/scripts/dev.sh")
@@ -302,7 +334,7 @@ choose_action() {
     if [[ "$task_host" = pc ]]; then
         task_choices+=$'\nweb\tWeb UI のオフライン利用を準備'
     fi
-    task_choices+=$'\nquit\t終了'
+    task_choices+=$'\nlauncher\tatd コマンドをホームに登録\nquit\t終了'
     if command -v fzf >/dev/null 2>&1; then
         task_choice="$(printf '%s\n' "$task_choices" | fzf --delimiter=$'\t' --with-nth=2 \
             --height=75% --border --prompt='ATD setup > ' --header="${task_host}: 実行する操作を選択")" || return 1

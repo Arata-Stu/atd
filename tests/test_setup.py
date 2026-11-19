@@ -117,7 +117,7 @@ class SetupScriptTests(unittest.TestCase):
         (self.bin / "id").write_text('#!/bin/sh\n[ "$1" = -u ] || exit 1\nprintf "1000\\n"\n')
         (self.bin / "id").chmod(0o755)
         for relative, tool in (("scripts/setup/host.sh", "host"), ("scripts/dev.sh", "dev"),
-                               ("scripts/tools/webui.sh", "webui")):
+                               ("scripts/webui.sh", "webui"), ("scripts/atd", "launcher")):
             executable = self.project / relative
             executable.parent.mkdir(exist_ok=True)
             executable.write_text(
@@ -188,6 +188,7 @@ class SetupScriptTests(unittest.TestCase):
         self.assertFalse(self.config.exists())
         self.assertFalse(record.exists())
         self.assertFalse(results.exists())
+        self.assertFalse((self.home / ".local").exists())
         self.assertFalse((self.project / ".cache").exists())
         self.assertFalse((self.workspace / '.isaac-ros-cli').exists())
         self.assertFalse(self.workspace_config.exists())
@@ -218,6 +219,48 @@ class SetupScriptTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 call, = self.calls("host")
                 self.assertEqual(call["args"], ["--host", expected, "--action", "tools"])
+                self.assertTrue((self.home / ".local/bin/atd").samefile(self.project / "scripts/atd"))
+
+    def test_launcher_registers_once_and_prefers_the_user_command_on_path(self):
+        launcher = self.home / ".local/bin/atd"
+        other = self.bin / "atd"
+        other.write_text("#!/bin/sh\nexit 99\n")
+        other.chmod(0o755)
+        result = self.invoke("--action", "launcher")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(other), result.stdout)
+        self.assertIn('export PATH="$HOME/.local/bin:$PATH"', result.stdout)
+        self.assertTrue(launcher.is_symlink())
+        self.assertEqual(launcher.resolve(), self.project / "scripts/atd")
+        inode = launcher.lstat().st_ino
+
+        path = os.pathsep.join((str(launcher.parent), self.env["PATH"]))
+        repeat = self.invoke("--action", "launcher", env={"PATH": path})
+        self.assertEqual(repeat.returncode, 0, repeat.stderr)
+        self.assertEqual(launcher.lstat().st_ino, inode)
+        self.assertNotIn("export PATH=", repeat.stdout)
+        self.assertEqual(other.read_text(), "#!/bin/sh\nexit 99\n")
+        self.assertEqual(self.calls(), [])
+        command = subprocess.run(["atd", "build"], cwd=self.home, env={**self.env, "PATH": path},
+                                 capture_output=True, text=True, timeout=5)
+        self.assertEqual(command.returncode, 0, command.stderr)
+        self.assertEqual(self.calls("launcher")[0]["args"], ["build"])
+
+    def test_launcher_preserves_other_executables_and_broken_symlinks(self):
+        launcher = self.home / ".local/bin/atd"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\nexit 0\n")
+        launcher.chmod(0o755)
+        result = self.invoke("--action", "launcher")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(launcher), result.stderr)
+        self.assertEqual(launcher.read_text(), "#!/bin/sh\nexit 0\n")
+        launcher.unlink()
+        missing_target = self.root / "previous-checkout/scripts/atd"
+        launcher.symlink_to(missing_target)
+        result = self.invoke("--action", "launcher")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(launcher.readlink(), missing_target)
 
     def test_notebook_alias_normalizes_to_pc(self):
         result = self.invoke("--host", "notebook", "--action", "tools",

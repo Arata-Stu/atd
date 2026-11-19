@@ -371,7 +371,7 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     else:
         @app.get('/')
         def build_required():
-            return JSONResponse(status_code=503, content={'detail': 'frontend が未buildです。scripts/tools/webui.sh を使って準備してください'})
+            return JSONResponse(status_code=503, content={'detail': 'Web UI のビルドが必要です。./scripts/webui.sh prepare を実行してください'})
     return app
 
 

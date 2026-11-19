@@ -31,13 +31,19 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 │       ├── atd_vehicle_interface/
 │       │   └── firmware/pico_rev6/ # Pico用ソース・テスト。SDK・生成物はGit管理外
 │       └── README.md          # package の配置ガイド
-├── scripts/                   # 日常入口は次の5本
+├── scripts/                   # 日常操作の入口
+│   ├── atd                    # ホスト・Docker 共通の日常操作メニュー
 │   ├── setup.sh               # ホスト準備・workspace・保存先
 │   ├── dev.sh                 # Dockerのbuild・起動・再接続
 │   ├── build.sh               # ROS packageのbuild
 │   ├── vgl.sh                 # VGLモデルの準備・転送
+│   ├── bluetooth.sh           # JetsonホストとDualSenseの接続
+│   ├── hotspot.sh             # JetsonのWi-Fiアクセスポイント
+│   ├── jetson_display_mode.sh # JetsonのCUI / GUI切替
+│   ├── jetson_max_performance.sh # Jetsonのクロック・ファン設定
 │   ├── bringup.sh             # 実装済みROS起動profileの選択・実行
-│   ├── tools/                 # docker.sh・python.sh・webui.shの補助入口
+│   ├── webui.sh               # NotebookのWeb UI起動
+│   ├── tools/                 # 診断・Python環境管理などの補助入口
 │   ├── lib/                   # 共通関数・detect_host.sh・bringup.shのprofile一覧
 │   └── setup/                 # ホスト準備の内部処理
 ├── tools/
@@ -107,10 +113,12 @@ package 固有の parameter、較正設定、launch はその package に置く�
 | 用途別 Python 環境の管理・実行 | `scripts/tools/python.sh` → コンテナ内の `atd-python`。sync / check / shell / run |
 | ROS package の build | `scripts/build.sh` → コンテナ内の `atd-build` |
 | VGL モデルの export・転送・build | `scripts/vgl.sh` |
-| Notebook 共通 Web UI | Docker 内の `atd-web`。ホストからの補助入口は `scripts/tools/webui.sh` |
+| DualSense の Bluetooth 接続 | Jetson ホストの `scripts/bluetooth.sh` |
+| Jetson の Hotspot・起動モード・クロックとファン | `scripts/hotspot.sh`、`scripts/jetson_display_mode.sh`、`scripts/jetson_max_performance.sh`。[Jetson ホストの操作手順](setup/jetson.md#jetson-host-tools) |
+| Notebook 共通 Web UI | Notebook ホストの `scripts/webui.sh`。Docker 内では `atd-web` |
 | Jetson の ROS 起動 | `scripts/bringup.sh`。`manual` / `d455` / `input` / `bridge` の実在 profile を選択 |
 
-日常操作の入口を `scripts/` 直下に置き、現在は setup・dev・build・vgl・bringup の5本にまとめる。診断・環境管理等の補助入口は `scripts/tools/` に置く。コンテナ内の処理は `docker/scripts/`、ホスト準備の内部処理は `scripts/setup/`、ホスト側の共通関数は `scripts/lib/` に置く。ホスト判定は `scripts/lib/detect_host.sh` を共用する。入口ごとに同じ設定読込みやホスト判定を実装し直さない。コンテナ内のビルド処理と Python 環境管理は独立したコマンドにし、共通の環境準備は `docker/scripts/lib/` から読み込む。
+日常操作の入口を `scripts/` 直下に置く。診断・環境管理等の補助入口は `scripts/tools/` に置く。コンテナ内の処理は `docker/scripts/`、ホスト準備の内部処理は `scripts/setup/`、ホスト側の共通関数は `scripts/lib/` に置く。ホスト判定は `scripts/lib/detect_host.sh` を共用する。入口ごとに同じ設定読込みやホスト判定を実装し直さない。コンテナ内のビルド処理と Python 環境管理は独立したコマンドにし、共通の環境準備は `docker/scripts/lib/` から読み込む。
 
 新規のディレクトリ・文書・設定ファイルは、内容が分かる英語の `snake_case` を基本とする。`Dockerfile.<image_key>`、`CMakeLists.txt`、`package.xml` 等のツールが要求する名前と、既存の公開コマンド名はその規則を優先する。
 

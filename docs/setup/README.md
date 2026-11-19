@@ -52,12 +52,17 @@ OS のフラッシュ、GPU driver の自動置換、ディスクの初期化、
 
 ## 対話メニューと直接実行
 
+日常操作のメニューは `atd` で開く。初回の `tools` で `~/.local/bin/atd` に登録する。既に準備したホストではプロジェクト直下で `./scripts/setup.sh --action launcher` を一度実行する。現在のシェルで PATH の設定を案内された場合は `export PATH="$HOME/.local/bin:$PATH"` を実行する。
+
+Notebook・Jetson の開発コンテナでは `atd-shell` への再入室後から使える。更新時に開いていたシェルでは `/workspaces/atd/scripts/atd` で同じメニューが開く。ホストとコンテナで選べる操作は `atd --list` で確認できる。
+
 選択には `fzf` を使用する。未導入時は番号メニューを表示し、tools で導入した後は同じ入口で `fzf` を使う。
 
 | action | 用途 |
 | --- | --- |
 | `check` | OS、機種、GPU、Docker、CLI 等の現状確認 |
-| `tools` | ホスト用の基本ツール・fzf 等の準備 |
+| `tools` | ホスト用の基本ツール・fzf 等の準備と `atd` コマンドの登録 |
+| `launcher` | この checkout の `atd` コマンドをホストの通常ユーザーに登録 |
 | `docker` | Docker の準備。既存導入の状態を確認して扱う |
 | `runtime` | NVIDIA Container Toolkit と Docker runtime の準備 |
 | `isaac` | NVIDIA の apt repository と apt 版 Isaac ROS CLI の準備 |
@@ -222,7 +227,7 @@ Jetson の入力・監視を起動する場合は、別端末から次を実行�
 ./scripts/bringup.sh bridge
 ```
 
-`bringup.sh` は引数なしの対話端末で profile を選択し、`--list` で一覧を表示する。Notebook では `./scripts/bringup.sh --dry-run input` による予定の確認を使う。操作と今後の拡張は [bringup](../bringup.md)を参照する。Notebook の Web はコンテナ内の `atd-web`、ホストからの補助起動は `./scripts/tools/webui.sh` を使う。
+`bringup.sh` は引数なしの対話端末で profile を選択し、`--list` で一覧を表示する。Notebook では `./scripts/bringup.sh --dry-run input` による予定の確認を使う。操作と今後の拡張は [bringup](../bringup.md)を参照する。Notebook の Web はコンテナ内の `atd-web`、Notebook ホストからの起動は `./scripts/webui.sh` を使う。
 
 ## Docker 内の用途別 Python 環境
 

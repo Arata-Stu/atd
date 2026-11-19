@@ -252,7 +252,7 @@ Signed-By: ${task_root}/etc/apt/keyrings/atd-docker.gpg"
         if [[ "$task_host" == jetson ]]; then
             install_missing bluez
             privileged systemctl enable --now bluetooth
-            printf 'DualSense のペアリングは Ubuntu の Bluetooth 設定または bluetoothctl で行ってください。\n'
+            printf 'DualSense の接続は Jetson ホストで ./scripts/bluetooth.sh を実行してください。\n'
         fi
         for task_group in plugdev input dialout; do add_group "$task_group"; done
         ;;

@@ -6,6 +6,8 @@
 | --- | --- | --- |
 | 無通電 | BEC、3.3 V、GND間の短絡なし／実装の極性正常 | 未測定 |
 | USBのみ | USB 2 CDC列挙、CDC0 PING→PONG、CDC1 INFO、BEC端子に給電されない | 未実施 |
+| 本体LED／USBのみ | v0.2.0-ledのINFO応答、短く2回ずつ点滅、CDC1 LEDでUSB_LINKとpower_ready=0 | 未実施 |
+| 本体LED／制御・異常 | プロポ制御＝0.5秒交互、USB制御＝0.9秒点灯、SBUS喪失・HOST timeout・BEC成立後の喪失＝高速点滅。LEDコマンドはPWMを変えない | 未実施 |
 | BECのみ | Picoと受信機起動、Jetsonなしで手動PWM、発熱・電圧を記録 | 未実施 |
 | USB+BEC | 双方電源・単独切替時の電圧波形、逆流・異常発熱なし | 未実施 |
 | GPIO対応 | UV_GOOD物理12番＝GP9。IMU/RPM端子電圧を確認 | 未実施 |

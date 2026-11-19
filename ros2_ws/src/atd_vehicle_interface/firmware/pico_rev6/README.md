@@ -1,10 +1,10 @@
 # Rev6 / Raspberry Pi Pico ファームウェア
 
-2026-11-18。対象は **JPBB Rev6のRP2040版Raspberry Pi Pico**。ATD の `ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/` に、制御・通信コード、ビルド補助、ホストテストを保存しています。ROS package の通常ビルドとは独立しており、親の `firmware/COLCON_IGNORE` で colcon の探索対象から外しています。
+2026-11-20、**v0.2.0-led-bench**。対象は **JPBB Rev6のRP2040版Raspberry Pi Pico**。本体の緑色LED（GP25）で接続・制御・異常の6状態を表示します。[LEDの見方](LED_SIGNALS.md)
 
-取り込み元は `/Users/at/project/tools/pcb/kart_bridge_board/firmware/pico_rev6/` です。同じ元 repo の `firmware/common/Src/jpbb_protocol.c` と `firmware/common/Inc/jpbb_protocol.h` をローカルの `src/`・`include/` へ、`firmware/tests/test_jpbb_protocol.c` を `tests/test_protocol.c` へ取り込んでいます。Pico 用の `include/jpbb_board.h` を使い、旧STM32のHALや制御コードは含めません。実行用 C/H の内容は元と同じで、配置・ビルド／テスト手順を調整しています。元 repo のファイルは変更・削除していません。
+取り込み元は `/Users/at/project/tools/pcb/kart_bridge_board/firmware/releases/pico_rev6_v0.2.0_led_bench_2026-11-20/` の `source/firmware/` です。実行用 C/H はリリースと同一です。共通の JPB1 通信コードはこのディレクトリの `src/`・`include/` に、そのテストは `tests/test_protocol.c` に配置しています。親の `firmware/COLCON_IGNORE` で ROS と Pico のビルドを分けています。
 
-ATDへの取り込み後は、core・sbus・transport・protocol・CH入替/反転のホストテスト（UBSan併用）、UF2異常系4テスト、外部ネットリストを明示した11信号のGPIO照合に合格しました。既存の固定版SDK・toolchainを使ったRP2040向けReleaseビルドとUF2生成・payload照合にも合格しています（BIN 45,808 bytes、SHA256 `01d8629ac2f73c4dd4754982b5154e28a541b629fcca4f0be7efcfd806500485`）。出力先は一時ディレクトリを使い、新しいSDK取得はしていません。実基板への書き込み・USB列挙・波形・実車試験は未実施です。
+ATDでホストテスト（UBSan併用）、LEDの点滅と制御状態の遷移、リリース同梱のネットリストとのGPIO 11信号照合を確認しました。RP2040向けに再ビルドしたBINとUF2は配布版とバイト単位で一致しました（UF2のSHA-256 `fc666b3353fd694a43a33b59f481e97beca6820e605fbd81b228a5ac1a5cd050`）。この版の実機書き込み・実点灯・PWM波形・走行は未検証です。
 
 ## 今回決めた動作
 
@@ -26,7 +26,7 @@ CHとは受信機が送る操作値の番号です。CH3には2位置スイッ�
 
 ## 書き込み
 
-1. 初回はPicoのBOOTSELを押しながら、データ通信対応Micro-BケーブルでPCへ接続します。
+1. ESC/BECを切り、PicoのBOOTSELを押しながら、データ通信対応Micro-BケーブルでPCへ接続します。
 2. 表示される`RPI-RP2`ドライブへ **`jpbb_pico_rev6.uf2`** をコピーします。
 3. 自動的に再起動します。OSの起動やUSB接続待ちは行いません。
 
@@ -99,7 +99,7 @@ flags bit0＝指令有効、bit1＝HOST要求。新しい中立要求は4つの�
 
 対話コマンド`PING / HEARTBEAT / STATUS / HELP / MANUAL / SET / STREAM / AUTO`も使えます。`SET 1500 1500`→`AUTO`でHOSTをarmし、以後200 ms以内に`STREAM <servo> <esc>`、500 ms以内に`HEARTBEAT`を送ります。`MANUAL`はHOSTの解除で、実際の手動選択はプロポスイッチに従います。JPB1のSは最初のCを受けてから送信します。
 
-CDC1は`INFO / STREAM ON / STREAM OFF / BOOTSEL`専用。初期状態ではセンサstreamはOFFです。`STREAM ON`で50 Hzの`JPX1,T`を送ります。ATD の `atd_vehicle_interface` はこの全16chを受け取る監視用nodeです。現段階のnodeはCDC0を開かず、CDC1へ`INFO`と`STREAM ON`だけを送ります。
+CDC1の`INFO`は版名`v0.2.0-led`を返します。読み取り専用の`LED`で現在の表示状態と電源・受信・USB・arm・faultを確認できます。初期状態ではセンサstreamはOFFです。`STREAM ON`で50 Hzの`JPX1,T`を送信し、`STREAM OFF`で終了します。ATD の監視用nodeはCDC1へ`INFO`と`STREAM ON`を送り、全16chを受け取ります。
 
 ```text
 JPX1,T,seq,board_us,sbus_age_ms,sbus_frames,sbus_lost_frames,sbus_failsafe_frames,uart_errors,flags,

@@ -43,6 +43,9 @@ bool rev6_hal_vbus(void);
  */
 void rev6_hal_pwm(uint16_t servo_us, uint16_t esc_us, bool enabled);
 
+/* Original Pico's on-board green LED (GP25); diagnostic indication only. */
+void rev6_hal_led(bool on);
+
 /* Main-loop-only diagnostic; uses nominal 3.3 V ADC reference, not calibration. */
 uint16_t rev6_hal_vbec_mv(void);
 

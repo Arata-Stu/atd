@@ -20,6 +20,13 @@ inline bool polling_gap_expired(double previous, double now)
   return now < previous || now > previous + kRcFreshnessSeconds;
 }
 
+inline bool supported_telemetry_info(std::string_view line)
+{
+  const bool known_firmware = line.starts_with("JPBB Rev6 Pico v0.1;") ||
+    line.starts_with("JPBB Rev6 Pico v0.2.0-led;");
+  return known_firmware && line.find("; CDC1=JPX1;") != std::string_view::npos;
+}
+
 struct Telemetry
 {
   uint32_t sequence{};

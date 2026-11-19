@@ -63,7 +63,7 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 
 共通 Web アプリは `apps/web/{frontend,backend,processing}/` に分ける。frontend は React / TypeScript / Vite、backend は FastAPI とジョブ・転送・公式処理 adapter、processing は Web 非依存の HDMap 幾何処理・ライン生成。UI を使うのは Notebook のみで、Jetson 側の入力・役割 node と `atd_web_bridge` は `scripts/bringup.sh input` で明示起動する。プロポの役割設定は `/data/results/runs/input/propo.yaml` へ保存し、Pico の firmware と走行用 CH 設定は変更しない。操作は [Web アプリ](../apps/web/README.md)を参照する。
 
-Pico firmware はユーザー提供の `/Users/at/project/tools/pcb/kart_bridge_board/firmware/pico_rev6/` と必要な共通通信コードを取り込み、以後の ATD 向け編集元を `atd_vehicle_interface/firmware/pico_rev6/` とする。元ディレクトリは保持し、自動同期・削除は行わない。SDK は同ディレクトリの `.cache/pico-sdk/`、生成物は `build/` に置き、Git 管理対象から外す。`firmware/COLCON_IGNORE` で独立した Pico CMake project を ROS workspace の探索から除外し、colcon から SDK の取得・ARM build・書き込みを実行しない。実基板へ書き込まれた版との一致は別途確認する。
+Pico firmware はユーザー指定のリリースから Pico 用ソースと必要な JPB1 共通通信コードを取り込む。現在の版と取り込み元は [要件 3.10 節](project_requirements.md#310-rev6-pico-firmware-の確認) に記録し、ATD 向け編集元を `atd_vehicle_interface/firmware/pico_rev6/` とする。SDK は同ディレクトリの `.cache/pico-sdk/`、生成物は `build/` に置き、Git 管理対象から外す。`firmware/COLCON_IGNORE` で独立した Pico CMake project を ROS workspace の探索から除外し、colcon から SDK の取得・ARM build・書き込みを実行しない。実基板へ書き込まれた版との一致は別途確認する。
 
 ## ROS 2 package
 

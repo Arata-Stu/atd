@@ -195,6 +195,10 @@ uint16_t rev6_hal_vbec_mv(void) {
     return (uint16_t)((raw * 3300u * 147u + denominator / 2u) / denominator);
 }
 
+void rev6_hal_led(bool on) {
+    gpio_put(REV6_GPIO_LED, on);
+}
+
 void rev6_hal_inputs_start(void (*sbus_byte)(uint8_t, uint32_t),
                            void (*sbus_error)(void),
                            void (*rpm_edge)(uint32_t)) {

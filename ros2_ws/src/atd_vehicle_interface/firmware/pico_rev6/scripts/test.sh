@@ -27,10 +27,12 @@ common_flags=(-std=c11 -Wall -Wextra -Werror -g)
 if [[ "${JPBB_SANITIZE:-undefined}" != 0 ]]; then
   common_flags+=("-fsanitize=${JPBB_SANITIZE:-undefined}" -fno-sanitize-recover=all -fno-omit-frame-pointer)
 fi
-for module in core sbus transport; do
+for module in core sbus transport led; do
   sources=("$source_dir/tests/test_$module.c" "$source_dir/src/rev6_$module.c")
   if [[ "$module" == transport ]]; then
     sources+=("$source_dir/src/jpbb_protocol.c")
+  elif [[ "$module" == led ]]; then
+    sources+=("$source_dir/src/rev6_core.c")
   fi
   "$compiler" "${common_flags[@]}" -I"$source_dir/include" \
     "${sources[@]}" -o "$out/test_$module"

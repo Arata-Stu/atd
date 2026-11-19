@@ -1,6 +1,6 @@
 # ATD プロジェクト要件・決定事項
 
-最終更新: 2026-11-18
+最終更新: 2026-11-20
 
 この文書は、要件・規約と Docker 開発環境の初期実装方針をまとめたものである。
 「確定要件」はユーザーが明示した内容、「技術調査メモ」は会話中に確認した一次情報、「提案・候補」は採用未確定の内容を示す。
@@ -275,9 +275,11 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - Web UI は Notebook の Docker 内で `atd-web` を実行して起動し、ブラウザだけを Notebook ホストで開く。Notebook ホストからは `scripts/webui.sh` で起動済みコンテナへ委譲する。Jetson の入力起動は `scripts/bringup.sh input`、手順・初期 schema・生成方式・制約は [Web アプリ](../apps/web/README.md)と package の README に記録する。
 - Docker build、ROS build / install、実 bag / GPU での公式処理、実 SCP、Bluetooth / evdev、実走行は対象機で別に確認する。ローカルのコード検証だけでこれらを検証済みとはしない。
 
-### 3.10. Rev6 Pico firmware の確認（2026-11-18）
+<a name="310-rev6-pico-firmware-の確認2026-11-18"></a>
 
-現在の ATD 向け編集元は `ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/`。ユーザーの指示により `/Users/at/project/tools/pcb/kart_bridge_board/firmware/pico_rev6/` と必要な JPB1 共通通信コードを取り込んだ。実行用 C/H は取り込み元と同一に保ち、ビルド・テストの相対パスを package 内で完結させる。取り込み元のディレクトリは未追跡のローカル試作ソースであり、元のファイルは保持して自動同期・削除はしない。実基板へ書き込まれた版との一致は別途確認する。
+### 3.10. Rev6 Pico firmware の確認
+
+現在の ATD 同梱版は `v0.2.0-led-bench`。取り込み元は `/Users/at/project/tools/pcb/kart_bridge_board/firmware/releases/pico_rev6_v0.2.0_led_bench_2026-11-20/` の `source/firmware/`。Pico 用ソースと必要な JPB1 共通通信コードを `ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/` で管理する。実行用 C/H はリリースと揃え、ビルドとテストは ATD の package 内の相対パスを使う。
 
 小さいソース・テスト・説明を Git 管理し、SDK・toolchain・bytecode・生成バイナリは含めない。Pico SDK 2.3.1／TinyUSB の固定commitは維持し、SDK取得とARM buildはfirmwareの明示的なスクリプト操作に分ける。`firmware/COLCON_IGNORE` により通常のROS workspace探索でPico projectを別packageとして扱わず、colconからSDK取得・ARM build・書き込みを実行しない。ROS packageのinstallには小さい編集元だけを同梱する。
 
@@ -287,7 +289,8 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 | 手動操作 | Pico が S.BUS から操舵・ESC のパルスを生成し、プロポ／HOST の最終選択も実行。Jetson／USB がなくても手動処理を継続できる設計 |
 | チャンネル既定値 | CH1＝操舵、CH2＝ESC、CH3＝2位置の操作権。今回の ATD 実装もこの走行用 CH を固定して扱う。USB／ATD UI から Pico の配置を動的変更する処理は対象外 |
 | USB CDC0 / if00 | JPB1 制御・状態。状態は20 Hz、選択済み3chの µs 相当値と出力・操作権・異常を配信。制御 C フレームを受けてから状態配信を開始 |
-| USB CDC1 / if02 | `STREAM ON` で JPX1 の50 Hz監視を開始。全16chの raw 値・受信状態・時刻・基板状態等を含む。記録用を含む4つ目以降の CH の取得に利用可能 |
+| USB CDC1 / if02 | `INFO` 応答の版表記は `v0.2.0-led`。`STREAM ON` で JPX1 の50 Hz監視を開始し、全16chの raw 値・受信状態・時刻・基板状態を取得する。読み取り専用の `LED` で現在の表示状態とその理由を確認できる |
+| Pico 本体 LED（GP25） | 待機、USB 認識、S.BUS 受信済み・制御開始待ち、プロポ制御、USB 制御、異常の6状態を点滅で表示する。[点滅パターンと診断値](../ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/LED_SIGNALS.md) |
 | 入力品質 | 監視 raw は frame_lost 付きのフレームでも更新され得る。`sbus_fresh` だけでなく frame_lost / failsafe と受信の進行を検査し、同じ値の再配信を新しい押下として扱わない |
 | 制御値 | `JPB1,C` は操舵 −1000〜1000、前進／後退／brake 0〜1000 の正規化値を受け、Pico がパルス幅へ変換。µs を直接送る入口は別の `SET` / `STREAM` CLI。ESC 手順試験は JPB1 を使用し、Pico がパルス幅へ変換する |
 | 応答の意味 | C ごとの ACK はない。S の seq は基板の状態送信カウンタであり、送った指令の seq の echo ではない。状態受信を各指令の受理確認と混同しない |
@@ -295,9 +298,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 
 タミヤ製モータ・ESC の試験では、前進中の負入力を制動として扱う。制動中の停止確認・中立出力の後、再度の負入力で後退を要求する。後退中は正入力で前進へ移る。Notebook は固定の手順列を編集・予約し、Jetson 端末の確認後に Jetson が実行する。Studio には推定状態、指令と基板報告 PWM を記録・表示する。実 ESC の応答とパルス幅・時間の適合は実車での校正対象とする。[ESC 手順試験](bringup.md#タミヤ-esc-の手順試験)
 
-原典は `include/rev6_core.h`、`src/rev6_core.c`、`src/main.c`、`README.md`、`BENCH_CHECK.md`。取り込み前の確認では、既存の C ホストテストを一時ディレクトリへ build し、制御・S.BUS・行処理／CRC・CH 入替／反転の4条件を確認した。元ディレクトリのファイルは変更していない。packageへの取り込み後の検証結果は以下のとおり。
-
-packageへの取り込み後もCホストテスト（core・S.BUS・transport・protocol・CH入替／反転）、UF2の4テスト、明示指定した元基板netlistとのGPIO 11信号照合が通過した。基板データを指定しない通常のホストテストではGPIO照合をSKIPと明示する。既存の固定版SDK・toolchainを使用した移設先でのRP2040向けRelease build、UF2生成とpayload照合も通過した。SDKの新規取得・実基板への書き込み・USB／S.BUS／PWM波形・実車の検証は行っていない。
+ATD に取り込んだソースで制御・通信・LED のホストテストと GPIO 11 信号の照合が通過した。RP2040 向けに再ビルドした BIN・UF2 は配布版とバイト単位で一致した。CDC1 受信部は旧版と新版の `INFO` 応答を識別する。新版の実機書き込み・LED 実点灯・USB／S.BUS 入出力・PWM 波形・実走行は未検証。[ベンチ確認手順](../ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/BENCH_CHECK.md)
 
 ATD 側に `atd_vehicle_interface` の CDC1 受信・状態配信と、`atd_rc_input` の Jetson 側役割処理、Notebook のプロポ監視・設定 UI を追加した。受信 node は USB 属性・固有 serial・if02 を照合し、`INFO` / `STREAM ON` のみを送信する。JPX1 の CRC・範囲・seq・時刻と S.BUS の進行を検査し、受信時刻を保った typed telemetry と監視状態を配信する。Pico が複数ある場合は明示選択が必要。別 node の `atd_joy_drive` が有効な受信機・CH3 の HOST 選択・新しい中立の Joy 入力を確認してから CDC0 に手動指令を送る。CH3 を戻すと Pico が受信機の CH1／CH2 へ切り替える。[起動と切替](bringup.md#dualsense-で手動走行する)
 
@@ -371,6 +372,8 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 | `../config/storage.env.example` | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
 
 ## 7. 更新履歴
+
+- 2026-11-20 に同梱の Pico Rev6 firmware を `v0.2.0-led-bench` へ更新した。Pico 本体 LED の状態表示と CDC1 の `LED` 診断に対応した。
 
 - 2026-11-19 にシステム依存の導入を Docker build に集約した。起動時は apt 依存を検査し、日常コマンドはマウントした checkout から実行する。
 

@@ -35,6 +35,13 @@ std::string frame(const std::vector<std::string> & values)
 
 int main()
 {
+  check(supported_telemetry_info("JPBB Rev6 Pico v0.1; PWM=100Hz; CDC0=JPB1; CDC1=JPX1; SBUS=100000/8E2;"),
+    "original firmware INFO accepted");
+  check(supported_telemetry_info("JPBB Rev6 Pico v0.2.0-led; PWM=100Hz; CDC0=JPB1; CDC1=JPX1; SBUS=100000/8E2;"),
+    "LED firmware INFO accepted");
+  check(!supported_telemetry_info("JPBB Rev6 Pico v0.2.0; CDC1=JPX1;"), "unknown firmware rejected");
+  check(!supported_telemetry_info("JPBB Rev6 Pico v0.2.0-led; CDC0=JPX1;"), "missing CDC1 protocol rejected");
+  check(!supported_telemetry_info("JPBB Rev6 Pico v0.2.0-led; CDC1=JPX10;"), "other CDC1 protocol rejected");
   check(!polling_gap_expired(10.0, 10.01), "regular 10ms polling gap allowed");
   const double rc_deadline = 10.0 + kRcFreshnessSeconds;
   check(!polling_gap_expired(10.0, rc_deadline), "exact 50ms polling gap allowed");

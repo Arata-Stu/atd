@@ -2,6 +2,7 @@
 #include "jpbb_protocol.h"
 #include "rev6_core.h"
 #include "rev6_hal.h"
+#include "rev6_led.h"
 #include "rev6_sbus.h"
 #include "rev6_transport.h"
 
@@ -37,6 +38,7 @@ typedef struct {
 } sensor_state_t;
 
 static rev6_core_t core;
+static rev6_led_t led;
 static rev6_sbus_decoder_t decoder;
 static sensor_state_t sensors;
 static volatile bool usb_healthy;
@@ -142,6 +144,7 @@ static bool control_tick(struct repeating_timer *timer) {
   rev6_rpm_expire(&sensors.rpm, time_us_32());
   const rev6_core_output_t *output = rev6_core_output(&core);
   rev6_hal_pwm(output->servo_us, output->esc_us, output->output_enabled);
+  rev6_hal_led(rev6_led_update(&led, output, usb_healthy, now));
   watchdog_update();
   return true;
 }
@@ -230,6 +233,29 @@ static void send_sensors(uint32_t sequence) {
   }
 }
 
+static void send_led_status(void) {
+  rev6_core_output_t output;
+  rev6_led_mode_t mode;
+  bool power_seen, usb_ready;
+  const uint32_t state = save_and_disable_interrupts();
+  output = *rev6_core_output(&core);
+  mode = led.mode;
+  power_seen = led.power_seen;
+  usb_ready = usb_healthy;
+  restore_interrupts(state);
+  char response[256];
+  const int count = snprintf(response, sizeof(response),
+      "LED state=%s usb=%u power_ready=%u power_seen=%u sbus_fresh=%u "
+      "host_armed=%u path=%u fault=0x%02lx\r\n",
+      rev6_led_mode_name(mode), usb_ready ? 1U : 0U,
+      output.power_ready ? 1U : 0U, power_seen ? 1U : 0U,
+      output.sbus_fresh ? 1U : 0U, output.host_armed ? 1U : 0U,
+      output.active_path, (unsigned long)output.fault_bits);
+  if (count > 0 && (size_t)count < sizeof(response)) {
+    send_bytes(1U, response, (size_t)count);
+  }
+}
+
 static void diagnostic_line(const char *line) {
   if (strcmp(line, "STREAM ON") == 0) {
     sensor_stream = true;
@@ -244,12 +270,14 @@ static void diagnostic_line(const char *line) {
     } else {
       send_text(1U, "ERR switch ESC/BEC power off before BOOTSEL\r\n");
     }
+  } else if (strcmp(line, "LED") == 0) {
+    send_led_status();
   } else if (strcmp(line, "INFO") == 0 || strcmp(line, "HELP") == 0) {
-    send_text(1U, "JPBB Rev6 Pico v0.1; PWM=100Hz; CDC0=JPB1; CDC1=JPX1; "
+    send_text(1U, "JPBB Rev6 Pico v0.2.0-led; PWM=100Hz; CDC0=JPB1; CDC1=JPX1; "
         "SBUS=100000/8E2; IMU=DISABLED; RPM=raw edges/period; "
-        "INFO | STREAM ON | STREAM OFF | BOOTSEL (BEC off)\r\n");
+        "INFO | LED | STREAM ON | STREAM OFF | BOOTSEL (BEC off)\r\n");
   } else if (line[0] != '\0') {
-    send_text(1U, "ERR use INFO, STREAM ON/OFF or BOOTSEL\r\n");
+    send_text(1U, "ERR use INFO, LED, STREAM ON/OFF or BOOTSEL\r\n");
   }
 }
 
@@ -305,6 +333,7 @@ static void poll_lines(uint8_t port) {
 int main(void) {
   rev6_hal_init();
   rev6_core_init(&core);
+  rev6_led_init(&led);
   rev6_sbus_init(&decoder);
   const unsigned timer_irq = hardware_alarm_get_irq_num(
       alarm_pool_timer_alarm_num(alarm_pool_get_default()));

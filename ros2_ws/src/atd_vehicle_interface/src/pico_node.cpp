@@ -119,7 +119,7 @@ private:
 
   void receive(std::string_view line)
   {
-    if (line.starts_with("JPBB Rev6 Pico v0.1;") && line.find("CDC1=JPX1") != std::string_view::npos) {
+    if (supported_telemetry_info(line)) {
       info_seen_ = true;
       return;
     }

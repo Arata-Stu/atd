@@ -27,6 +27,7 @@ add_executable(jpbb_pico_rev6
   src/main.c
   src/rev6_hal.c
   src/rev6_core.c
+  src/rev6_led.c
   src/rev6_sbus.c
   src/rev6_transport.c
   src/usb_descriptors.c
@@ -51,5 +52,5 @@ target_link_libraries(jpbb_pico_rev6 PRIVATE
 pico_enable_stdio_usb(jpbb_pico_rev6 0)
 pico_enable_stdio_uart(jpbb_pico_rev6 0)
 pico_set_program_name(jpbb_pico_rev6 "JPBB Rev6 Pico")
-pico_set_program_version(jpbb_pico_rev6 "0.1.0-bench")
+pico_set_program_version(jpbb_pico_rev6 "0.2.0-led-bench")
 pico_add_extra_outputs(jpbb_pico_rev6)

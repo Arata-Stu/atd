@@ -24,7 +24,7 @@ install(DIRECTORY
   PATTERN "__pycache__" EXCLUDE PATTERN ".cache" EXCLUDE
   PATTERN ".git" EXCLUDE PATTERN "vendor" EXCLUDE PATTERN "build" EXCLUDE)
 install(FILES firmware/pico_rev6/CMakeLists.txt firmware/pico_rev6/README.md
-  firmware/pico_rev6/BENCH_CHECK.md
+  firmware/pico_rev6/BENCH_CHECK.md firmware/pico_rev6/LED_SIGNALS.md
   DESTINATION share/${PROJECT_NAME}/firmware/pico_rev6)
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)

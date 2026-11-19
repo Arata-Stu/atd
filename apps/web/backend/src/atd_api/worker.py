@@ -12,6 +12,9 @@ from .store import Store, read_json
 
 
 def execute(store, task, action, payload):
+    if action == 'simulation_benchmark':
+        from .simulation_benchmark import execute as benchmark
+        return benchmark(store, task, payload)
     if action == 'generate':
         document = store.load_map(payload['id'])
         if document['revision'] != payload['revision']:

@@ -19,6 +19,7 @@ from .store import Store, atomic_json, confined, read_json
 from . import transfers
 from . import capture as capture_service
 from . import calibration
+from . import planning_replay
 
 
 class Strict(BaseModel):
@@ -141,6 +142,13 @@ def create_app(record_root=None, result_root=None, static_dir=None):
         return dict(record_root=str(store.record_root), result_root=str(store.result_root), map_root=str(store.maps_root),
                     capabilities=dict(ros=bool(shutil.which('ros2')), ssh=bool(shutil.which('ssh')), scp=bool(shutil.which('scp'))),
                     mapping_defaults=DEFAULT_INPUTS)
+
+    @app.post('/api/simulation/compare')
+    def compare_simulation(body: dict):
+        # Web venv からもシミュレーターの依存先を同じ checkout の planner に解決する。
+        planning_replay._core('atd_planning')
+        simulation = planning_replay._core('atd_control', 'simulation')
+        return JSONResponse(content=simulation.compare(body))
 
     @app.get('/api/connection')
     def get_connection():
@@ -344,8 +352,9 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     from .localization_results import router as validation_results_router
     app.include_router(validation_router, prefix='/api')
     app.include_router(validation_results_router, prefix='/api')
-    from .planning_replay import router as planning_replay_router
-    app.include_router(planning_replay_router, prefix='/api')
+    app.include_router(planning_replay.router, prefix='/api')
+    from .simulation_benchmark import router as benchmark_router
+    app.include_router(benchmark_router, prefix='/api')
     from .speed_replay import router as speed_replay_router
     app.include_router(speed_replay_router, prefix='/api')
     from .speed_tables import router as speed_tables_router

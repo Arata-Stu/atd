@@ -16,7 +16,7 @@ from .store import atomic_json, read_json, identifier
 
 ACTIVE = {'starting', 'running', 'queued'}
 ACTIONS = {'generate', 'map_build', 'vgl', 'capture', 'pull', 'push', 'calibration', 'localization_validation',
-           'planning_replay', 'speed_replay', 'manual_drive_replay', 'manual_drive_vo'}
+           'planning_replay', 'speed_replay', 'manual_drive_replay', 'manual_drive_vo', 'simulation_benchmark'}
 
 
 ROS_SETUP = ('set -e; source /opt/ros/lyrical/setup.bash; '

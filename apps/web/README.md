@@ -40,6 +40,12 @@ Notebook ホストから準備する場合は、コンテナを起動してか�
 
 初回は上記の ROS build で Notebook の workspace に `atd_control`（`atd_planning`・`atd_localization`・`atd_mapping` を含む）、`atd_vehicle_calibration`、手動走行 bag の読取に使う `atd_web_bridge` を準備する。`atd-web check` は ROS と workspace の setup を読み込んで package の導入状態を確認する。環境や package が未準備なら `FAIL` と表示する。
 
+## 2D 走行シミュレーター
+
+Notebook で[シミュレーター](http://127.0.0.1:8766/#simulation)を開き、同じコースを固定先読みと速度連動先読みで走らせる。軌跡、横ずれ、目標・模擬速度、操舵と、仮定した遅延による違いを確認できる。[モデルと比較手順](../../docs/simulation.md)
+
+「F1 ベンチマーク」は同梱の F1 レイアウト20件または選択コースを評価する。コースごとに編集用地図を作成し、通常の「地図とライン」から Centerline・Raceline を再生成できる。評価履歴には条件とコース別・試行別の成績を保存する。[操作と指標](../../docs/simulation.md#f1-コースでベンチマークを実行する)
+
 ## 自己位置検証
 
 Notebook の [自己位置検証](http://127.0.0.1:8766/#localization) を開き、cuVSLAM・VGL 準備済みの地図と、地図作成に使った走行とは別の bag を選んで検証を開始する。前方軌道を試したい Raceline・Centerline・Customline は、検証前に地図画面で生成・保存しておく。同じ名前の bag は親ディレクトリを含むパスで選択できる。ジョブのログと停止操作は同じ画面から開ける。

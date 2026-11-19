@@ -60,25 +60,43 @@ def segment_distance(a, b, c, d):
 
 def simple(line, closed):
     es = edges(line, closed)
-    for i, (a, b) in enumerate(es):
+    # Sweep candidate pairs on x. Keep the same endpoint tolerance as intersects().
+    boxes = [(min(a[0], b[0]), max(a[0], b[0]), min(a[1], b[1]), max(a[1], b[1]))
+             for a, b in es]
+    active = []
+    crossing = None
+    for a, b in es:
         if math.dist(a, b) < 1e-6:
             raise ValueError(
                 "境界の始終点が重複しています。閉路では終点を重ねないでください"
             )
-        for j in range(i + 2, len(es)):
-            if closed and i == 0 and j == len(es) - 1:
+    for i in sorted(range(len(es)), key=lambda k: boxes[k][0]):
+        xmin, _, ymin, ymax = boxes[i]
+        active = [j for j in active if boxes[j][1] + 1e-8 >= xmin]
+        for j in active:
+            first, last = sorted((i, j))
+            if last - first < 2 or (closed and first == 0 and last == len(es) - 1):
                 continue
-            if intersects(a, b, *es[j]):
-                raise PathValidationError(
-                    f"ラインが自己交差しています（区間{i + 1}と区間{j + 1}）",
-                    a, b, i, reason="self_intersection", other_segment=j + 1,
-                    other_points=[list(p) for p in es[j]],
-                )
+            if boxes[j][2] > ymax + 1e-8 or boxes[j][3] + 1e-8 < ymin:
+                continue
+            if intersects(*es[first], *es[last]) and (crossing is None or (first, last) < crossing):
+                crossing = first, last
+        active.append(i)
+    if crossing is not None:
+        i, j = crossing
+        raise PathValidationError(
+            f"ラインが自己交差しています（区間{i + 1}と区間{j + 1}）",
+            *es[i], i, reason="self_intersection", other_segment=j + 1,
+            other_points=[list(p) for p in es[j]],
+        )
 
 
 def inside(p, polygon):
     result = False
+    low_y, high_y = p[1] - 1e-8, p[1] + 1e-8
     for a, b in edges(polygon, True):
+        if (a[1] < low_y and b[1] < low_y) or (a[1] > high_y and b[1] > high_y):
+            continue
         if distance(p, a, b) < 1e-8:
             return True
         if (a[1] > p[1]) != (b[1] > p[1]) and p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (
@@ -120,6 +138,10 @@ class Corridor:
         for line in (left, right):
             simple(line, closed)
         self.boundaries = edges(left, closed) + edges(right, closed)
+        self._boundary_boxes = [
+            (min(a[0], b[0]), max(a[0], b[0]), min(a[1], b[1]), max(a[1], b[1]), a, b)
+            for a, b in self.boundaries
+        ]
         for a, b in edges(left, closed):
             if any(intersects(a, b, c, d) for c, d in edges(right, closed)):
                 raise ValueError("左右の境界が交差しています")
@@ -144,9 +166,13 @@ class Corridor:
             or not self.contains([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2])
         ):
             return False
+        limit = max(clearance, 1e-7)
+        xmin, xmax = min(a[0], b[0]) - limit, max(a[0], b[0]) + limit
+        ymin, ymax = min(a[1], b[1]) - limit, max(a[1], b[1]) + limit
         return all(
-            segment_distance(a, b, c, d) >= max(clearance, 1e-7)
-            for c, d in self.boundaries
+            segment_distance(a, b, c, d) >= limit
+            for x0, x1, y0, y1, c, d in self._boundary_boxes
+            if x0 <= xmax and xmin <= x1 and y0 <= ymax and ymin <= y1
         )
 
     def validate(self, line, clearance=0):

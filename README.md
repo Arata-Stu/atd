@@ -110,6 +110,8 @@ ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用�
 | [環境セットアップ案](docs/environment_setup_plan.md) | Kart の比較調査、未実装部分の構成案 |
 | [rosbag記録](docs/recording.md) | Joy・プロポからの開始停止、記録profile、状態と保存完了 |
 | [車両モデルの校正](docs/vehicle_calibration.md) | 手動走行を記録し、Notebook で VO 速度・加速度・操舵応答を解析 |
+| [2D 走行シミュレーター](docs/simulation.md) | Notebook で固定先読みと速度連動先読みの閉ループ走行を比較 |
+| [F1 コースベンチマーク](docs/f1_circuits.md) | 採用した20コースの HDMap と走行ライン、コース別完走率・ラップ・衝突の比較 |
 | [車両配置・TF](docs/vehicle_layout.md) | 座標系、UIの寸法編集、実測とstatic TFの適用 |
 | [CAD・3Dプリント資料](docs/hardware_cad.md) | TT-02印刷フレーム、Rev6カメラ組立モデル、3MFと取り込み元 |
 

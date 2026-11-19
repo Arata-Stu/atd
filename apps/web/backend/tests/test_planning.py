@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from atd_processing.geometry import DEFAULTS, generate, settings
-from atd_processing.planning.geometry import PathValidationError, edges, simple
+from atd_processing.planning.geometry import Corridor, PathValidationError, edges, inside, simple
 from atd_processing.planning.optimizer import optimize
 from atd_processing.planning.optimizer_worker import _noncrossing_output
 from atd_processing.planning.raceline_reference import build
@@ -45,6 +45,18 @@ def test_only_requested_methods_and_pinned_defaults():
     for value in (True, 12.5, 11, 1501):
         with pytest.raises(ValueError):
             settings({'centerline_max_points': value})
+
+
+def test_spatial_bounds_preserve_endpoint_tolerance_and_edge_clearance():
+    # The non-neighbour endpoints differ in both x and y without intersecting exactly.
+    line = [[0., 0.], [2., 0.], [2., 1.], [-3e-9, 4e-9]]
+    with pytest.raises(PathValidationError) as caught:
+        simple(line, False)
+    assert (caught.value.diagnostic['segment'], caught.value.diagnostic['other_segment']) == (1, 3)
+    assert inside([0.5, -5e-9], [[0., 0.], [1., 0.], [0., 1.]])
+    lane = Corridor([[0., 0.], [3., 0.]], [[0., 2.], [3., 2.]], False)
+    assert lane.segment_ok([.5, .5], [2.5, .5], .5)
+    assert not lane.segment_ok([.5, .5], [2.5, .499999], .5)
 
 
 def test_region_unequal_counts_winding_phase_and_immutability():

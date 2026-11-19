@@ -1,0 +1,347 @@
+{
+  "schema": "atd.f1tenth_catalog.v1",
+  "upstream": {
+    "url": "https://github.com/f1tenth/f1tenth_racetracks",
+    "revision": "b95c4eff766f6367d66b310ea20cd2c9563712c0"
+  },
+  "classification_basis": "世界選手権の F1 GP で使用された経路と同系統のロードコースを収録する。年次改修・平滑化・縮尺による差を含む。開催施設、2026 年の開催会場、収録レイアウトを別々に判定。",
+  "calendar_as_of": "2026-11-20",
+  "calendar_sources": [
+    "https://www.formula1.com/en/racing/2026",
+    "https://www.fia.com/events/fia-formula-one-world-championship/season-2026/2026-fia-formula-one-world-championship"
+  ],
+  "tracks": [
+    {
+      "id": "austin",
+      "folder": "Austin",
+      "name": "Circuit of The Americas",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 421.042,
+      "note": "米国 GP のロードコース。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/united-states"
+      ]
+    },
+    {
+      "id": "brandshatch",
+      "folder": "BrandsHatch",
+      "name": "Brands Hatch",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": false,
+      "upstream_centerline_length_m": 356.287,
+      "note": "森を回る Grand Prix Circuit。1986 年英国 GP と同系統の長いループを持つ。",
+      "sources": [
+        "https://www.brandshatch.co.uk/about/circuit-layouts",
+        "https://www.formula1.com/en/results/1986/races/506/great-britain/race-result"
+      ]
+    },
+    {
+      "id": "budapest",
+      "folder": "Budapest",
+      "name": "Hungaroring",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 402.585,
+      "note": "ハンガリー GP の周回路。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/hungary"
+      ]
+    },
+    {
+      "id": "catalunya",
+      "folder": "Catalunya",
+      "name": "Circuit de Barcelona-Catalunya",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 416.751,
+      "note": "最終セクターにシケインを持つ旧版。2023 年に F1 はこのシケインを外した。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/spain",
+        "https://corp.formula1.com/formula-1-aws-gran-premio-de-espana-2023-changes-its-track-configuration/"
+      ]
+    },
+    {
+      "id": "hockenheim",
+      "folder": "Hockenheim",
+      "name": "Hockenheimring",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": false,
+      "upstream_centerline_length_m": 359.836,
+      "note": "Parabolika の先のヘアピンを通る短縮後の GP コース。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/germany"
+      ]
+    },
+    {
+      "id": "ims",
+      "folder": "IMS",
+      "name": "Indianapolis Motor Speedway",
+      "hosted_f1": true,
+      "included": false,
+      "layout": "indy_500_oval",
+      "venue_on_2026_calendar": false,
+      "upstream_centerline_length_m": 293.098,
+      "note": "収録はオーバル。1950〜1960 年の Indy 500 は世界選手権の得点対象。2000〜2007 年の F1 米国 GP はインフィールドを含むロードコース。",
+      "sources": [
+        "https://www.indianapolismotorspeedway.com/history/formula-one",
+        "https://www.formula1.com/en/latest/article/why-is-it-called-formula-1-and-12-other-questions-about-the-championships.1GHeel6u4jga6hMpX2eFs1"
+      ]
+    },
+    {
+      "id": "melbourne",
+      "folder": "Melbourne",
+      "name": "Albert Park",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 474.269,
+      "note": "2022 年の高速化改修前の豪州 GP の経路。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/australia",
+        "https://www.formula1.com/en/latest/article/revealed-the-track-tweaks-set-to-make-melbournes-albert-park-circuit-5.6usfQo5O6o4KsVi3WTAqFA"
+      ]
+    },
+    {
+      "id": "mexicocity",
+      "folder": "Mexico City",
+      "name": "Autódromo Hermanos Rodríguez",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 356.666,
+      "note": "スタジアム区間を経由するメキシコ GP の経路。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/mexico"
+      ]
+    },
+    {
+      "id": "montreal",
+      "folder": "Montreal",
+      "name": "Circuit Gilles-Villeneuve",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 285.047,
+      "note": "ノートルダム島を回るカナダ GP の周回路。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/canada"
+      ]
+    },
+    {
+      "id": "monza",
+      "folder": "Monza",
+      "name": "Autodromo Nazionale Monza",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 446.084,
+      "note": "イタリア GP のロードコース。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/italy"
+      ]
+    },
+    {
+      "id": "moscowraceway",
+      "folder": "MoscowRaceway",
+      "name": "Moscow Raceway",
+      "hosted_f1": false,
+      "included": false,
+      "layout": "non_f1",
+      "venue_on_2026_calendar": false,
+      "upstream_centerline_length_m": 322.757,
+      "note": "DTM 等の開催地。F1 ロシア GP の開催地はソチ。",
+      "sources": [
+        "https://moscowraceway.ru/info/facts",
+        "https://www.formula1.com/en/racing/2021/russia"
+      ]
+    },
+    {
+      "id": "nuerburgring",
+      "folder": "Nuerburgring",
+      "name": "Nürburgring GP-Strecke",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": false,
+      "upstream_centerline_length_m": 446.114,
+      "note": "南端まで回る GP コース。2020 年アイフェル GP の全長版と照合。",
+      "sources": [
+        "https://www.fia.com/sites/default/files/2020_eifel_grand_prix_preview.pdf",
+        "https://www.fia.com/sites/default/files/l10_04_circuits_2015.pdf"
+      ]
+    },
+    {
+      "id": "oschersleben",
+      "folder": "Oschersleben",
+      "name": "Motorsport Arena Oschersleben",
+      "hosted_f1": false,
+      "included": false,
+      "layout": "non_f1",
+      "venue_on_2026_calendar": false,
+      "upstream_centerline_length_m": 260.711,
+      "note": "DTM 等の開催地。F1 世界選手権の GP 開催記録は確認されない。",
+      "sources": [
+        "https://dtm.com/de/news/neue-era-neue-saison-dtm-auftakt-steigt-in-oschersleben"
+      ]
+    },
+    {
+      "id": "sakhir",
+      "folder": "Sakhir",
+      "name": "Bahrain International Circuit",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": false,
+      "upstream_centerline_length_m": 441.922,
+      "note": "バーレーンの通常 GP コース。2026 年は同名の GP をセパンで開催。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/bahrain",
+        "https://www.formula1.com/en/racing/2026/bahrain"
+      ]
+    },
+    {
+      "id": "saopaulo",
+      "folder": "SaoPaulo",
+      "name": "Autódromo José Carlos Pace",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 344.668,
+      "note": "インテルラゴスの GP コース。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/brazil"
+      ]
+    },
+    {
+      "id": "sepang",
+      "folder": "Sepang",
+      "name": "Sepang International Circuit",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 486.976,
+      "note": "マレーシア GP で使用。2026 年はバーレーン GP の開催会場。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2026/bahrain",
+        "https://www.formula1.com/en/racing/2017/malaysia"
+      ]
+    },
+    {
+      "id": "shanghai",
+      "folder": "Shanghai",
+      "name": "Shanghai International Circuit",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 497.614,
+      "note": "中国 GP の周回路。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/china"
+      ]
+    },
+    {
+      "id": "silverstone",
+      "folder": "Silverstone",
+      "name": "Silverstone Circuit",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 457.925,
+      "note": "内側の Arena 区間を含む英国 GP の経路。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/great-britain"
+      ]
+    },
+    {
+      "id": "sochi",
+      "folder": "Sochi",
+      "name": "Sochi Autodrom",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": false,
+      "upstream_centerline_length_m": 463.799,
+      "note": "五輪公園を回る F1 ロシア GP の経路。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2021/russia"
+      ]
+    },
+    {
+      "id": "spa",
+      "folder": "Spa",
+      "name": "Circuit de Spa-Francorchamps",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 554.448,
+      "note": "ベルギー GP の周回路。標高変化は 2D 地図に含まれない。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/belgium"
+      ]
+    },
+    {
+      "id": "spielberg",
+      "folder": "Spielberg",
+      "name": "Red Bull Ring",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 343.323,
+      "note": "オーストリア GP の周回路。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/austria"
+      ]
+    },
+    {
+      "id": "yasmarina",
+      "folder": "YasMarina",
+      "name": "Yas Marina Circuit",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 398.031,
+      "note": "2021 年終盤のレイアウト改修前のアブダビ GP の経路。",
+      "sources": [
+        "https://www.formula1.com/en/racing/2019/united-arab-emirates",
+        "https://www.formula1.com/en/racing/2021/united-arab-emirates"
+      ]
+    },
+    {
+      "id": "zandvoort",
+      "folder": "Zandvoort",
+      "name": "Circuit Zandvoort",
+      "hosted_f1": true,
+      "included": true,
+      "layout": "gp_family",
+      "venue_on_2026_calendar": true,
+      "upstream_centerline_length_m": 387.943,
+      "note": "1999 年以降の長い GP ループ。2021 年の F1 復帰時に一部コーナーが改修された。バンク角などは 2D 評価の対象外。",
+      "sources": [
+        "https://www.fia.com/sites/default/files/2021_dutch_grand_prix_-_preview.pdf",
+        "https://dutchgp.com/en/explore-the-track/"
+      ]
+    }
+  ]
+}

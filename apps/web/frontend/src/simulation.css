@@ -1,0 +1,99 @@
+.sim-workspace {
+  height: 100%;
+  overflow: auto;
+  color: #273e32;
+  background: #f4f6f3;
+}
+.sim-content {
+  max-width: 1560px;
+  margin: auto;
+  padding: clamp(18px, 2.3vw, 38px);
+  display: grid;
+  gap: 16px;
+}
+.sim-heading h1 {
+  margin: 0 0 6px;
+  font-size: clamp(23px, 2.2vw, 34px);
+  letter-spacing: -.045em;
+}
+.sim-heading p, .sim-note, .sim-model p {
+  margin: 0;
+  color: #526359;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.bench-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.bench-delta { display: block; color: #546359; }
+.bench-actions button[aria-pressed=true] { color: #12543d; background: #dcefe5; }
+.bench-selection { margin-bottom: 14px; }
+.bench-link, .sim-card a[download] { color: #19664e; text-decoration: underline; }
+.bench-link { padding: 4px 0; border: 0; background: transparent; }
+.bench-selection + .bench-link { margin-bottom: 12px; }
+.bench-report-picker { display: grid; gap: 4px; max-width: 32rem; margin-bottom: 10px; }
+.sim-card {
+  min-width: 0;
+  padding: clamp(14px, 1.55vw, 23px);
+  border: 1px solid #d6dfd6;
+  border-radius: 12px;
+  background: #fff;
+}
+.sim-section-title, .sim-track-foot, .sim-chart header, .sim-scrubber > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sim-section-title { flex-wrap: wrap; margin-bottom: 12px; }
+.sim-section-title h2, .sim-chart h3 { margin: 0; color: #253c2e; }
+.sim-section-title h2 { font-size: 18px; }
+.sim-section-title > span, .sim-chart header > span, .sim-track-foot {
+  font-size: 12px;
+  color: #5a685e;
+}
+.sim-settings fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.sim-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 18px; }
+.sim-fields label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
+.sim-fields input { font: inherit; }
+.sim-fields small, .sim-chart h3 small, .sim-scrubber small { font-size: 12px; color: #516458; font-weight: 500; }
+.sim-settings .sim-note, .sim-model p { margin-top: 9px; }
+.sim-model { margin-top: 12px; border-top: 1px solid #e3e9e3; padding-top: 10px; }
+.sim-model summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.sim-model .sim-fields { margin-top: 12px; }
+.sim-warning, .sim-error { margin: 10px 0 0; font-size: 13px; }
+.sim-warning { color: #79501c; }
+.sim-error { color: #9e372b; }
+.sim-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.sim-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+.sim-legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.sim-swatch { width: 21px; height: 0; border-top: 3px solid; }
+.sim-swatch.reference { color: #6b796e; border-top-style: dotted; }
+.sim-swatch.fixed { color: #226ca1; }
+.sim-swatch.adaptive { color: #ac4b19; }
+.sim-swatch.dashed { border-top-style: dashed; }
+.sim-map { display: block; width: 100%; background: #f5f7f2; border: 1px solid #dce4db; border-radius: 6px; }
+.sim-track-foot { margin-top: 7px; flex-wrap: wrap; }
+.sim-scrubber { display: grid; gap: 3px; margin: 15px 0 8px; padding-top: 12px; border-top: 1px solid #e0e7df; font-size: 13px; font-weight: 600; }
+.sim-scrubber output { color: #213f2d; font-size: 17px; font-variant-numeric: tabular-nums; }
+.sim-scrubber input[type=range] { padding: 0; min-height: 24px; border: 0; box-shadow: none; accent-color: #176643; }
+.sim-charts { display: grid; gap: 12px; }
+.sim-chart { min-width: 0; }
+.sim-chart h3 { font-size: 14px; }
+.sim-chart svg { width: 100%; display: block; cursor: crosshair; }
+.sim-chart svg text { fill: #58675d; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.sim-table-wrap { overflow-x: auto; }
+.sim-content table { width: 100%; border-collapse: collapse; text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+.sim-content th, .sim-content td { padding: 8px 7px; white-space: nowrap; border-bottom: 1px solid #e2e8e1; }
+.sim-content th:first-child { text-align: left; }
+.sim-content th { font-weight: 600; }
+.sim-content thead th { color: #58695e; font-size: 12px; }
+.sim-content caption { text-align: left; font-size: 12px; color: #59695f; }
+@media (max-width: 1150px) {
+  .sim-grid { grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); gap: 10px; }
+}
+@media (max-width: 960px) {
+  .sim-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .sim-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sim-content { padding: 12px; gap: 12px; }
+}

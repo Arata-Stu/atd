@@ -26,6 +26,18 @@ def execute(store, task, action, payload):
     if action == 'localization_validation':
         from .localization_validation import execute as validate
         return validate(store, task, payload)
+    if action == 'planning_replay':
+        from .planning_replay import execute as plan
+        return plan(store, task, payload)
+    if action == 'speed_replay':
+        from .speed_replay import execute as compare_speed
+        return compare_speed(store, task, payload)
+    if action == 'manual_drive_replay':
+        from .manual_drive_replay import execute as read_manual_drive
+        return read_manual_drive(store, task, payload)
+    if action == 'manual_drive_vo':
+        from .manual_drive_replay import execute_vo
+        return execute_vo(store, task, payload)
     if action == 'calibration':
         from .calibration import execute as calibrate
         return calibrate(store, task, payload)

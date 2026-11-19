@@ -6,9 +6,11 @@ atd_bringup_profiles() {
         $'input\tjetson\tatd_web_bridge\tinput.launch.py\tJoy・Pico入力、記録待機、観測・設定bridge\tplain' \
         $'bridge\tjetson\tatd_web_bridge\tbridge.launch.py\t観測・設定bridgeのみ（入力は別途起動）\tplain' \
         $'d455\tjetson\tatd_bringup\td455.launch.py\tD455・車両TF（bridgeなし）\tcamera' \
-        $'manual\tjetson\tatd_bringup\tmanual.launch.py\tD455・車両TF・入力・地図用記録待機\tcamera' \
-        $'localization\tjetson\tatd_bringup\tlocalization.launch.py\tプロポ手動走行・保存地図による自己位置推定\tmap' \
-        $'esc-trial\tjetson\tatd_bringup\tesc_trial_session\tESC 試験・手順受付と Jetson 端末での実行\ttrial'
+        $'manual\tjetson\tatd_bringup\tmanual.launch.py\tD455・車両TF・CH3切替のDualSense走行・地図用記録待機\tcamera' \
+        $'localization\tjetson\tatd_bringup\tlocalization.launch.py\t手動走行・自己位置と前方軌道・操舵と速度制御の監視\tmap' \
+        $'esc-trial\tjetson\tatd_bringup\tesc_trial_session\tESC 試験・手順受付と Jetson 端末での実行\ttrial' \
+        $'joy-drive\tjetson\tatd_bringup\tjoy_drive.launch.py\tCH3切替のDualSense走行・入力監視と記録待機（カメラなし）\tplain' \
+        $'autonomous\tjetson\tatd_bringup\tautonomous.launch.py\tCH3で切り替える低速・前進限定の自動走行（地図・ライン選択）\tmap'
 }
 
 atd_bringup_lookup() {

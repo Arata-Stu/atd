@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -24,7 +25,12 @@ from std_srvs.srv import SetBool, Trigger
 import yaml
 from atd_teleop_tools import profile as teleop_profiles
 
+from .auto_drive import AutoDriveWindow
 from .localization import live_observations, observation
+from .planning import live_plan, observation as planning_observation
+from .control import live_control, observation as control_observation
+from .speed_control import SpeedWindow
+from .drive_monitor import drive_monitor, joy_sample, publisher_gid, receive_feedback
 from .core import Cache, ProfileStore, TeleopProfileStore, PropoProfileStore, VehicleProfileStore, prepare_parameter_value
 
 
@@ -57,17 +63,24 @@ def parameter_value(value):
 
 class BridgeNode(Node):
     def __init__(self):
-        from atd_interfaces.msg import LocalizationStatus
+        from atd_interfaces.msg import ControlStatus, DriveCommand, JoyDriveStatus, LocalizationStatus, PlanningStatus, SpeedControlStatus
+        from atd_interfaces.srv import SetSpeedTable
         from atd_esc_trials.store import TrialStore
+        from rclpy.qos import QoSProfile, ReliabilityPolicy
         super().__init__('atd_web_bridge')
         fixed = ParameterDescriptor(read_only=True)
         defaults = {'port': 8790, 'freshness_s': 2.5, 'esc_trials_enabled': False,
             'localization_topic': '/localization/status',
+            'planning_topic': '/planning/status',
+            'control_topic': '/control/status',
+            'speed_control_topic': '/control/speed_status',
+            'auto_drive_topic': '/vehicle/auto_drive/status',
             'odometry_topic': '/localization/odometry', 'pose_topic': '/localization/pose',
             'velocity_topic': '/vehicle/velocity', 'joy_topic': '/joy',
             'joy_raw_topic': '/joy/raw', 'joy_status_topic': '/joy/status',
             'joy_node': '/atd_joy_node', 'profile_path': '/data/results/runs/input/dualsense.yaml',
             'teleop_node': '/atd_teleop_node', 'teleop_status_topic': '/teleop/status',
+            'teleop_command_topic': '/teleop/command', 'joy_drive_status_topic': '/vehicle/joy_drive/status',
             'teleop_profile_path': '/data/results/runs/input/teleop.yaml',
             'pico_status_topic': '/vehicle/pico/status', 'rc_status_topic': '/rc/status',
             'rc_node': '/atd_rc_input_node', 'rc_profile_path': '/data/results/runs/input/propo.yaml',
@@ -83,6 +96,8 @@ class BridgeNode(Node):
                 or any(not isinstance(name, str) for name in v) for k, v in self.allowed.items()):
             raise ValueError('parameter_allowlist_json must map nodes to parameter-name lists')
         self.cache = Cache(self.settings['freshness_s'])
+        self.speed_window = SpeedWindow(self.cache)
+        self.auto_drive = AutoDriveWindow()
         self.esc_trials = TrialStore()
         self.profiles = ProfileStore(self.settings['profile_path'])
         self.teleop_profiles = TeleopProfileStore(self.settings['teleop_profile_path'])
@@ -94,6 +109,13 @@ class BridgeNode(Node):
         self.subscriptions_ = []
         self.subscribe(LocalizationStatus, 'localization_topic',
                        lambda m: self.cache.put('localization', observation(m)))
+        self.subscribe(PlanningStatus, 'planning_topic',
+                       lambda m: self.cache.put('planning', planning_observation(m)))
+        self.subscribe(ControlStatus, 'control_topic',
+                       lambda m: self.cache.put('control', control_observation(m)))
+        self.subscribe(SpeedControlStatus, 'speed_control_topic', self.speed_window.receive)
+        self.subscribe(String, 'auto_drive_topic', self.receive_auto_drive, 10)
+        self.speed_table_client = self.create_client(SetSpeedTable, '/control/set_speed_table')
         self.subscribe(Odometry, 'odometry_topic', self.odometry)
         self.subscribe(PoseStamped, 'pose_topic', lambda m: self.cache.put('pose', pose_value(m.pose, m.header)))
         self.subscribe(TwistStamped, 'velocity_topic', lambda m: self.cache.put('velocity', velocity_value(m.twist, m.header)))
@@ -101,6 +123,11 @@ class BridgeNode(Node):
         self.subscribe(Joy, 'joy_raw_topic', lambda m: self.joy('raw', m))
         self.subscribe(String, 'joy_status_topic', self.status)
         self.subscribe(String, 'teleop_status_topic', self.teleop_status)
+        latest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.subscribe(DriveCommand, 'teleop_command_topic',
+                       lambda m, info: self.cache.put('manual_joy', joy_sample(m, info)), latest)
+        self.subscribe(JoyDriveStatus, 'joy_drive_status_topic',
+                       lambda m, info: receive_feedback(self.cache, m, info), latest)
         self.subscribe(String, 'pico_status_topic', self.pico_status)
         self.subscribe(String, 'rc_status_topic', self.rc_status)
         self.subscribe(String, 'vehicle_status_topic', self.vehicle_status)
@@ -116,8 +143,8 @@ class BridgeNode(Node):
             'reload': self.create_client(Trigger, self.settings['rc_node'] + '/reload_profile')}
         self.parameter_clients = {}
 
-    def subscribe(self, kind, setting, callback):
-        self.subscriptions_.append(self.create_subscription(kind, self.settings[setting], callback, qos_profile_sensor_data))
+    def subscribe(self, kind, setting, callback, qos=qos_profile_sensor_data):
+        self.subscriptions_.append(self.create_subscription(kind, self.settings[setting], callback, qos))
 
     def odometry(self, message):
         self.cache.put('pose', pose_value(message.pose.pose, message.header))
@@ -151,12 +178,13 @@ class BridgeNode(Node):
         except (ValueError, yaml.YAMLError):
             self.get_logger().warning('Invalid teleop/status YAML')
 
-    def pico_status(self, message):
+    def pico_status(self, message, info):
         try:
             if len(message.data) > 65536:
                 raise ValueError('Pico status exceeds 64 KiB')
             value = yaml.safe_load(message.data)
             if isinstance(value, dict) and type(value.get('connected')) is bool and type(value.get('streaming')) is bool:
+                value['publisher_gid'] = publisher_gid(info)
                 self.cache.put('pico_status', value)
         except (ValueError, yaml.YAMLError):
             self.get_logger().warning('Invalid vehicle/pico/status YAML')
@@ -337,15 +365,60 @@ class BridgeNode(Node):
         actual = {p['name']: p['value'] for p in reflected['items'] if p['name'] in values}
         return {'applied': actual == values, 'requested': values, 'values': actual, **reflected}
 
+    def observation_gid(self, topic_key, node):
+        return self.observation_source(topic_key, node)[1]
+
+    def observation_source(self, topic_key, node):
+        endpoints = self.get_publishers_info_by_topic(self.settings[topic_key])
+        if len(endpoints) == 1:
+            endpoint = endpoints[0]
+            name = endpoint.node_namespace.rstrip('/') + '/' + endpoint.node_name
+            if name == node and any(endpoint.endpoint_gid):
+                return 1, bytes(endpoint.endpoint_gid).hex()
+        return len(endpoints), None
+
+    def receive_auto_drive(self, message, info):
+        gid = publisher_gid(info)
+        if not gid or gid != self.observation_gid('auto_drive_topic', '/atd_auto_drive'):
+            self.auto_drive.clear()
+            return
+        try:
+            data = json.loads(message.data) if len(message.data) <= 16384 else None
+        except (ValueError, RecursionError):
+            data = None
+        self.auto_drive.receive(data, gid, time.time_ns(), time.monotonic_ns())
+
     def dispatch(self, path, method, body):
         with self.operation_lock:
             if path.startswith(('/teleop/', '/propo/', '/vehicle/')) and method in ('PUT', 'POST'):
                 if type(body.get('instance_id')) is not str or body['instance_id'] != self.identity['instance_id']:
                     raise ValueError('Jetson bridge の接続先が変更されています。状態と設定を再取得してください')
             if path == '/live/status' and method == 'GET':
-                return {**live_observations(self.cache, self.count_publishers(self.settings['localization_topic']),
-                                            self.get_clock().now().nanoseconds * 1e-9),
-                        'parameter_nodes': self.nodes(), 'topics': [self.settings[k] for k in ('odometry_topic', 'pose_topic', 'velocity_topic', 'localization_topic')]}
+                now = self.get_clock().now().nanoseconds * 1e-9
+                live = live_observations(self.cache, self.count_publishers(self.settings['localization_topic']), now)
+                plan = live_plan(self.cache, self.count_publishers(self.settings['planning_topic']), live['localization'], now)
+                count, gid = self.observation_source('auto_drive_topic', '/atd_auto_drive')
+                return {**live, 'planning': plan,
+                        'auto_drive': self.auto_drive.current(gid, time.time_ns(), time.monotonic_ns(), count),
+                        'control': live_control(self.cache, self.count_publishers(self.settings['control_topic']), plan, now),
+                        'speed_control': self.speed_window.current(self.count_publishers(self.settings['speed_control_topic']), plan, now),
+                        'parameter_nodes': self.nodes(), 'topics': [self.settings[k] for k in
+                            ('odometry_topic', 'pose_topic', 'velocity_topic', 'localization_topic', 'planning_topic',
+                             'control_topic', 'speed_control_topic', 'auto_drive_topic')]}
+            if path == '/live/speed-table' and method == 'PUT':
+                if body.get('instance_id') != self.identity['instance_id'] or not isinstance(body.get('table'), dict):
+                    raise ValueError('接続中の Jetson と採用した校正表を確認してください')
+                client = self.speed_table_client
+                if not client.wait_for_service(timeout_sec=.5) or self.count_services(client.srv_name) != 1:
+                    raise ValueError('Jetson で速度監視を含む localization を一つ起動してください')
+                request = client.srv_type.Request(table_json=json.dumps(body['table'], allow_nan=False))
+                result = self.wait(client.call_async(request))
+                if not result.saved:
+                    raise ValueError(result.message)
+                if (result.proposal_sha256 != body['table'].get('proposal_sha256')
+                        or result.run_id != body['table'].get('run_id')):
+                    raise ValueError('Jetson が保存した校正表の出典が選択と一致しません')
+                return dict(saved=True, run_id=result.run_id, proposal_sha256=result.proposal_sha256)
             if path == '/live/parameters' and method == 'POST':
                 return self.apply_parameters(body.get('node'), body['values']) if 'values' in body else self.parameters(body.get('node'))
             if path == '/esc/status' and method == 'GET':
@@ -361,7 +434,12 @@ class BridgeNode(Node):
             if path == '/esc/cancel' and method == 'POST':
                 return {'enabled': self.settings['esc_trials_enabled'], **self.esc_trials.cancel(body.get('id'))}
             if path == '/input/status' and method == 'GET':
-                return self.cache.input_status()
+                result = self.cache.input_status()
+                result['drive_monitor'] = drive_monitor(
+                    self.cache, self.observation_gid('teleop_command_topic', self.settings['teleop_node']),
+                    self.observation_gid('joy_drive_status_topic', '/atd_joy_drive'),
+                    self.observation_gid('pico_status_topic', '/atd_vehicle_interface'), time.time())
+                return result
             if path == '/teleop/status' and method == 'GET':
                 return self.cache.teleop_status()
             if path == '/teleop/profile' and method == 'GET':
@@ -438,7 +516,8 @@ def handler(node):
                 if not re.fullmatch('[0-9a-f]{32}', nonce):
                     raise ValueError('SSH adapter request identity required')
                 length = int(self.headers.get('Content-Length', '0'))
-                if not 0 <= length <= 65536:
+                limit = 262144 if self.path == '/live/speed-table' else 65536
+                if not 0 <= length <= limit:
                     raise ValueError('Request too large')
                 if self.command != 'GET' and self.headers.get('Content-Type') != 'application/json':
                     raise ValueError('JSON content-type required')

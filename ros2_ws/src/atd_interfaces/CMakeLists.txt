@@ -9,7 +9,12 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DriveCommand.msg"
   "msg/OperatorEvent.msg"
   "msg/PicoTelemetry.msg"
+  "msg/JoyDriveStatus.msg"
   "msg/LocalizationStatus.msg"
+  "msg/PlanningStatus.msg"
+  "msg/ControlStatus.msg"
+  "msg/SpeedControlStatus.msg"
+  "srv/SetSpeedTable.srv"
   DEPENDENCIES std_msgs geometry_msgs)
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

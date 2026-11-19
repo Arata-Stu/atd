@@ -173,6 +173,15 @@ def reviewed_candidates(store, run, expected):
     return proposal
 
 
+def feedforward_document(store, run_id, proposal_sha256):
+    proposal = reviewed_candidates(store, run_id, proposal_sha256)
+    table = proposal['feedforward']
+    if not table['usable']:
+        raise ValueError(table['reason'])
+    return dict(schema='atd.throttle_feedforward.v1', run_id=run_id, bag=proposal['bag'],
+                proposal_sha256=proposal_sha256, source=proposal['source'], **table)
+
+
 def selected_limits(proposal, fields):
     if not fields or len(set(fields)) != len(fields):
         raise ValueError('採用する制限を重複なく選択してください')

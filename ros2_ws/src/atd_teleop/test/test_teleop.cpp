@@ -86,6 +86,37 @@ void events_are_edges_and_require_release()
   check(!rig.core.output(0).valid, "reconnect requires release");
 }
 
+void drive_enable_uses_the_same_profile_as_the_mapped_input()
+{
+  Rig rig;
+  rig.send();
+  rig.axes[5] = .5F;
+  rig.send();
+  auto output = rig.core.output(rig.now);
+  const auto requested = [&]() {
+      return rig.core.profile().drive_requested(output.valid, output.enable_requested);
+    };
+  check(output.valid && output.throttle > 0 && !requested(), "unheld enable preserves observation only");
+  rig.buttons[5] = 1;
+  rig.send();
+  output = rig.core.output(rig.now);
+  check(requested(), "holding assigned enable allows a drive request");
+  rig.buttons[5] = 0;
+  rig.send();
+  output = rig.core.output(rig.now);
+  check(!requested(), "release disables a request with throttle still held");
+  auto profile = rig.core.profile();
+  profile.enable = -1;
+  rig.core.set_profile(profile);
+  rig.axes[5] = 0;
+  rig.send();
+  output = rig.core.output(rig.now);
+  check(requested() && !output.enable_requested, "optional enable needs no button when unassigned");
+  rig.core.ready(false, rig.now);
+  output = rig.core.output(rig.now);
+  check(!requested(), "invalid Joy cannot request drive with enable unassigned");
+}
+
 void timeouts_do_not_refresh_stale_input()
 {
   Rig rig;
@@ -264,6 +295,7 @@ void empty_or_enable_only_profile_cannot_resume()
 int main()
 {
   mapping_and_limits();
+  drive_enable_uses_the_same_profile_as_the_mapped_input();
   events_are_edges_and_require_release();
   timeouts_do_not_refresh_stale_input();
   session_config_and_invalid_values();

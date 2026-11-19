@@ -98,8 +98,8 @@ def _metric(value):
     return value
 
 
-def _segments(folder, report, start_ns, end_ns):
-    """区間境界は必ず両端を残す。その他の点は全体の表示予算に合わせて間引く。"""
+def trajectory_rows(folder, report, start_ns, end_ns, required=()):
+    """CSV の全観測をレポートの区間・順序と照合して順に返す。"""
     intervals = report['tracking_intervals']
     total = _uint(report['pose_samples'])
     max_gap_ns = round(_metric(report['gap_tolerance_s']) * 1e9)
@@ -107,19 +107,16 @@ def _segments(folder, report, start_ns, end_ns):
         raise ValueError('検証レポートの追跡区間・軌跡ファイルが不正です')
     if sum(_uint(i['samples']) for i in intervals) != total:
         raise ValueError('検証レポートの区間と総試料数が一致しません')
-    stride = max(1, (total + SAMPLE_BUDGET - 1) // SAMPLE_BUDGET)
-    segments = []
     last_stamp, last_epoch = -1, -1
     with confined(folder, 'trajectory.csv').open(newline='') as stream:
         rows = csv.DictReader(stream, strict=True)
-        if not {'stamp_ns', 'epoch', 'x_m', 'y_m'}.issubset(rows.fieldnames or []):
+        if not {'stamp_ns', 'epoch', 'x_m', 'y_m', *required}.issubset(rows.fieldnames or []):
             raise ValueError('軌跡 CSV の列を確認してください')
-        for interval in intervals:
+        for segment, interval in enumerate(intervals):
             first, end, epoch, count = (_uint(interval[k]) for k in ('first_stamp_ns', 'last_stamp_ns', 'epoch', 'samples'))
             if (count < 1 or not start_ns - 5_000_000 <= first <= end <= end_ns + 5_000_000
                     or first < last_stamp or epoch < last_epoch):
                 raise ValueError('追跡区間の範囲または順序が不正です')
-            points = []
             for i in range(count):
                 row = next(rows, None)
                 if row is None:
@@ -131,13 +128,23 @@ def _segments(folder, report, start_ns, end_ns):
                         or i == count - 1 and stamp != end or i > 0 and not 0 < stamp - last_stamp <= max_gap_ns
                         or last_epoch == epoch and stamp == last_stamp):
                     raise ValueError('軌跡 CSV の時刻・世代・位置が追跡区間と一致しません')
-                if i == count - 1 or i % stride == 0:
-                    points.append(xy)
                 last_stamp, last_epoch = stamp, epoch
-            segments.append(dict(epoch=epoch, start_s=(first-start_ns)/1e9, end_s=(end-start_ns)/1e9,
-                                 samples=count, points=points))
+                yield segment, i, stamp, xy, row
         if next(rows, None) is not None:
             raise ValueError('軌跡 CSV の試料数がレポートより多くなっています')
+
+
+def _segments(folder, report, start_ns, end_ns):
+    """各区間の始点と終点を残し、表示する軌跡の内部だけを間引く。"""
+    stride = max(1, (_uint(report['pose_samples']) + SAMPLE_BUDGET - 1) // SAMPLE_BUDGET)
+    segments = []
+    for segment, index, _, xy, _ in trajectory_rows(folder, report, start_ns, end_ns):
+        interval = report['tracking_intervals'][segment]
+        if index == 0:
+            segments.append(dict(epoch=interval['epoch'], start_s=(interval['first_stamp_ns']-start_ns)/1e9,
+                                 end_s=(interval['last_stamp_ns']-start_ns)/1e9, samples=interval['samples'], points=[]))
+        if index == interval['samples'] - 1 or index % stride == 0:
+            segments[-1]['points'].append(xy)
     return segments
 
 

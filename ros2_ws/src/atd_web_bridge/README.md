@@ -18,10 +18,14 @@ node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_a
 
 ## 入力と通信
 
-すべて購読、QoS は best effort / volatile / keep-last depth5（sensor_data）。reliable publisher も購読できる。parameter で topic を実際の bringup に合わせる。既定名は配信済みを意味しない。欠落・古いデータは null / stale として返し、模擬データで補わない。ROS 標準 `/rosout`・`/parameter_events` は省略する。
+購読の既定 QoS は best effort / volatile / keep-last depth 5（sensor_data）。自動走行状態は停止遷移も受け取るため、配信側に合わせて reliable / volatile / keep-last depth 10 を使う。parameter で topic を実際の bringup に合わせる。既定名は配信済みを意味しない。欠落・古いデータは null / stale として返し、模擬データで補わない。ROS 標準 `/rosout`・`/parameter_events` は省略する。
 
 | 既定 topic | 型 | キャッシュ |
 | --- | --- | --- |
+| /planning/status | atd_interfaces/msg/PlanningStatus | 選択ライン・前方軌道と元の車体姿勢・横ずれ・速度。有効期限と自己位置の地図・追跡世代を照合して `/live/status` の `planning` に返す |
+| /control/status | atd_interfaces/msg/ControlStatus | `/live/status` の `control` に、同じ観測の後輪軸姿勢と目標点、曲率、等価前輪舵角、先読み設定を返す。舵角を計算できない場合は null |
+| /control/speed_status | atd_interfaces/msg/SpeedControlStatus | `speed_control` に目標・推定速度、計算 CH2、プロポ手動 CH2、正規化された DualSense 入力、操作経路と直近 5 秒の履歴を返す |
+| /vehicle/auto_drive/status | std_msgs/msg/String (JSON) | 低速自動走行で、CH3・操作元、実際の送信指令と基板報告 PWM、速度、停止理由をライブ画面へ返す。速度の元時刻、USB 送信時刻、基板報告の受信時刻を保つ |
 | /localization/odometry | nav_msgs/msg/Odometry | poseとvelocity。速度はchild_frame_id |
 | /localization/pose | geometry_msgs/msg/PoseStamped | pose。上記と併用時は最後の受信を採用 |
 | /vehicle/velocity | geometry_msgs/msg/TwistStamped | velocity |
@@ -29,6 +33,8 @@ node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_a
 | /joy/raw | sensor_msgs/msg/Joy | raw |
 | /joy/status | std_msgs/msg/String | YAMLの接続・設定・機器世代 |
 | /teleop/status | std_msgs/msg/String | YAMLの操作出力可否・設定モード・反映済み役割設定 |
+| /teleop/command | atd_interfaces/msg/DriveCommand | 元の Joy 時刻を持つ操舵・スロットルの観測値 |
+| /vehicle/joy_drive/status | atd_interfaces/msg/JoyDriveStatus | 手動走行 node が CDC0 で受信した CH3・操作経路・サーボ／ESC の PWM と Joy 運転状態 |
 | /vehicle/pico/status | std_msgs/msg/String | YAMLのUSB接続・受信状態・元の受信時刻を持つ基板telemetry |
 | /rc/status | std_msgs/msg/String | YAMLのプロポ役割・設定モード・反映済み設定・入力世代 |
 
@@ -38,9 +44,15 @@ HTTP は `127.0.0.1:8790` のみ。`GET /live/status`、`POST /live/parameters`�
 
 pose は x/y/z/yaw/frame/stamp/age_s/stale、velocity は linear_mps/angular_rps/linear/frame/stamp/age_s/stale。input は bridge接続と device_connected/ready を分離し、status/raw の世代不一致・古さを成功と扱わない。Joy ready は車両の安全・停止確認ではない。
 
+`GET /input/status` の `drive_monitor` は、割り当て後の DualSense 入力を `joy`、CH3・操作元・出力 PWM を `board` に返す。入力と基板の元時刻を個別に検査し、CDC0 の報告があるときはサーボと ESC のパルス幅を µs で返す。電源異常でパルス出力が無効のときは両方とも null。監視用の CDC1 だけでも、受信できた CH3 の S.BUS raw 値と Pico の操作経路を表示できる。CDC1 には出力パルス幅が含まれず、HOST を操作している機器も識別できない。
+
 プロポ用は `GET /propo/status`、`GET/PUT /propo/profile`、`POST /propo/reload`、`POST /propo/configure`。Notebook API は `/api` を付ける。`status` は `{board, input, ready, rc_valid, input_current, configuring, availability}` を返す。Notebook adapter が付ける最上位 `connected` は bridge への接続、`board.connected` は Pico の USB 接続、`board.streaming` は新鮮な telemetry の受信を表す。未受信は null のままとし、CH を 0 で埋めない。telemetry の元 `stamp` を保持し、receiver の `age_s` に bridge での経過時間を加算する。定期的な状態再配信だけで古い信号を新鮮に扱わず、Pico・役割 node の世代と serial が一致しない入力も利用可能とは表示しない。`rc_valid` は受信時点の RC 有効判定を telemetry の期限内だけ表示する観測値で、イベント出力時の厳密な鮮度判定は RC node が行う。
 
 ## 記録状態の観測
+
+Notebook の「記録した走行」画面では、この package の `extract_drive_timeline` が停止済み bag の運転入力と基板報告を読み出す。Web アプリは選択区間を Notebook 内で取得する。Jetson の bridge は走行後の閲覧には不要。[記録と時系列表示](../../../docs/recording.md#手動走行を-notebook-で振り返る)
+
+抽出器は追跡中の `/localization/status` の符号付き速度 [m/s]、および D455 の加速度を元のヘッダー時刻で保存する。加速度 [m/s²] は bag の静的 TF で `base_link` の前方軸へ回転したセンサ位置の比力で、重力とセンサ取付位置の影響を含む。接続する TF が欠ける場合や取付姿勢が一意に定まらない場合は加速度を欠測にする。プロポ CH2 は正常かつ新鮮なプロポ運転中の S.BUS raw 値として扱う。
 
 `GET /recording/status` は `/recording/status`（std_msgs/String）のmanager状態を元stamp・ageとともに返す。`freshness_s` と `availability.status`（missing/fresh/stale）を併記し、status未受信はnull。statusには開始処理・記録中・停止処理等、直近の操作要求と前回の終了結果が含まれる。古い状態や接続断を停止済みと補完せず、開始停止のHTTP操作は受け付けない。Notebook APIは `/api` を先頭に付ける。[記録手順](../../../docs/recording.md)
 
@@ -77,6 +89,10 @@ Propo profile は `recording`・`auxiliary_1`・`auxiliary_2` の役割を CH4�
 | vehicle_profile_path | /data/results/runs/vehicle/layout.yaml | 車両配置の永続設定 |
 | freshness_s | 2.5 | 0.1〜30秒、受信monotonic時刻で鮮度判定 |
 | localization_topic | /localization/status | LocalizationStatus。使用地図・追跡状態・同じ観測時刻の姿勢と車体速度をまとめて取得 |
+| planning_topic | /planning/status | 前方軌道の入力 |
+| control_topic | /control/status | 操舵計算の監視入力 |
+| speed_control_topic | /control/speed_status | 速度・スロットル比較の監視入力 |
+| auto_drive_topic | /vehicle/auto_drive/status | CH3・操作元、送信指令・基板出力、停止理由の監視入力 |
 | odometry_topic | /localization/odometry | Odometry入力 |
 | pose_topic | /localization/pose | PoseStamped入力 |
 | velocity_topic | /vehicle/velocity | TwistStamped入力 |
@@ -86,6 +102,8 @@ Propo profile は `recording`・`auxiliary_1`・`auxiliary_2` の役割を CH4�
 | joy_node | /atd_joy_node | Joy service対象node |
 | profile_path | /data/results/runs/input/dualsense.yaml | 既存results mount内の永続配置 |
 | teleop_status_topic | /teleop/status | 操作割り当て node の状態 |
+| teleop_command_topic | /teleop/command | 割り当て後の DualSense 操舵・スロットル |
+| joy_drive_status_topic | /vehicle/joy_drive/status | Pico の CDC0 状態報告と DualSense の運転状態 |
 | teleop_node | /atd_teleop_node | Teleop service 対象 node |
 | teleop_profile_path | /data/results/runs/input/teleop.yaml | 操作の役割設定の永続配置 |
 | pico_status_topic | /vehicle/pico/status | USB receiver の基板状態 |

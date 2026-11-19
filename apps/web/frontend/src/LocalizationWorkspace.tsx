@@ -97,7 +97,7 @@ export function LocalizationWorkspace({jobs, onLog}: {jobs: Job[]; onLog: (id: s
   }
 
   return <div className="content-page validation-page">
-    <div className="page-intro"><div><h2>自己位置検証</h2><p>保存地図に別の走行 bag を位置合わせし、Raceline に対する推定軌跡と追跡の途絶を確認します。</p></div>
+    <div className="page-intro"><div><h2>自己位置検証</h2><p>保存地図に別の走行 bag を位置合わせし、推定軌跡・追跡の途絶と、走行ラインに沿った前方軌道を確認します。</p></div>
       <button className="button" onClick={() => setReload(n => n + 1)}><Icon name="refresh" size={16}/>一覧を更新</button></div>
     <section className="content-card"><div className="card-heading"><h3>検証する走行</h3></div>
       <form className="validation-form" onSubmit={e => { e.preventDefault(); void start(); }}>
@@ -116,7 +116,6 @@ export function LocalizationWorkspace({jobs, onLog}: {jobs: Job[]; onLog: (id: s
         {data && !data.available && <p className="inline-note">{data.unavailable_reason || 'Notebook で検証を実行できません。'}</p>}
         {map && <p className="small-note">地図作成 bag · {map.source_bag || '不明'}</p>}
         {map?.issue && <p className="inline-note">{map.issue}</p>}
-        {map?.ready && !map.has_raceline && <p className="small-note">この地図にはまだ Raceline がありません。検証結果には推定軌跡を表示します。</p>}
         {map?.ready && <details className="validation-options"><summary>再生設定</summary>
           <div className="validation-option-grid"><Field label="再生倍率"><input type="number" min=".05" max="4" step="any" required value={rate} onChange={e => setRate(e.target.value)}/></Field>
             <Field label="Notebook 用 VGL engine"><select value={engine} onChange={e => setEngine(e.target.value)}><option value="">自動選択</option>
@@ -138,6 +137,6 @@ export function LocalizationWorkspace({jobs, onLog}: {jobs: Job[]; onLog: (id: s
     </div>
     {historyError && <p className="inline-note" role="alert">{historyError}</p>}
     {resultError && <p className="inline-note" role="alert">{resultError}</p>}
-    {current ? <LocalizationResult key={current.id} result={current}/> : choice && !resultError && <p role="status">検証結果を読み込み中…</p>}
+    {current ? <LocalizationResult key={current.id} result={current} jobs={jobs} onLog={onLog}/> : choice && !resultError && <p role="status">検証結果を読み込み中…</p>}
   </div>;
 }

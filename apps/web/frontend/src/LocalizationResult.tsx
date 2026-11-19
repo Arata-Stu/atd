@@ -1,4 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { LINE_NAMES, savedLines } from './planning_view';
+import { ReplayPlanControls, useReplayPlanning } from './ReplayPlanning';
+import type { Job, LineKind } from './types';
+import { controlOverlay } from './control_view';
+import type { ControlConfig } from './control_view';
+import type { SpeedSettings } from './ReplaySpeed';
 import { MapCanvas } from './MapCanvas';
 import { GAP_LABELS, OUTCOMES, resultMapIssue, seconds, validationOverlay } from './localization_validation';
 import type { Observation, ValidationResult } from './localization_validation';
@@ -10,12 +16,38 @@ function Endpoint({title, sample}: {title: string; sample: Observation | null}) 
     : '観測位置なし'}</dd></div>;
 }
 
-export function LocalizationResult({result}: {result: ValidationResult}) {
+interface Props {result: ValidationResult; jobs: Job[]; onLog: (id: string) => void}
+export function LocalizationResult(props: Props) {
+  const lines = useMemo(() => savedLines(props.result.document), [props.result.document]);
+  const [line, chooseLine] = useState<LineKind>(() => lines[0] || 'raceline');
+  const [time, seek] = useState(props.result.first_tracking_delay_s ?? 0);
+  const [config, applyConfig] = useState<ControlConfig | null>(null);
+  const [speedSettings,setSpeedSettings] = useState<SpeedSettings | null>(null);
+  return <LineResult speedSettings={speedSettings} setSpeedSettings={setSpeedSettings} key={line} config={config} applyConfig={applyConfig} {...props} lines={lines} line={line} chooseLine={chooseLine} time={time} seek={seek}/>;
+}
+function LineResult({result, jobs, onLog, line, lines, chooseLine, time, seek, config, applyConfig, speedSettings, setSpeedSettings}: Props & {
+  speedSettings: SpeedSettings | null; setSpeedSettings: (value:SpeedSettings | null) => void;
+  config: ControlConfig | null; applyConfig: (c: ControlConfig | null) => void;
+  line: LineKind; lines: LineKind[]; chooseLine: (line: LineKind) => void; time: number; seek: (t: number) => void;
+}) {
   const [selection, setSelection] = useState<{index: number} | null>(null);
   const selected = selection?.index ?? null;
-  const setSelected = (index: number | null) => setSelection(index === null ? null : {index});
+  const setSelected = (index: number | null) => {
+    setSelection(index === null ? null : {index});
+    if (index !== null) {
+      const gap = result.gaps[index];
+      seek((gap.start_s + gap.end_s) / 2);
+    }
+  };
+  const seekFromTimeline = useCallback((value: number) => {
+    setSelection(null);
+    seek(value);
+  }, [seek]);
   const overlay = useMemo(() => validationOverlay(result), [result]);
   const issue = resultMapIssue(result);
+  const planningIssue = issue || (!lines.length ? '検証時の地図に生成・保存された走行ラインがありません。' :
+    !result.pose_samples ? '軌道を計算できる姿勢が記録されていません。' : '');
+  const plan = useReplayPlanning(result.id, line, planningIssue, time, jobs, config);
   const lastGap = selected === null ? undefined : result.gaps[selected];
   const diagnostics = result.states;
   return <section className="content-card validation-review" aria-label="自己位置検証の結果">
@@ -28,19 +60,20 @@ export function LocalizationResult({result}: {result: ValidationResult}) {
       <div><dt>ステレオ観測時間</dt><dd>{seconds(result.stereo_duration_s)}</dd></div>
       <div><dt>有効な姿勢</dt><dd>{result.pose_samples === null ? '—' : result.pose_samples.toLocaleString() + ' 点'}</dd></div>
     </dl>
+    <ReplayPlanControls speedSettings={speedSettings} setSpeedSettings={setSpeedSettings} line={line} lines={lines} choose={chooseLine} time={time} seek={seekFromTimeline} selection={selection} issue={planningIssue} plan={plan} onLog={onLog} config={config} applyConfig={applyConfig}/>
     <div className="validation-review-grid">
-      <section className="validation-map" aria-label="Raceline と推定軌跡">
-        <h4>Raceline と推定軌跡</h4>
+      <section className="validation-map" aria-label={LINE_NAMES[line] + ' と推定軌跡'}>
+        <h4>{LINE_NAMES[line]} と推定軌跡</h4>
         {issue ? <p className="inline-note" role="status">{issue}</p> :
           <><div className="validation-map-frame">
             <MapCanvas doc={result.document} mode="pan" overlay={overlay} selectedGap={selection} onSelectGap={setSelected}
-              visible={{centerline: false, custom: false}}/>
+              referenceLine={line} controlTarget={plan.frame?.valid ? controlOverlay(plan.frame.control, plan.frame.vehicle_pose) : undefined} pose={plan.frame?.vehicle_pose} forwardPath={plan.frame?.valid ? plan.frame.trajectory : undefined}/>
           </div>
           <div className="validation-legend" aria-label="地図の凡例">
-            <span><i className="race"/>Raceline</span><span><i className="track"/>推定軌跡</span>
+            <span><i className="race"/>{LINE_NAMES[line]}</span><span><i className="plan-path"/>前方軌道</span><span><i className="control-target"/>追従点</span><span><i className="track"/>推定軌跡</span>
             <span><i className="before"/>途絶前の最終姿勢</span><span><i className="after"/>復帰後の初回姿勢</span>
           </div>
-          {!result.document?.lines?.raceline?.points?.length && <p className="inline-note">検証時の地図に保存済みの Raceline がありません。</p>}</>}
+          </>}
         {result.pose_samples === 0 && <p className="small-note">この走行では地図上の姿勢を確定できませんでした。</p>}
         {result.pose_samples !== null && result.displayed_samples < result.pose_samples && !issue &&
           <p className="small-note">描画 {result.displayed_samples.toLocaleString()} / {result.pose_samples.toLocaleString()} 点（区間の始点・終点を保持）</p>}

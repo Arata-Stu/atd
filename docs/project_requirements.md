@@ -27,6 +27,7 @@
 | 車両 I/O 基板 | Raspberry Pi Pico ベース。受信機の S.BUS を入力し、Jetson とは USB 接続 | 参照 firmware は JPBB Rev6 / RP2040 版 Pico 用。実基板での確認は別途必要 |
 | プロポ | 6 チャンネルを基本とし、将来の10ch導入も可能性あり | Pico の CH1＝操舵・CH2＝スロットル・CH3＝操作権は固定。全16chを受信・保持し、CH4〜CH16 は Jetson 側の記録・予備役割を変更可能。予備2枠の用途は未定 |
 | 初期センサ | RealSense D455 のみ | 初期値はInfra1/2 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。各ストリーム・モードをTUIで変更 |
+| 搭載予定の RPM センサ | モータに加わる電圧に由来する信号を取得 | 駆動応答の補助指標の候補。車輪・モータ軸の実回転数と信号の対応、時間遅れは未測定 |
 | 作業用ノート PC | Ubuntu 24 系、NVIDIA RTX 4060 | 共通の OS 基準は Ubuntu 24.04。地図作成・編集・解析・可視化を担当 |
 | ストレージ | 1TB SSD を利用可能 | 搭載先、マウント先、空き容量は環境構築時に記録する |
 | OS 基準 | Ubuntu 24.04 | 2026-11-16 時点の構成想定 |
@@ -38,6 +39,8 @@
 ### 2.2. 処理の配置と通信範囲
 
 - 自動運転・DualSense 操作側の認識、自己位置推定、計画、制御と ROS 車両 I/O は Jetson 内で完結させる。プロポの基本的な手動操作は Pico 内で ESC・サーボ出力まで完結し、Jetson の稼働を必要としない。
+- プロポと Bluetooth DualSense は、車両へのスロットル要求を共通の正規化値 [−1, +1] とし、中立 0 を 1500 µs、両端を 1000／2000 µs の PWM パルス幅に対応させる。現行 Rev6 の HOST 指令は前進側 +1 が 1000 µs、制動・後退側 −1 が 2000 µs である。実車での ESC の応答は校正・確認する。
+- 速度比較ではプロポ CH2 と計算スロットルを S.BUS raw、DualSense の `/teleop/command`（`source=joy`）を正規化スロットルで保持し、Pico が選択した操作経路と照合する。Notebook では元の単位に加え、Rev6 既定の正規化値または PWM 相当値に換算して重ねられる。
 - PC から遠隔で走行制御を与えない。走行制御に PC との通信を必須としない。
 - 車載系の ROS 2 / DDS の直接探索・topic・service・action 通信を Jetson 内部に限定し、外部ネットワークへの意図しない流出を防ぐ。
 - ノート PC から自己位置等の情報を観測するため、Foxglove Bridge 等を利用する予定である。bridge を介して明示的に提供する情報の外部通信は許容する。
@@ -64,16 +67,19 @@
 - 車両モデルの初期校正にはプロポ手動走行の bag を使う。Notebook のオフライン VSLAM で得た pose から後輪車軸中央の前後速度を推定し、エンコーダのない車両の基準速度として、プロポ入力・IMU と突き合わせる。スロットルに対する加減速と操舵に対する旋回応答を実走行で同定する。[車両校正の手順](vehicle_calibration.md)
 - Notebook の共通 Web UI から受信済みの bag を選び、VO 軌跡の生成または再利用、校正解析、応答グラフの確認まで行えるようにする。記録操作は車載の Joy・プロポから行う。
 - 保存地図への自己位置推定は Jetson 内の `atd_localization` で行う。Notebook では地図作成とは別の bag を同じ構成で再生し、初期位置確定・追跡区間・喪失を評価する。Notebook UI の「自己位置検証」で地図と別走行 bag を選び、検証時の Raceline に追跡区間別の軌跡と中断前後の観測地点を重ねて確認する。Jetson の `bringup.sh localization` は地図を選択してプロポ手動走行中に実行できる。Notebook は使用中の地図・Raceline と照合した位置・向き・車体速度・追跡状態を観測する。[操作](bringup.md#プロポ手動走行中に自己位置を確認する)
+- タイムアタック用の `atd_planning` は保存済みの Raceline・Centerline・Customline を選択し、対応する前方軌道、符号付き横ずれ、目標速度と推定速度を Notebook UI に表示する。プロポ手動走行中は Jetson で観測し、別 bag では保存した自己位置と同版の地図を使って同じ計算を行う。車両の操舵・スロットル指令は発行しない。[仕様](../ros2_ws/src/atd_planning/README.md)
+- 横方向の追従計算は `atd_control` の Pure Pursuit から始める。推定前進速度に応じて先読みを連続的に変え、手動走行中と別 bag の両方で目標点・曲率を確認する。実測ホイールベースがあれば等価前輪舵角も表示する。今回の出力先は監視系。MPC・MPPI は今後の比較候補とする。[仕様](../ros2_ws/src/atd_control/README.md)
+- 速度制御の監視では車両校正で採用した前進用 FF 表と PID を共用し、目標・推定速度、計算 CH2、プロポ手動 CH2、DualSense の操作入力と経路を同じ時間軸で比較する。別 bag の自己位置推定には Notebook の GPU と cuVSLAM・cuVGL を使い、ゲイン比較には保存した軌跡を使う。Jetson 実行時は観測 topic のみを配信する。[操作手順](../apps/web/README.md#速度制御を手動入力と比較する)
 - 校正結果から Raceline の曲率・横加速度・加減速の候補と速度制御用のスロットル FF 表を作成し、Notebook の UI で観測根拠を確認できるようにする。採用する制限は地図ごとに選択して Raceline 生成へ反映する。FF 表には前進速度とプロポ入力 CH2 raw の対応、観測した速度範囲を残す。
 - 車体static TFは `atd_vehicle_description`、カメラ内部TFはRealSense driverが担当する。`base_link` を後輪回転軸中央（x前・y左・z上）とし、車体寸法とカメラ取付位置をNotebook UIから実測値で編集する。空欄は未計測として保持し、保存後のTF node再起動で適用する。CAD参考寸法と実測値、保存状態と適用中状態を区別する。
 - Joy による手動介入を想定し、DualSense を Bluetooth で Jetson に接続する予定とする。
-- Joy の操作割り当て、手動・自律の切替条件、停止・再開条件は後から決める。
+- Joy の操作割り当ては設定で変更する。低速自動走行の許可・解除はプロポの CH3 で行い、追跡喪失後は手動側を経て停車付近から再開する。
 - Joy の入力監視と軸・ボタン配置の調整は、地図・転送・ライブ表示と同じ Web アプリから行えるようにする。プロポは受信機 → S.BUS → Pico → USB → Jetson の経路とし、Jetson では値の監視と rosbag の記録開始・停止等に利用する。Pico の走行用 CH1〜CH3 は固定し、Jetson 側の CH4〜CH16 の役割を設定できる。UIは既定でCH1〜CH6のrawとPWM相当µsを表示し、10／16ch表示へ切り替えられる構成とする。実際のPWM出力・波形測定値と入力換算値を区別する。送受信機種・スイッチ位置・校正値は実機で確認する。
-- プロポの基本操作は Pico 内で完結させ、プロポ／Jetson の最終的な操作権切替も Pico 側で行う。Jetson 内での DualSense／将来自律入力の許可判断とは別の層として扱う。6ch の用途は操舵、スロットル、操作権切替、rosbag 開始／停止、未定2枠とし、未定枠に役割を割り当てない。
+- プロポの基本操作は Pico 内で完結させ、プロポ／Jetson の最終的な操作権切替も Pico 側で行う。Jetson 内での DualSense／低速自動走行入力の許可判断とは別の層として扱う。6ch の用途は操舵、スロットル、操作権切替、rosbag 開始／停止、未定2枠とし、未定枠に役割を割り当てない。
 - 入力取得・正規化と、操舵・スロットル・操作要求への役割割り当てを分ける。役割は設定で変更し、Jetson で入力・teleop を起動した後、Notebook の同じ入力画面から受信情報の監視と設定を行う。具体的な割り当ては初期値で固定しない。
 - 初回実装は `atd_interfaces` の運転要求・操作イベント型と `atd_teleop` を対象とする。正規化した要求は最終的な走行許可・PWM・実速度ではなく、出力許可判断、パルス幅変換、基板通信は後続実装で接続する。記録要求は `atd_recording` で実際の開始・停止へ接続する。
 - ESC・ステアリングサーボの制御に PCA は使わず、独自 firmware で対応する予定とする。
-- マイコンは Pico ベース、Jetson との接続は USB とする。ユーザー提供の Rev6 firmware を `atd_vehicle_interface/firmware/pico_rev6/` で Git 管理する。ESC 手順試験では CDC0 / JPB1 を採用する。実際の CH 配置・端点、ESC／サーボへの適合、停止・再開条件の ATD への反映と実機確認は別途行う。実装と取り込み元は 3.10 節に記録する。
+- マイコンは Pico ベース、Jetson との接続は USB とする。ユーザー提供の Rev6 firmware を `atd_vehicle_interface/firmware/pico_rev6/` で Git 管理する。DualSense 手動走行、低速自動走行、ESC 手順試験は CDC0 / JPB1 を排他的に使用する。実際の CH 配置・端点、ESC／サーボへの適合、停止・再開条件の ATD への反映と実機確認は別途行う。実装と取り込み元は 3.10 節に記録する。
 
 ### 2.5. Isaac ROS CLI と Docker の導入方針
 
@@ -133,8 +139,8 @@ bag の記録対象や各 bag の topic / frame は実データに合わせて�
 - Jetson では UI のブラウザ・frontend を起動しない。これは Jetson 側で必要なバックエンドや bridge を動かさないという意味ではない。
 - UI の追加でも、走行処理の Jetson 内完結、PC からの遠隔走行制御を行わないこと、車載 DDS の直接通信範囲の要件を維持する。
 - 基本機能は 2.9 節の地図・転送・ライブ表示・入力設定とする。UI サーバーは Notebook の Docker 内、Jetson との観測・設定接続は SSH 経由の loopback HTTP とし、操作・既定ポートは Web アプリの README に記録する。個別の観測 topic・周期等は実 bringup に合わせて設定する。
-- Jetson のまとめ起動は `scripts/bringup.sh` に集約し、実装済みの `localization`（保存地図と手動走行監視）、`manual`（D455・車体TF・入力監視・bridge）、`d455`（D455・車体TF）、`input`（Joy・Pico入力・役割処理・bridge）、`bridge`（bridgeのみ）を提供する。引数なしの対話端末では fzf、未導入なら番号で選び、非対話では profile を明示する。`--list` と `--dry-run` は Notebook でも使え、profile を省略した dry-run は `input` の予定を示す。実際の起動は Jetson の既存 Docker 内に限定し、車両出力・bag 記録を自動開始しない。`manual` / `input` は共通の記録managerを待機させ、Joy・プロポの割当操作で開始・停止する。
-- profile 一覧は `scripts/lib/bringup.sh` に置き、各 ROS package の実装済み launch と対応させる。D455と車体TFの統合起動を `atd_bringup` に実装する。自律走行用の profile は走行側の実装に合わせて追加する。[bringup の操作](bringup.md)に現在の対象と拡張方針を記録する。
+- Jetson のまとめ起動は `scripts/bringup.sh` に集約し、実装済みの `autonomous`（地図・ライン選択と低速前進）、`localization`（保存地図と手動走行監視）、`joy-drive`（CH3 切替の DualSense 手動走行）、`manual`（同じ走行機能と D455・車体TF・入力監視・bridge）、`d455`（D455・車体TF）、`input`（Joy・Pico入力・役割処理・bridge）、`bridge`（bridgeのみ）を提供する。引数なしの対話端末では fzf、未導入なら番号で選び、非対話では profile を明示する。`--list` と `--dry-run` は Notebook でも使え、profile を省略した dry-run は `input` の予定を示す。実際の起動は Jetson の既存 Docker 内に限定し、車両出力・bag 記録を自動開始しない。`manual` / `input` は共通の記録managerを待機させ、Joy・プロポの割当操作で開始・停止する。
+- profile 一覧は `scripts/lib/bringup.sh` に置き、各 ROS package の実装済み launch と対応させる。D455と車体TFの統合起動を `atd_bringup` に実装する。低速自動走行は同じ観測の自己位置・操舵・速度指令を照合し、Pico の HOST 許可中だけ出力する。[bringup の操作](bringup.md)に現在の対象と拡張方針を記録する。
 - setup・Docker・Python・VGL・Web UI・bringup のスクリプト実装と、Docker / ROS / GPU / 実機での結合確認は分けて扱う。
 
 ### 2.8. Docker 内の Python 環境
@@ -156,8 +162,12 @@ Notebook の VGL export は `vgl-export`、Web API は `web`、Raceline の最�
 | 地図 | rosbag から NVIDIA 公式処理で cuVSLAM / VGL 地図を準備し、保存地図の localize と点群取得後に HDMap を編集。centerline / raceline / 必要に応じた custom line を生成。駐車機能は不要 |
 | Jetson との転送 | SCP を簡単に実行する UI。Jetson → ノート PC の rosbag 受信、ノート PC → Jetson の作成地図送信 |
 | ライブ表示・調整 | bringup 実行中の観測。地図走行時の地図と自己位置推定の表示、ROS 2 parameter の動的調整、速度等の時系列プロット |
+| 自動走行の監視 | Notebook で CH3 の位置、Pico が採用した操作元、自動走行の状態と停止要求の理由を確認する。目標速度・推定速度、Jetson が送信した操舵・スロットル、Pico の報告 PWM を同じ時間軸の折れ線で比較する。スクリーンキャスト向けに、これらと走行地図・選択ライン上の自己位置と向きを一画面に表示する |
 | 車両配置・寸法 | 上面図・側面図と寸法線で寸法と入力欄を対応付け、mm／度で実測値を編集。Jetsonへ保存し、static TF node再起動で反映 |
 | 入力監視・設定 | Jetson の Joy 入力監視、物理配置の調整、操舵・スロットル・操作要求への役割設定を共通アプリへ統合。Pico USBのraw・PWM相当µs・基板状態を監視し、6／10／16ch表示とCH4〜CH16のJetson側役割設定を扱う |
+| 手動走行の表示 | CH3 の位置と実際の運転元を区別し、DualSense の操舵・スロットル [−1, 1] と Pico が CDC0 で報告するサーボ・ESC の出力パルス幅 [µs] を並べて表示する。基板未受信・出力抑止・HOST 待機を識別できること |
+| 手動走行の振り返り | 標準の rosbag 記録に同じ信号を保存する。走行後に Notebook の UI で bag を選び、記録開始からの共通時間軸とカーソルで切替・入力・出力を比較する。未収録・期限切れの系列は欠測として示す。[操作手順](recording.md#手動走行を-notebook-で振り返る) |
+| スロットルに対する車体応答 | 同じ走行の符号付き VSLAM 前後速度、車体座標に投影した IMU 比力、プロポまたは DualSense のスロットル、ESC の報告 PWM を Notebook で照合する。速度から停止付近・後退への切替時刻を確認し、追跡喪失は欠測として扱う。[記録条件と見方](recording.md#減速停止付近後退を確認する) |
 
 地図画面は cuVSLAM 地図作成、VGL 地図準備、保存地図からの点群取得、HDMap 編集を一つの流れとして提供する。元 bag と VGL 準備時の Notebook 用モデルを原則として自動選択し、前工程や資産対応に不備があれば理由と必要な操作を示す。NVIDIA 地図は点群取得前に編集・生成を開始せず、空の手動 HDMap は点群なしで編集できる。成功したジョブの表示は自動更新し、未保存編集は破棄しない。
 
@@ -257,10 +267,10 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - Map / Transfer / Live / Input を統合する。地図・転送処理は独立 worker で実行し、結果先の `runs/web/` に設定・ジョブ状態・ログを保持する。
 - 地図作成は公式 `create_map_offline.py`、VGL 地図は公式 builder / `create_cuvgl_map.py` を呼ぶ。自作 `atd_mapping` が保存地図の作業コピーと元 bag を使い、VGL hint・localize 成功後の非空点群・軌跡・TF を採取する。完了時だけ snapshot を公開して編集可能にする。apt 導入、モデル資産、GPU engine、地図成果物、点群取得成功を別に扱う。
 - map identity・VGL との対応 hash・地図生成時の平面拘束設定がない旧資産は再生成を案内し、推測で補完・自動移行しない。新規地図は平面拘束を無効と明示して記録し、取得側にも同じ値を適用する。
-- Notebook で地図・自己位置検証・車両校正を利用する場合は、Docker 内で初回に `atd-build --packages-up-to atd_localization atd_vehicle_calibration` を実行する。`atd-web check` で公式・自作 package の導入状態を診断する。
+- Notebook で地図・自己位置検証・車両校正・速度比較を利用する場合は、Docker 内で初回に `atd-build --packages-up-to atd_control atd_vehicle_calibration` を実行する。`atd-web check` で公式・自作 package の導入状態を診断する。
 - Centerline の region と、独立した `raceline` 環境による mincurv / mincurv_iqp を実装した。旧 paired / local への fallback は設けない。単体テスト、小規模閉路で実 QP / IQP solver を使うテスト、frontend の型検査・build はローカルで確認した。
 - Jetson 側に C++ component の `atd_joy` と、観測・設定用の `atd_web_bridge` を追加した。Notebook API は SSH から Jetson loopback HTTP へアクセスし、車載 DDS に直接参加しない。
-- `atd_interfaces` に正規化運転要求と操作イベント、`atd_teleop` に設定可能な役割割り当てを追加した。Notebook の入力画面に物理配置と役割設定を統合し、保存済みと反映済みを区別する。操作要求の出力までで、最終走行許可・基板通信は未実装。記録実行は `atd_recording` が担当し、操作イベントと記録結果を分ける。仕様と検証境界は [atd_teleop](../ros2_ws/src/atd_teleop/README.md)を参照する。
+- `atd_interfaces` に正規化運転要求と操作イベント、`atd_teleop` に設定可能な役割割り当てを追加した。Notebook の入力画面に物理配置と役割設定を統合し、保存済みと反映済みを区別する。観測用の操作要求を保持し、Jetson 内の手動走行用 topic に有効な軸と任意の enable ボタンの状態を反映する。記録実行は `atd_recording` が担当し、操作イベントと記録結果を分ける。仕様と検証境界は [atd_teleop](../ros2_ws/src/atd_teleop/README.md)を参照する。
 - Web UI は Notebook の Docker 内で `atd-web` を実行して起動し、ブラウザだけを Notebook ホストで開く。ホスト用の `scripts/tools/webui.sh` は `docker exec` による補助入口とする。Jetson の入力起動は `scripts/bringup.sh input`、手順・初期 schema・生成方式・制約は [Web アプリ](../apps/web/README.md)と package の README に記録する。
 - Docker build、ROS build / install、実 bag / GPU での公式処理、実 SCP、Bluetooth / evdev、実走行は対象機で別に確認する。ローカルのコード検証だけでこれらを検証済みとはしない。
 
@@ -288,7 +298,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 
 packageへの取り込み後もCホストテスト（core・S.BUS・transport・protocol・CH入替／反転）、UF2の4テスト、明示指定した元基板netlistとのGPIO 11信号照合が通過した。基板データを指定しない通常のホストテストではGPIO照合をSKIPと明示する。既存の固定版SDK・toolchainを使用した移設先でのRP2040向けRelease build、UF2生成とpayload照合も通過した。SDKの新規取得・実基板への書き込み・USB／S.BUS／PWM波形・実車の検証は行っていない。
 
-ATD 側に `atd_vehicle_interface` の CDC1 受信・状態配信と、`atd_rc_input` の Jetson 側役割処理、Notebook のプロポ監視・設定 UI を追加した。受信 node は USB 属性・固有 serial・if02 を照合し、`INFO` / `STREAM ON` のみを送信する。JPX1 の CRC・範囲・seq・時刻と S.BUS の進行を検査し、受信時刻を保った typed telemetry と監視状態を配信する。Pico が複数ある場合は明示選択が必要。CDC0 と走行制御指令は使わず、firmware は変更しない。
+ATD 側に `atd_vehicle_interface` の CDC1 受信・状態配信と、`atd_rc_input` の Jetson 側役割処理、Notebook のプロポ監視・設定 UI を追加した。受信 node は USB 属性・固有 serial・if02 を照合し、`INFO` / `STREAM ON` のみを送信する。JPX1 の CRC・範囲・seq・時刻と S.BUS の進行を検査し、受信時刻を保った typed telemetry と監視状態を配信する。Pico が複数ある場合は明示選択が必要。別 node の `atd_joy_drive` が有効な受信機・CH3 の HOST 選択・新しい中立の Joy 入力を確認してから CDC0 に手動指令を送る。CH3 を戻すと Pico が受信機の CH1／CH2 へ切り替える。[起動と切替](bringup.md#dualsense-で手動走行する)
 
 UI はraw値（0〜2047）とPWM相当値（µs）、USB・S.BUS・操作経路・電源・異常・カウンタを表示する。既定はCH1〜CH6で、6／10／16ch表示を選択・Notebookのブラウザに保持する。役割が高いCHにあれば表示数を自動で広げる。受信・ROS・APIは全16chを保持し、10chへの変更で型定義を変えない。表示数は利用中の送受信機のch数を自動検出した結果ではない。PWM相当値は参照firmwareの既定値raw172／992／1811→1000／1500／2000µsを区間補間・整数丸め・端点制限した参考表示であり、ESC・サーボの実出力や波形の実測値ではない。役割閾値はraw単位を維持し、欠落・古い入力を中立値で埋めない。
 

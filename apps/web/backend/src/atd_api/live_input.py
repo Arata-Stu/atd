@@ -18,11 +18,16 @@ def call(request: Request, path: str, method: str = 'GET', body: dict | None = N
             return {'connected': False, 'status': None, 'message': str(exc),
                     'availability': {'bridge': 'disconnected', 'status': 'missing'}}
         if method == 'GET' and path.endswith('/status'):
-            return {'connected': False, 'device_connected': False, 'ready': False,
-                    'pose': None, 'velocity': None, 'raw': None, 'normalized': None,
-                    'status': None, 'configuring': None,
-                    'board': None, 'input': None, 'rc_valid': False,
-                    'message': str(exc), 'availability': {'bridge': 'disconnected'}}
+            status = {'connected': False, 'device_connected': False, 'ready': False,
+                      'pose': None, 'velocity': None, 'raw': None, 'normalized': None,
+                      'status': None, 'configuring': None,
+                      'board': None, 'input': None, 'rc_valid': False,
+                      'message': str(exc), 'availability': {'bridge': 'disconnected'}}
+            if path == '/input/status':
+                status['drive_monitor'] = dict(joy=None, board=None, joy_reason=str(exc), board_reason=str(exc))
+            if path == '/live/status':
+                status['auto_drive'] = None
+            return status
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

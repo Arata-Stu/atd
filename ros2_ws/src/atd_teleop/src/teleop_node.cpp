@@ -133,6 +133,7 @@ public:
     if (configuring) {core_.configure(true, steady_now());}
     const auto qos = rclcpp::QoS(1).reliable().durability_volatile();
     command_pub_ = create_publisher<atd_interfaces::msg::DriveCommand>("teleop/command", qos);
+    drive_pub_ = create_publisher<atd_interfaces::msg::DriveCommand>("teleop/drive_command", qos);
     event_pub_ = create_publisher<atd_interfaces::msg::OperatorEvent>("teleop/events", qos);
     status_pub_ = create_publisher<std_msgs::msg::String>("teleop/status", qos);
     joy_sub_ = create_subscription<sensor_msgs::msg::Joy>("joy", qos,
@@ -240,6 +241,13 @@ private:
     message.throttle = output.throttle;
     message.enable_requested = output.enable_requested;
     command_pub_->publish(message);
+    // 観測用には実際の操作を残し、実車向けには同じ割り当てで enable も判定する。
+    message.valid = core_.profile().drive_requested(output.valid, output.enable_requested);
+    if (!message.valid) {
+      message.steering = 0.0F;
+      message.throttle = 0.0F;
+    }
+    drive_pub_->publish(message);
     status();
   }
 
@@ -276,6 +284,7 @@ private:
   std::string profile_path_, profile_error_, input_session_, status_state_;
   std_msgs::msg::Header input_header_;
   rclcpp::Publisher<atd_interfaces::msg::DriveCommand>::SharedPtr command_pub_;
+  rclcpp::Publisher<atd_interfaces::msg::DriveCommand>::SharedPtr drive_pub_;
   rclcpp::Publisher<atd_interfaces::msg::OperatorEvent>::SharedPtr event_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;

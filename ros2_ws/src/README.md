@@ -1,12 +1,14 @@
 # ROS 2 パッケージ
 
-自作パッケージを `ros2_ws/src/atd_<機能名>/` に配置する。入力・操作要求の経路は `atd_joy` → `atd_teleop` と、Pico監視USBの `atd_vehicle_interface` → `atd_rc_input`。`atd_interfaces` に運転要求・操作イベント・Pico受信型、`atd_web_bridge` に Notebook UI 用の観測・設定接続を置く。`atd_recording` が両入力の操作イベントからrosbag2のMCAP記録を開始・停止する。基板への走行指令と最終走行許可は未実装。
+自作パッケージを `ros2_ws/src/atd_<機能名>/` に配置する。入力・操作要求の経路は `atd_joy` → `atd_teleop` と、Pico監視USBの `atd_vehicle_interface` → `atd_rc_input`。`atd_interfaces` に運転要求・操作イベント・Pico受信型、`atd_web_bridge` に Notebook UI 用の観測・設定接続を置く。`atd_recording` が両入力の操作イベントからrosbag2のMCAP記録を開始・停止する。`atd_vehicle_interface/joy_drive` は、CH3 が Jetson を選んだときに、割り当て済みの Joy 要求を CDC0 で Pico に送る。[手動走行](../../docs/bringup.md#dualsense-で手動走行する)
 パッケージごとに `package.xml` と `CMakeLists.txt` を持ち、C++ と `ament_cmake_auto` を基本とする。
 そのパッケージの `include/`・`src/`・`launch/`・`config/`・`test/` はパッケージ内に置く。
 
 D455 の能力列挙・設定・起動は `atd_sensors`、車体static TFと永続配置設定は `atd_vehicle_description`、複数機能の起動構成は `atd_bringup` が担当する。Jetson で `scripts/build.sh --packages-up-to atd_bringup` 後、`scripts/bringup.sh manual` でD455・車体TF・入力監視をまとめて起動する。`d455` はD455・TFのみ、`input` / `bridge` は従来の入力監視用。profile は実装済みの launch と対応させ、一覧を `scripts/lib/bringup.sh` で管理する。[bringup の操作](../../docs/bringup.md)を参照する。
 
 Notebook の `atd_vehicle_calibration` は、手動走行の bag と同じ走行のオフライン VO 姿勢列から、後輪車軸の速度・加速度とプロポの操舵応答を求める。[記録から校正までの手順](../../docs/vehicle_calibration.md)
+
+Jetson の `autonomous` 起動では、`atd_vehicle_interface/auto_drive` が追跡状態と同じ元観測の Pure Pursuit・速度 FF＋PID を照合し、実測校正を使って Pico へ低速の前進指令を送る。[車両の準備と CH3 の切替](../../docs/bringup.md#低速前進の自動走行)
 
 ホストから編集する対象は、このリポジトリの `ros2_ws/src/`。
 別の ROS workspace を選択した場合、Docker ではこのディレクトリを workspace の `src/atd/` に読書き可能で mount する。

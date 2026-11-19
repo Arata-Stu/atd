@@ -88,6 +88,26 @@ export function propoPulseUs(raw: unknown): number | null {
     : 1500 + Math.floor(((raw - 992) * 500 + Math.floor(819 / 2)) / 819);
 }
 
+export type ThrottleScale = 'original' | 'normalized' | 'pulse';
+export type ThrottleMetric = 'calculated_raw' | 'propo_raw' | 'joy_throttle';
+
+/** 速度比較用。Rev6 の既定 CH2 と JPB1 の ESC 極性で換算した参考値。 */
+export function throttleInScale(metric: ThrottleMetric, value: number | null, scale: Exclude<ThrottleScale, 'original'>): number | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  if (metric === 'joy_throttle') {
+    if (value < -1 || value > 1) return null;
+    if (scale === 'normalized') return value;
+    // JPB1 は要求の大きさを千分率で受け、整数除算で中立からのパルス幅を決める。
+    const milli = Math.round(Math.abs(value) * 1000);
+    return 1500 - Math.sign(value) * Math.floor(milli / 2);
+  }
+  if (value < 0 || value > 2047) return null;
+  // PID の計算値には小数がある。換算するときだけ、送信可能な CH2 整数に丸める。
+  const pulse = propoPulseUs(metric === 'calculated_raw' ? Math.round(value) : value);
+  if (pulse === null) return null;
+  return scale === 'pulse' ? pulse : (1500 - pulse) / 500;
+}
+
 export function propoConnectionMatches(profile: PropoIdentity | null, status: PropoIdentity | undefined): boolean {
   return !!profile?.instance_id && profile.instance_id === status?.instance_id;
 }

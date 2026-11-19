@@ -1,0 +1,37 @@
+.planning-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin:0; gap:12px; }
+.planning-metrics dt { color:#54695c; font-size:12px; }
+.planning-metrics dt small { font-size:10px; color:#637567; }
+.planning-metrics dd { margin:5px 0 0; color:#234c3c; font:500 21px/1.2 ui-monospace,monospace; white-space:nowrap; }
+.planning-metrics dd small { font:400 11px/1.2 system-ui,sans-serif; color:#566c5f; }
+.planning-note { margin:.55rem 0 0; color:#675743; font-size:12px; overflow-wrap:anywhere; }
+.live-planning { padding:14px 16px; border-bottom:1px solid var(--line); }
+.planning-replay { display:grid; gap:13px; padding:16px 20px; border-bottom:1px solid var(--line); }
+.planning-header,.planning-action,.planning-time { display:flex; align-items:center; gap:8px 12px; flex-wrap:wrap; }
+.planning-header { justify-content:space-between; }
+.planning-header h4 { margin:0; }
+.planning-action label,.planning-time label { font-size:12px; font-weight:600; color:#3b5244; }
+.planning-time input { flex:1; min-width:96px; accent-color:#25745a; }
+.planning-time output { font:12px ui-monospace,monospace; color:#526457; }
+.planning-sample { margin:0; font-size:11px; color:#5c6e61; }
+.planning-legend { display:flex; align-items:center; gap:6px 14px; flex-wrap:wrap; padding:9px 16px; font-size:11px; color:#44574b; }
+.planning-legend span { display:inline-flex; align-items:center; gap:5px; }
+.planning-legend i { display:inline-block; width:16px; border-top:3px solid #538ee4; }
+.planning-legend .plan-path,.validation-legend .plan-path { width:16px; border-top:4px solid #a04715; }
+.planning-legend .plan-trail { border-color:#16835e; }
+@media(max-width:760px) { .planning-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } .planning-header { align-items:flex-start; } }
+
+.live-map.content-card { height:auto; }
+.live-map.content-card > .map-surface { flex:none; height:clamp(300px,43vh,550px); }
+.control-readout { padding-top:12px; border-top:1px solid var(--line); }
+.live-planning .control-readout { margin-top:14px; }
+.control-readout header { display:flex; align-items:baseline; gap:8px; margin-bottom:9px; }
+.control-readout h4 { margin:0; color:#3d315b; }
+.control-readout header span { color:#635c70; font-size:12px; }
+.control-metrics dd { color:#503b78; }
+.control-config { font-size:12px; margin-top:12px; color:#4e455b; }
+.control-config summary { cursor:pointer; width:fit-content; font-weight:600; }
+.control-config p { margin:8px 0 6px; }
+.control-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px 12px; margin:10px 0; }
+.control-fields label { display:grid; gap:5px; font-size:12px; }
+.control-fields input { min-width:0; width:100%; }
+.validation-legend i.control-target,.planning-legend i.control-target { box-sizing:border-box; border:2px solid #5234aa; width:10px; height:10px; border-radius:50%; background:radial-gradient(circle,#5234aa 1px,transparent 1.5px); }

@@ -1,5 +1,7 @@
 from contextlib import contextmanager
+import json
 from pathlib import Path
+import runpy
 import sys
 import types
 import unittest
@@ -17,9 +19,16 @@ class Description:
         self.entities = entities
 
 
+class Shutdown(Action):
+    pass
+
+
 class Configuration:
     def __init__(self, name):
         self.name = name
+
+    def perform(self, context):
+        return context[self.name]
 
 
 @contextmanager
@@ -34,10 +43,13 @@ def fake_launch():
             get_package_share_directory=lambda name: '/share/' + name),
         'launch': module('launch', LaunchDescription=Description),
         'launch.actions': module('launch.actions', DeclareLaunchArgument=Action,
-                                 GroupAction=Action, IncludeLaunchDescription=Action),
+                                 GroupAction=Action, IncludeLaunchDescription=Action, OpaqueFunction=Action, Shutdown=Shutdown),
+        'launch.conditions': module('launch.conditions', IfCondition=Action),
         'launch.launch_description_sources': module('launch.launch_description_sources',
                                                     PythonLaunchDescriptionSource=Action),
-        'launch.substitutions': module('launch.substitutions', LaunchConfiguration=Configuration),
+        'launch.substitutions': module('launch.substitutions', AndSubstitution=Action, LaunchConfiguration=Configuration),
+        'launch_ros.actions': module('launch_ros.actions', Node=Action),
+        'launch_ros.parameter_descriptions': module('launch_ros.parameter_descriptions', ParameterValue=Action),
     }
     with patch.dict(sys.modules, modules):
         yield
@@ -98,20 +110,101 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(declarations['recording_profile'], 'mapping')
         self.assertEqual(declarations['recording_config'], '')
 
-    def test_localization_runs_one_camera_vehicle_input_and_estimator(self):
+    def test_drive_profiles_select_joy_writer_and_matching_pico_with_or_without_camera(self):
+        launch_dir = Path(__file__).resolve().parents[1] / 'launch'
+        for profile, drive_default, recording_default, camera in (
+                ('joy_drive', 'true', 'inputs', False), ('manual', 'true', 'mapping', True),
+                ('localization', 'false', 'mapping', True)):
+            with self.subTest(profile=profile), fake_launch():
+                entry = runpy.run_path(str(launch_dir / f'{profile}.launch.py'))
+                entities = entry['generate_launch_description']().entities
+                arguments = {e.args[0]: e for e in entities if hasattr(e, 'default_value')}
+                self.assertEqual(arguments['joy_drive'].default_value, drive_default)
+                self.assertEqual(arguments['joy_drive'].choices, ['true', 'false'])
+                self.assertEqual(arguments['joy_drive_port'].default_value, '')
+                self.assertEqual(arguments['pico_serial'].default_value, '')
+                self.assertEqual(arguments['recording_profile'].default_value, recording_default)
+                writer, = [e for e in entities if getattr(e, 'executable', None) == 'joy_drive']
+                self.assertEqual((writer.package, writer.name), ('atd_vehicle_interface', 'atd_joy_drive'))
+                self.assertEqual([v.name for v in writer.condition.args[0].args], ['teleop', 'joy_drive'])
+                params, = writer.parameters
+                self.assertEqual({k: (v.args[0].name, v.value_type) for k, v in params.items()},
+                                 {'port': ('joy_drive_port', str), 'serial': ('pico_serial', str)})
+                included = [e.actions[0].args[0].args[0] for e in entities if hasattr(e, 'actions')]
+                self.assertEqual(included.count('/share/atd_web_bridge/launch/input.launch.py'), 1)
+                self.assertEqual('/share/atd_sensors/launch/d455.launch.py' in included, camera)
+                self.assertEqual('camera_config' in arguments, camera)
+
+    def test_localization_wires_planner_horizon_and_controller_to_the_vehicle_profile(self):
         from atd_bringup.launching import description
         with fake_launch():
-            groups = [item for item in description(localization=True).entities if hasattr(item, 'actions')]
+            entities = description(localization=True).entities
+            context = {e.args[0]: e.default_value for e in entities if hasattr(e, 'default_value')}
+            planning = next(e.function for e in entities if hasattr(e, 'function'))
+            plan_arguments = lambda ctx: dict(planning(ctx)[0].actions[0].launch_arguments)
+            self.assertEqual(float(plan_arguments(context)['horizon_m']), 2.)
+            context['max_lookahead_m'] = '3.5'
+            self.assertEqual(float(plan_arguments(context)['horizon_m']), 3.5)
+            groups = [g for e in entities for g in (e.function(context) if hasattr(e, 'function') else [e])
+                      if hasattr(g, 'actions')]
         included = [group.actions[0] for group in groups]
         self.assertEqual([entry.args[0].args[0] for entry in included], [
             '/share/atd_sensors/launch/d455.launch.py', '/share/atd_vehicle_description/launch/vehicle.launch.py',
-            '/share/atd_web_bridge/launch/input.launch.py', '/share/atd_localization/launch/localization.launch.py'])
-        self.assertEqual({k: v.name for k, v in included[-1].launch_arguments},
+            '/share/atd_web_bridge/launch/input.launch.py', '/share/atd_localization/launch/localization.launch.py',
+            '/share/atd_planning/launch/planning.launch.py', '/share/atd_control/launch/control.launch.py'])
+        self.assertEqual({k: v.name for k, v in included[-3].launch_arguments},
                          {k: k for k in ('map_id', 'results_root', 'engine_dir')})
+        self.assertEqual({k: v.name for k, v in included[-2].launch_arguments if k != 'horizon_m'},
+                         {k: k for k in ('map_id', 'results_root', 'line')})
+        self.assertEqual({k: v.name for k, v in included[-1].launch_arguments}, {
+            'profile': 'vehicle_profile', 'min_lookahead_m': 'min_lookahead_m',
+            'lookahead_time_s': 'lookahead_time_s', 'max_lookahead_m': 'max_lookahead_m',
+            'feedforward_path': 'feedforward_path', 'speed_kp': 'speed_kp', 'speed_ki': 'speed_ki', 'speed_kd': 'speed_kd'})
 
     def test_sensor_only_profile_does_not_start_or_configure_a_recorder(self):
-        declarations = {value.args[0] for value in self.generate(False) if hasattr(value, 'default_value')}
-        self.assertTrue({'recording', 'recording_profile', 'recording_config'}.isdisjoint(declarations))
+        entities = self.generate(False)
+        declarations = {value.args[0] for value in entities if hasattr(value, 'default_value')}
+        self.assertTrue({'recording', 'recording_profile', 'recording_config', 'joy_drive'}.isdisjoint(declarations))
+        self.assertFalse(any(getattr(e, 'executable', None) == 'joy_drive' for e in entities))
+
+    def test_autonomous_uses_one_pico_writer_and_one_speed_limit(self):
+        launch = Path(__file__).resolve().parents[1] / 'launch/autonomous.launch.py'
+        with fake_launch():
+            entities = runpy.run_path(str(launch))['generate_launch_description']().entities
+        arguments = {e.args[0]: e.default_value for e in entities if hasattr(e, 'default_value')}
+        self.assertNotIn('joy_drive', arguments)
+        self.assertEqual(arguments['max_speed_mps'], '0.5')
+        self.assertEqual(arguments['auto_calibration_path'], '/data/results/runs/vehicle/auto_drive.yaml')
+        writer, = [e for e in entities if getattr(e, 'package', None) == 'atd_vehicle_interface']
+        self.assertEqual(writer.executable, 'auto_drive')
+        shutdown, = writer.on_exit
+        self.assertIsInstance(shutdown, Shutdown)
+        self.assertIn('Pico 出力ノードが終了', shutdown.reason)
+        params, = writer.parameters
+        self.assertEqual(params['port'].args[0].name, 'auto_drive_port')
+        self.assertEqual(params['serial'].args[0].name, 'pico_serial')
+        self.assertEqual(params['map_id'].args[0].name, 'map_id')
+        self.assertEqual(params['line'].args[0].name, 'line')
+        groups = [e.actions[0] for e in entities if hasattr(e, 'actions')]
+        included = {e.args[0].args[0]: dict(e.launch_arguments) for e in groups}
+        self.assertIn('/share/atd_sensors/launch/d455.launch.py', included)
+        self.assertIn('/share/atd_localization/launch/localization.launch.py', included)
+        controller = included['/share/atd_control/launch/control.launch.py']
+        self.assertIs(controller['max_target_speed_mps'], params['max_speed_mps'].args[0])
+        self.assertIs(controller['feedforward_path'], params['feedforward_path'].args[0])
+        # Explicit map_id/line on the CLI bypasses the chooser. Validate the saved line before the writer starts.
+        context = {**arguments, 'map_id': 'course_a', 'line': 'custom'}
+        planning = next(e.function for e in entities if hasattr(e, 'function'))
+        coords = [[0., 0.], [1., 0.]]
+        route = dict(points=coords, profile=[[i, x, y, 0, 0, .2, 0] for i, (x, y) in enumerate(coords)])
+        doc = json.dumps(dict(frame='map', closed=False, lines={'custom': route})).encode()
+        with fake_launch(), patch('atd_localization.assets.map_metadata', return_value={}) as meta, \
+                patch('atd_localization.assets.verified_hdmap', return_value=doc):
+            group, = planning(context)
+            self.assertEqual(dict(group.actions[0].launch_arguments)['line'].perform(context), 'custom')
+            meta.assert_called_once_with('/data/results', 'course_a')
+            with self.assertRaisesRegex(ValueError, 'raceline'):
+                planning({**context, 'line': 'raceline'})
 
 
 if __name__ == '__main__':

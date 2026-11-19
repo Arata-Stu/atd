@@ -1,0 +1,16 @@
+# Jetson の /data/results/runs/vehicle/auto_drive.yaml にコピーし、対象車両の実測値を記入する。
+schema: atd.auto_drive.v1
+# angle_deg は後輪軸中心の等価前輪舵角（右が負、左が正）。角度の昇順に並べる。
+# servo_us は同じ定常旋回中に Pico が報告したサーボパルス幅 [µs]。
+steering:
+  - {angle_deg: null, servo_us: null}
+  - {angle_deg: 0,    servo_us: null}
+  - {angle_deg: null, servo_us: null}
+# プロポ操作中の同一時刻の CH2 raw と Pico 報告 ESC パルス幅 [µs]。
+# raw の昇順で中立（1500 µs）と前進側の点を並べる。必要なだけ点を追加できる。
+forward_throttle:
+  - {ch2_raw: null, esc_us: null}
+  - {ch2_raw: null, esc_us: null}
+# 低速前進から停止できた単発・連続ブレーキの強さ（正、0〜1）と保持時間 [s]。
+brake_level: null
+brake_hold_s: null

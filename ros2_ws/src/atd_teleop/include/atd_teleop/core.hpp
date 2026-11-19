@@ -43,6 +43,10 @@ struct Profile
   Axis steering, throttle;
   int enable{-1}, record_start{-1}, record_stop{-1};
   bool assigned() const {return steering.assigned() && throttle.assigned();}
+  bool drive_requested(bool valid, bool enable_pressed) const
+  {
+    return valid && (enable < 0 || enable_pressed);
+  }
   bool events_assigned() const {return record_start >= 0 || record_stop >= 0;}
   bool usable() const {return assigned() || events_assigned();}
   void validate() const

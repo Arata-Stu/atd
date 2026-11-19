@@ -52,6 +52,16 @@ class EntryTests(unittest.TestCase):
                                            'port:=/dev/serial/by-id/board-if00'])
         self.assertNotEqual(self.invoke('bringup.sh', 'esc-trial', ATD_TEST_HOST='jetson').returncode, 0)
 
+    def test_joy_drive_delegates_to_camera_free_launch_with_control_port(self):
+        result = self.invoke('bringup.sh', 'joy-drive')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.output.exists())
+        port = 'joy_drive_port:=/dev/serial/by-id/board-if00'
+        result = self.invoke('bringup.sh', '--dry-run', 'joy-drive', port, 'pico_serial:=012345')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.args(), ['--host', 'jetson', '--dry-run', 'ros', 'run', '--',
+            'ros2', 'launch', 'atd_bringup', 'joy_drive.launch.py', port, 'pico_serial:=012345'])
+
     def test_bringup_keeps_literal_launch_arguments_and_exit_code(self):
         marker = self.root / 'must-not-exist'
         literal = f'profile:=$(touch {marker})'
@@ -146,7 +156,9 @@ class EntryTests(unittest.TestCase):
         awk = shutil.which('awk')
         self.assertIsNotNone(awk)
         (commands / 'awk').symlink_to(awk)
-        for response, expected in (('2\n', 'bridge'), ('3\n', 'd455'), ('5\n', 'localization'), ('6\n', 'esc-trial'), ('7\n', 'quit'), ('\n', ''), ('90\n', '')):
+        for response, expected in (('2\n', 'bridge'), ('3\n', 'd455'), ('5\n', 'localization'),
+                                   ('6\n', 'esc-trial'), ('7\n', 'joy-drive'), ('8\n', 'autonomous'), ('9\n', 'quit'),
+                                   ('\n', ''), ('90\n', '')):
             with self.subTest(response=response):
                 result = subprocess.run(['/bin/bash', '-c', 'source "$1"; atd_bringup_choose',
                     'picker-test', str(helper)], input=response, text=True, capture_output=True,
@@ -172,6 +184,28 @@ class EntryTests(unittest.TestCase):
         result = self.invoke('bringup.sh', 'localization', 'map_id:=track', 'pico_serial:=PICO', ATD_TEST_HOST='jetson')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.args()[-4:], ['atd_bringup', 'localization.launch.py', 'map_id:=track', 'pico_serial:=PICO'])
+
+    def test_localization_passes_selected_line_to_jetson(self):
+        for kind in ('raceline', 'centerline', 'custom'):
+            result = self.invoke('bringup.sh', '--dry-run', 'localization', 'map_id:=track', 'line:=' + kind)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.args()[-2:], ['map_id:=track', 'line:=' + kind])
+        for line in ('line:=', 'line:=other'):
+            self.assertNotEqual(self.invoke('bringup.sh', '--dry-run', 'localization', line).returncode, 0)
+
+    def test_autonomous_uses_dedicated_launch_or_map_picker(self):
+        self.assertNotEqual(self.invoke('bringup.sh', 'autonomous', 'map_id:=track').returncode, 0)
+        result = self.invoke('bringup.sh', '--dry-run', 'autonomous')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.args()[-4:], ['run', 'atd_bringup', 'choose_localization_map', '--autonomous'])
+        for kind in ('raceline', 'centerline', 'custom'):
+            args = ['map_id:=track', 'line:=' + kind, 'max_speed_mps:=0.3']
+            result = self.invoke('bringup.sh', 'autonomous', *args, ATD_TEST_HOST='jetson')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.args()[-5:], ['atd_bringup', 'autonomous.launch.py', *args])
+        result = self.invoke('bringup.sh', '--dry-run', 'autonomous', 'map_id:=track', 'joy_drive:=true')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotEqual(self.invoke('bringup.sh', '--dry-run', 'localization', '--', '--autonomous').returncode, 0)
 
     def test_camera_dry_run_has_no_tui_and_marks_capabilities_unqueried(self):
         result = self.invoke('bringup.sh', '--dry-run', 'd455')

@@ -8,18 +8,31 @@
 ./scripts/bringup.sh
 ```
 
-引数なしでは fzf（未導入時は番号）で profile を選ぶ。`manual` / `d455` ではストリーム設定、`localization` では使用する保存地図を選ぶ。
+引数なしでは fzf（未導入時は番号）で profile を選ぶ。`manual` / `d455` ではストリーム設定、`localization` / `autonomous` では保存地図と走行ラインを選ぶ。
 
 | profile | 起動する処理 | 起動先 |
 | --- | --- | --- |
-| `manual` | D455、車体static TF、Joy・Pico入力、役割処理、地図用記録待機、bridge | `atd_bringup manual.launch.py` |
-| `localization` | manual 一式と cuVGL・cuVSLAM・追跡状態の配信 | `atd_bringup localization.launch.py` |
+| `joy-drive` | DualSense 手動走行、入力監視、入力記録待機、bridge。カメラ不要 | `atd_bringup joy_drive.launch.py` |
+| `manual` | DualSense 手動走行、D455、車体static TF、Joy・Pico入力、地図用記録待機、bridge | `atd_bringup manual.launch.py` |
+| `localization` | センサ・入力と cuVGL・cuVSLAM・前方軌道・制御計算を監視。DualSense 走行は `joy_drive:=true` で有効 | `atd_bringup localization.launch.py` |
+| `autonomous` | 低速・前進限定の自動走行。Pico の CH3 でプロポと自動運転を切替 | `atd_bringup autonomous.launch.py` |
 | `d455` | D455 と車体static TF | `atd_bringup d455.launch.py` |
 | `esc-trial` | ESC 試験用 bridge と端末での手順実行 | `atd_bringup esc_trial_session` |
 | `input` | Joy・Pico入力、役割処理、入力記録待機、bridge | `atd_web_bridge input.launch.py` |
 | `bridge` | 観測・設定bridgeのみ | `atd_web_bridge bridge.launch.py` |
 
-`manual` は手動走行時のセンサ・入力監視をまとめる名称で、車両出力や rosbag 記録は自動開始しない。`manual` / `input` は記録managerを1つ起動して待機し、Joy・プロポの割当操作で開始・停止する。プロポの基本走行は引き続き Pico 内で完結する。全 profile は Jetson ローカル専用。Notebook は Web UI と解析を担当し、車載 DDS に参加しない。
+記録 manager は待機しており、Joy・プロポの割当操作で記録を開始・停止する。プロポの基本走行は Pico 内で完結する。全 profile は Jetson ローカル専用。Notebook は Web UI と解析を担当する。
+
+## DualSense で手動走行する
+
+1. Jetson に Rev6 Pico を USB 接続し、DualSense を Jetson ホストに Bluetooth 接続する。初回は駆動輪を浮かせ、プロポの CH3 をプロポ側、スロットルを中立にする。
+2. Jetson ホストで上記の build 後、`./scripts/bringup.sh joy-drive` を実行する。初回の軸設定には Notebook の「コントローラ」で物理配置と「操作の役割」を保存し、全入力を離して「操作要求を再開」を使う。たとえば操舵は左スティック、スロットルは R2 から L2 を引く割り当てにできる。
+3. CH3 を Jetson 側に切り替え、Joy の操舵とスロットルを一度中立にする。運転許可ボタンを割り当てた場合は、中立のままボタンを押し、運転中は保持する。Jetson の端末で HOST の有効化を確認してから小さく操作し、左右と前進側の向きを確かめる。
+4. CH3 をプロポ側に戻すと、Pico が受信機の CH1・CH2 でサーボと ESC を直接駆動する。再び Jetson を選択したときや USB・Joy の再接続後は、新しい中立入力から再開する。制動から後退への中立操作は運転者が行う。
+
+D455 も使う日は `./scripts/bringup.sh manual`、保存地図・速度比較を併用する日は `./scripts/bringup.sh localization joy_drive:=true`。D455 を使ってプロポ走行だけを観察する場合は `./scripts/bringup.sh manual joy_drive:=false`。制御用は CDC0（if00）、テレメトリ用は CDC1（if02）。複数の Pico を接続している場合は `pico_serial` で1台に絞る。ESC 手順試験へ移るときは走行の bringup を先に終了する。[基板の操作条件](../ros2_ws/src/atd_vehicle_interface/README.md#dualsense-手動走行)
+
+Notebook の Docker 内で `atd-web` を起動し、[コントローラ](http://127.0.0.1:8766/#input) を開く。CH3 を切り替えると、スイッチの位置と現在の運転元を確認できる。Jetson 側に切り替えて Joy が中立になるのを待っている間は、運転元が待機になる。DualSense の操舵・スロットルは −1〜+1、Pico が報告したサーボ・ESC のパルス幅は µs で表示する。プロポ側で Joy を動かしても、運転元はプロポのままになる。走行後は同じ画面の「記録した走行」でこれらの信号を振り返れる。[記録と時系列表示の手順](recording.md#手動走行を-notebook-で振り返る)
 
 ## D455 の TUI
 
@@ -84,8 +97,8 @@ TTY で D455 profile を選び、launch引数を付けなかった場合に設�
 
 ## プロポ手動走行中に自己位置を確認する
 
-1. Notebook で左右の Infra と車体 TF を記録した走行 A から cuVSLAM 地図と VGL 地図を作り、点群取得・HDMap 編集・Raceline 生成を完了する。地図の車体フレームは後輪軸中心の `base_link` を使う。
-2. 同じコースを別に走行した bag B を Notebook に転送する。Notebook Docker 内で初回・パッケージ更新時に `atd-build --packages-up-to atd_localization` を実行し、`atd-web` を起動する。[自己位置検証](http://127.0.0.1:8766/#localization)で地図と bag B を選んで検証を開始する。結果では Raceline と推定軌跡を重ね、喪失前後の観測地点、初期位置の確定時間、追跡時間率、末尾の状態を確認できる。CLI での再生・保存先は [検証 package](../ros2_ws/src/atd_localization/README.md) を参照。
+1. Notebook で左右の Infra と車体 TF を記録した走行 A から cuVSLAM 地図と VGL 地図を作り、点群取得・HDMap 編集を行い、試したい Raceline・Centerline・Customline を生成して保存する。地図の車体フレームは後輪軸中心の `base_link` を使う。
+2. 同じコースを別に走行した bag B を Notebook に転送する。Notebook Docker 内で初回・パッケージ更新時に `atd-build --packages-up-to atd_control atd_vehicle_calibration` を実行し、`atd-web` を起動する。[自己位置検証](http://127.0.0.1:8766/#localization)で地図と bag B を選んで検証を開始する。結果では Raceline と推定軌跡を重ね、喪失前後の観測地点、初期位置の確定時間、追跡時間率、末尾の状態を確認できる。CLI での再生・保存先は [検証 package](../ros2_ws/src/atd_localization/README.md) を参照。
 3. Notebook の「データ転送」から同じ地図を Jetson に送る。VGL の export も転送し、その Jetson 用の TensorRT engine を準備する。D455 の左右 IR 解像度・optical frame と車体取付 TF は地図作成時に合わせる。[VGL のモデル転送・engine build](vgl_models.md)
 4. Jetson ホストのリポジトリで実行する。既に `manual` で起動中の場合は先にその launch を終了する。
 
@@ -95,9 +108,51 @@ TTY で D455 profile を選び、launch引数を付けなかった場合に設�
    ```
 
    地図を直接指定する場合は `./scripts/bringup.sh localization map_id:=course_a`。対応する engine が複数あるときは、表示された候補を `engine_dir:=models/vgl/<asset>/engines/<target>/<build>` で選ぶ。左右 IR を有効にした保存済み D455 設定が使われる。運転にはプロポ・Pico の手動モードを使う。
-5. Notebook Docker で `atd-web` を起動し、「データ転送」の SSH 接続先を確認して [ライブ画面](http://127.0.0.1:8766/#live)を開く。「Jetson の地図を表示」で青い Raceline に緑の実走軌跡と車両前方を示す矢印が重なる。車速は VO の車体前後速度 [m/s] で、後退は負。初期位置待ち・地図照合中・追跡中・追跡喪失・更新途絶を区別する。同じ ID でも cuVSLAM 地図や HDMap の版が異なる場合は重畳を保留する。再照合を確認できない場合は、プロポで停車し、この profile を起動し直して初期位置を確認する。
+5. Notebook Docker で `atd-web` を起動し、「データ転送」の SSH 接続先を確認して [ライブ画面](http://127.0.0.1:8766/#live)を開く。「Jetson の地図を表示」で基準ラインと実走軌跡、車両の向きを重ねて確認できる。車速は VO の車体前後速度 [m/s] で、後退は負。初期位置待ち・地図照合中・追跡中・追跡喪失・更新途絶を区別する。同じ ID でも cuVSLAM 地図や HDMap の版が異なる場合は重畳を保留する。再照合を確認できない場合は、プロポで停車し、この profile を起動し直して初期位置を確認する。
+
+同じ `localization` 起動で `atd_planning` が後輪軸中心の姿勢を選んだラインへ投影する。プロポを手動側にして走行し、ライブ画面でライン上の前方軌道、横ずれ [m]、目標速度と推定速度 [m/s] を確認する。動かすのはプロポと Pico で、planner が配信するのは観測用の `/planning/status`。対話起動では地図の選択後、生成・保存済みの候補からラインを選べる。地図 ID を直接指定した場合の既定は Raceline。選んだラインが未生成なら前方軌道は無効になり、理由が表示される。
+
+```bash
+# Jetson ホスト。地図は起動時に選択
+./scripts/bringup.sh localization line:=centerline
+./scripts/bringup.sh localization line:=custom
+```
+
+別 bag の同じ走行を比較するには、Notebook の自己位置検証で走行結果を開き、基準ラインを選んで前方軌道を計算する。時刻スライダーと再生で、手動走行の姿勢に対応した計画を確認できる。各ラインの目標速度はそのラインの保存プロファイルから求める。[planner の仕様](../ros2_ws/src/atd_planning/README.md)
+
+同じ画面で Pure Pursuit の目標点・先読み距離・目標曲率・等価前輪舵角を確認できる。Jetson のライブ計算は起動時に車両配置の実測ホイールベースを読み込む。未測定でも目標点・曲率を表示する。最小距離・先読み時間・最大距離は起動引数で指定する。以下は既定値で、長い先読みを指定すると planner の前方軌道も延びる。
+
+```bash
+./scripts/bringup.sh localization min_lookahead_m:=0.35 lookahead_time_s:=0.4 max_lookahead_m:=1.5
+```
+
+Notebook の別 bag 検証では同じ設定を画面で変更して、同じ時刻の結果を比較できる。この計算は保存済みの姿勢と速度を使う。実 bag から初めて軌跡を作る段階では、記録した D455 の左右画像・CameraInfo・TF を再生し、Notebook の GPU で cuVGL による初期姿勢候補と cuVSLAM による地図上の追跡を計算する。[Pure Pursuit の仕様](../ros2_ws/src/atd_control/README.md)
 
 地図作成・モデル選択・別 bag の再生と Jetson での手動走行はそれぞれ個別に検証する。実機の GPU における初期化時間・追跡率・位置精度はまだ未計測。[NVIDIA cuVSLAM](https://nvidia-isaac-ros.github.io/v/release-5.0/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_cuvslam/index.html)
+
+同じ起動で `atd_speed_control` が FF＋PID の計算スロットル、プロポの CH2 raw、DualSense の正規化入力を時刻で照合する。Notebook の「車両校正」で速度比較に採用した表を「ライブ」から Jetson の観測に適用する。再起動時は `/data/results/runs/vehicle/throttle_feedforward.json` から復元する。`feedforward_path` で保存先を指定できる。ゲインを指定する例は `./scripts/bringup.sh localization speed_kp:=40.0 speed_ki:=8.0 speed_kd:=1.0`。この値は観測を始めるための仮設定で、実車の同定結果は FF 表に含まれる。[別 bag とライブの比較操作](../apps/web/README.md#速度制御を手動入力と比較する)
+
+## 低速前進の自動走行
+
+**走行前の準備**　Jetson で手動走行用の `localization` を使い、同じ車両・コースで追跡できることを確認する。後輪軸中心の車体座標、実測したカメラ取付姿勢とホイールベース、速度付きの保存済み Raceline・Centerline・Customline のいずれかを使う。
+
+1. 手動走行の校正結果から採用した前進 FF 表を Jetson の `/data/results/runs/vehicle/throttle_feedforward.json` に配置する。速度上限と走りたい目標速度が校正範囲に入る表を使う。[速度 FF 表の準備](vehicle_calibration.md)
+2. 操舵角とサーボ PWM、前進側のプロポ CH2 raw と ESC PWM、低速前進から一続きで止まれたブレーキ量と保持時間を測り、Jetson の `/data/results/runs/vehicle/auto_drive.yaml` に記入する。[校正ファイルの作り方](vehicle_calibration.md#7-低速自動走行用の出力を校正する)
+3. Jetson ホストで既存の手動走行・ESC 試験を終了し、プロポの CH3 を手動側にして起動する。
+
+   ```bash
+   ./scripts/build.sh --packages-up-to atd_bringup
+   ./scripts/bringup.sh autonomous
+   ```
+
+   対話画面で地図とラインを選ぶ。引数での指定例は `./scripts/bringup.sh autonomous map_id:=course_a line:=centerline max_speed_mps:=0.4`。既定は 0.5 m/s、設定できる上限は 1.0 m/s。速度目標を FF＋PID の計算前に制限し、前進スロットルもこの速度に対応する校正範囲に制限する。
+
+4. 追跡が成立して停車を確認したら CH3 を Jetson 側に切り替える。切替後の同じ観測時刻・地図・追跡区間に対する自己位置、Pure Pursuit、FF＋PID の結果と、基板の中立出力がそろうと発進する。CH3 を手動側へ戻すと Pico 自身が受信機の CH1・CH2 に切り替える。Rev6 の手動側のスイッチ確定時間は 40 ms で、Jetson との往復を必要としない。
+5. 追跡喪失・観測の期限切れ・過速度では前進指令を取り消す。直前に正の速度と Pico の前進出力を確認済みなら、計測したブレーキを一続きで送り、中立にして HOST 出力を解除する。前進を確認できない場合は直接中立にする。USB 断では Pico の通信監視が HOST 出力を解除する。追跡が戻った後は、停車して CH3 を手動側から Jetson 側へ入れ直す。
+
+初回は駆動輪を浮かせて操舵方向・CH3 の復帰を確認する。接地後の低速試験では、追跡喪失時の実停止距離と後退に入らないことを確認する。Jetson Docker 内の `ros2 topic echo /vehicle/auto_drive/status` で許可状態、理由、制動中かどうか、基板報告の PWM を確認できる。記録時は同じ状態と `/localization/status`、`/planning/status`、`/control/status`、`/control/speed_status` が bag に入る。追跡喪失中の実停止を PWM だけから判定することはできない。
+
+Notebook の Docker 内で `atd-web` を起動し、「ライブ」を開くと、CH3 と操作元、停止理由、目標・推定速度、USB で送った指令と Pico の報告 PWM を同じ時間軸で確認できる。[Notebook での見方](../apps/web/README.md#自動走行の指令と基板出力を比較する)
 
 ## タミヤ ESC の手順試験
 

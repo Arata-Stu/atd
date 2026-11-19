@@ -4,6 +4,10 @@
     port: 8790
     freshness_s: 2.5
     localization_topic: /localization/status
+    planning_topic: /planning/status
+    control_topic: /control/status
+    speed_control_topic: /control/speed_status
+    auto_drive_topic: /vehicle/auto_drive/status
     odometry_topic: /localization/odometry
     pose_topic: /localization/pose
     velocity_topic: /vehicle/velocity
@@ -14,6 +18,8 @@
     profile_path: /data/results/runs/input/dualsense.yaml
     teleop_node: /atd_teleop_node
     teleop_status_topic: /teleop/status
+    teleop_command_topic: /teleop/command
+    joy_drive_status_topic: /vehicle/joy_drive/status
     teleop_profile_path: /data/results/runs/input/teleop.yaml
     pico_status_topic: /vehicle/pico/status
     rc_status_topic: /rc/status

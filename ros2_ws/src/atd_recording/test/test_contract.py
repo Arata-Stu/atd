@@ -37,6 +37,17 @@ class RecordingContractTest(unittest.TestCase):
                 self.assertFalse(best_effort & transient)
                 self.assertEqual(transient, {'/tf_static'})
                 self.assertTrue({'/teleop/events', '/rc/events', '/vehicle/pico/telemetry'} <= set(topics))
+                # CDC0 の報告と Joy 操作は、使った機器に応じて片側だけでも記録する。
+                manual_drive = {'/vehicle/joy_drive/status', '/teleop/command'}
+                self.assertTrue(manual_drive <= set(topics))
+                self.assertTrue(manual_drive.isdisjoint(required))
+                self.assertIn('/vehicle/joy_drive/status', best_effort)
+                self.assertIn('/localization/status', topics)
+                self.assertNotIn('/localization/status', required)
+                autonomous = {'/planning/status', '/control/status', '/control/speed_status', '/vehicle/auto_drive/status'}
+                self.assertTrue(autonomous <= set(topics))
+                self.assertTrue(autonomous.isdisjoint(required))
+                self.assertTrue({'/camera/camera/accel/sample', '/camera/camera/imu'} <= best_effort)
 
     def test_mapping_requires_stereo_and_static_tf(self):
         config = self.config('mapping')
@@ -60,7 +71,8 @@ class RecordingContractTest(unittest.TestCase):
     def test_inputs_does_not_require_camera_or_manufacture_own_messages(self):
         config = self.config('inputs')
         self.assertFalse(config.get('required_topics', []))
-        self.assertFalse(any(topic.startswith('/camera/') for topic in config['topics']))
+        self.assertEqual({topic for topic in config['topics'] if topic.startswith('/camera/')},
+                         {'/camera/camera/accel/sample', '/camera/camera/imu'})
         self.assertNotIn('/recording/status', config['topics'])
 
     def launch_module(self):

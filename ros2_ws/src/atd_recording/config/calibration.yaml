@@ -20,6 +20,12 @@
       - /teleop/command
       - /teleop/events
       - /teleop/status
+      - /vehicle/joy_drive/status
+      - /localization/status
+      - /planning/status
+      - /control/status
+      - /control/speed_status
+      - /vehicle/auto_drive/status
       - /vehicle/pico/telemetry
       - /vehicle/pico/status
       - /rc/events
@@ -52,5 +58,6 @@
       - /camera/camera/gyro/sample
       - /camera/camera/imu
       - /joy/raw
+      - /vehicle/joy_drive/status
     transient_local_topics:
       - /tf_static

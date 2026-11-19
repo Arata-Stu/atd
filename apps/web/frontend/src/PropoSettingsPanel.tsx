@@ -162,7 +162,7 @@ export function PropoSettingsPanel({ notify, onDirty }: {
         <tr><td>基板の異常表示</td><td colSpan={3}>{picoFaultText(telemetry?.fault_bits)}</td></tr>
       </tbody></table></div>
       <details><summary>受信カウンタ</summary><div className="field-grid">
-        {[['受信フレーム', telemetry?.sbus_frames], ['frame lost 累積', telemetry?.sbus_lost_frames], ['failsafe 累積', telemetry?.sbus_failsafe_frames], ['UART エラー', telemetry?.uart_errors], ['RPM エッジ数', telemetry?.rpm_edges], ['監視送信の破棄', telemetry?.tx1_dropped], ['監視要求の拒否', telemetry?.rx1_rejected]].map(([label, value]) => <div key={String(label)}><small>{label}</small><p>{rawText(typeof value === 'number' ? value : undefined)}</p></div>)}
+        {[['受信フレーム', telemetry?.sbus_frames], ['frame lost 累積', telemetry?.sbus_lost_frames], ['failsafe 累積', telemetry?.sbus_failsafe_frames], ['UART エラー', telemetry?.uart_errors], ['RPM 入力エッジ数（モータ電圧由来）', telemetry?.rpm_edges], ['監視送信の破棄', telemetry?.tx1_dropped], ['監視要求の拒否', telemetry?.rx1_rejected]].map(([label, value]) => <div key={String(label)}><small>{label}</small><p>{rawText(typeof value === 'number' ? value : undefined)}</p></div>)}
       </div></details>
 
       <div className="card-heading" style={{ marginTop: 22 }}><h3>Jetson 側の役割配置</h3><Tag>{dirty ? '未保存' : !saved ? '未設定' : applied ? '反映済み' : inputFresh && matching ? '未反映' : '反映未確認'}</Tag></div>

@@ -1,54 +1,91 @@
 #!/usr/bin/env python3
-"""Jetson のコンテナから参照できる地図を選び、通常の launch に渡す。"""
+"""Jetson のコンテナから参照できる地図・走行ラインを選ぶ。"""
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 
-from atd_localization.assets import map_metadata
+from atd_localization.assets import map_metadata, verified_hdmap
+from atd_planning.core import LINE_KEYS, ReferenceLine
+
+
+def choose(label, choices):
+    if shutil.which('fzf'):
+        result = subprocess.run(['fzf', '--prompt=' + label + ' > '],
+                                input='\n'.join(choices), stdout=subprocess.PIPE, text=True)
+        if result.returncode in (1, 130):
+            return None
+        result.check_returncode()
+        choice = result.stdout.strip()
+    else:
+        for index, name in enumerate(choices, 1):
+            print(f'{index:2d}) {name}')
+        answer = input(label + 'の番号（空欄で終了）: ').strip()
+        if not answer:
+            return None
+        if not answer.isdecimal() or not 1 <= int(answer) <= len(choices):
+            raise ValueError('一覧の番号を指定してください')
+        choice = choices[int(answer) - 1]
+    if choice not in choices:
+        raise ValueError('一覧から選択してください')
+    return choice
 
 
 def main(args):
+    autonomous = args[:1] == ['--autonomous']
+    if autonomous:
+        args = args[1:]
     roots = [arg.partition(':=')[2] for arg in args if arg.startswith('results_root:=')]
-    if len(roots) > 1 or any(arg.startswith('map_id:=') for arg in args):
-        raise ValueError('地図または results_root の指定が重複しています')
+    maps = [arg.partition(':=')[2] for arg in args if arg.startswith('map_id:=')]
+    requested = [arg.partition(':=')[2] for arg in args if arg.startswith('line:=')]
+    if len(roots) > 1 or len(maps) > 1 or len(requested) > 1:
+        raise ValueError('地図・ライン・results_root の指定が重複しています')
     root = Path(roots[0] if roots else '/data/results')
     if not root.is_absolute():
         raise ValueError('results_root はコンテナ内の絶対パスを指定してください')
     folder = root / 'maps'
-    options = []
-    if folder.is_dir():
-        for entry in sorted(folder.iterdir()):
+    if maps:
+        metadata = map_metadata(root, maps[0])
+    else:
+        options = {}
+        for entry in sorted(folder.iterdir()) if folder.is_dir() else []:
             if entry.name.startswith('.') or not entry.is_dir() or entry.is_symlink():
                 continue
             try:
-                map_metadata(root, entry.name)
+                options[entry.name] = map_metadata(root, entry.name)
             except (ValueError, OSError) as error:
                 print(f'{entry.name} は選択できません（{error}）', file=sys.stderr)
+        if not options:
+            raise ValueError(f'{folder} に選択できる地図がありません。Notebook から準備済み地図を転送してください')
+        choice = choose('自己位置推定の地図', list(options))
+        if choice is None:
+            return 0
+        metadata = options[choice]
+        args = [f'map_id:={choice}', *args]
+    if not requested:
+        document = json.loads(verified_hdmap(root, metadata))
+        lines = []
+        for name in LINE_KEYS:
+            try:
+                ReferenceLine.from_document(document, name)
+                lines.append(name)
+            except ValueError:
                 continue
-            options.append(entry.name)
-    if not options:
-        raise ValueError(f'{folder} に選択できる地図がありません。Notebook から準備済み地図を転送してください')
-    if shutil.which('fzf'):
-        result = subprocess.run(['fzf', '--prompt=自己位置推定の地図 > '],
-                                input='\n'.join(options), stdout=subprocess.PIPE, text=True)
-        if result.returncode in (1, 130):
-            return 0
-        result.check_returncode()
-        choice = result.stdout.strip()
-    else:
-        for index, name in enumerate(options, 1):
-            print(f'{index:2d}) {name}')
-        answer = input('使用する地図の番号（空欄で終了）: ').strip()
-        if not answer:
-            return 0
-        if not answer.isdecimal() or not 1 <= int(answer) <= len(options):
-            raise ValueError('一覧の番号を指定してください')
-        choice = options[int(answer) - 1]
-    if choice not in options:
-        raise ValueError('一覧の地図を選択してください')
-    os.execvp('ros2', ['ros2', 'launch', 'atd_bringup', 'localization.launch.py', f'map_id:={choice}', *args])
+        if lines:
+            line = lines[0] if len(lines) == 1 else choose('走行ライン', lines)
+            if line is None:
+                return 0
+            print(f'走行ライン: {line}', flush=True)
+            args = [*args, f'line:={line}']
+        elif autonomous:
+            raise ValueError('自動走行には速度付きの保存ラインが必要です。Notebook で生成して転送してください')
+        else:
+            print('速度付きの保存ラインがありません。自己位置推定を開始し、前方軌道は無効として表示します。',
+                  file=sys.stderr)
+    launch = 'autonomous.launch.py' if autonomous else 'localization.launch.py'
+    os.execvp('ros2', ['ros2', 'launch', 'atd_bringup', launch, *args])
 
 
 if __name__ == '__main__':

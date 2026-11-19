@@ -125,7 +125,7 @@ export function TeleopSettingsPanel({ normalized, inputReady, inputReceivedAt, n
         <p className="small-note">プレビューは現在の入力と編集中の設定による計算値です。Jetsonの実際の出力とは別です。入力設定中・未接続時は表示しません。</p>
         {fresh && matching && status?.status && <><p className="small-note">運転指令: {status.status.ready ? '入力準備済み' : '無効'} · {teleopReasonText(status.status.reason)}</p><p className="small-note">記録イベント: {status.status.events_ready === true ? '入力準備済み' : status.status.events_ready === false ? '停止中／未準備' : '未確認'}{status.status.events_reason && ` · ${teleopEventReasonText(status.status.events_reason)}`}</p></>}
       </>}
-      <p className="small-note">記録イベントの入力準備と、実際の記録状態は別です。rosbag の状態はこのページ上部で確認できます。基板への運転指令送信は未実装です。</p>
+      <p className="small-note">手動走行ではプロポの CH3 を Jetson 側に切り替え、操舵とスロットルを中立にしてください。運転許可ボタンを割り当てた場合は、ボタンを保持して操作します。rosbag の記録状態はこのページ上部で確認できます。</p>
     </div>
   </section>;
 }

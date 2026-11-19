@@ -2,9 +2,19 @@
 
 JPBB Rev6 Pico の USB CDC1（センサ側、interface `02`）から `JPX1,T` を受け取る C++20 component / standalone node。常に全16ch・電圧・受信品質・基板が報告した操作経路・fault・RPM生情報を保持し、6ch／10chプロポで同じ受信経路を使う。UIは6／10／16ch表示を選択し、rawとPWM相当µsを併記する。µsは参照firmwareの既定校正による表示用換算で、Picoから取得した実出力値や波形測定値ではない。Pico の基本的な手動操作はこの node や Jetson に依存しない。
 
-この段階では CDC0 を開かず、走行・arm・heartbeat・BOOTSEL は送信しない。CDC1 に送るのは `INFO` と `STREAM ON` だけ。Pico 内の CH1/2/3 や PWM 設定を変更する機能はない。firmware の編集元はこの package の [firmware/pico_rev6/](firmware/pico_rev6/README.md) に同梱する。
+テレメトリ node が CDC1 に送るのは `INFO` と `STREAM ON`。DualSense 手動走行には別の `joy_drive` node が制御用 CDC0 を使う。firmware の編集元はこの package の [firmware/pico_rev6/](firmware/pico_rev6/README.md) に同梱する。
 
 firmware は独立した CMake project で、通常の `colcon build` は ROS node だけを build する。小さい firmware のソース・テスト・説明は `share/atd_vehicle_interface/firmware/pico_rev6/` にも install し、SDK checkout と生成バイナリは含めない。Pico 用SDK・toolchainは別途準備する。firmware のホストテスト・ARM build・書き込み手順は上記READMEを参照する。ソースの同梱で、実基板へ同じ版が書き込まれたことを検証したとは扱わない。
+
+## DualSense 手動走行
+
+`atd_joy_drive` は Jetson の役割設定済み `/teleop/drive_command` を受け、USB CDC0 (if00) の JPB1 で Rev6 に操舵・スロットルを送る。入力の enable ボタンを設定した場合は保持を要する。現在の CH3 は同じ制御ポートの基板報告から判定する。接続時の中立・HOST 解除フレームで状態配信を開始し、有効な受信機と CH3 の HOST 許可、新しい中立の Joy 要求、中立での HOST 経路確立を順に確認してから操作値を送る。受信機なしの USB 接続では走行しない。
+
+プロポ側では Pico が CH1・CH2 の値を直接使う。Joy の入力失効・設定変更・運転許可ボタン解放時は HOST を解除する。USB 断や送信停止時は Pico の watchdog が働く。負スロットルは Rev6 の逆側パルスを要求し、停止や後退開始の判定と中立操作は運転者が行う。基板上のパルス幅・機械的な応答は実機で確認する。
+
+通常は `./scripts/bringup.sh joy-drive` を使う。CDC0 は排他で開き、ESC 手順試験と同時には使用できない。[CH3 切替と起動](../../../docs/bringup.md#dualsense-で手動走行する)
+
+この node は CDC0 の JPB1 状態フレームを `/vehicle/joy_drive/status` に公開する。CH3 の受信パルス幅、操作経路、電源などの異常、サーボ・ESC の出力値、Joy の運転状態を Notebook から確認できる。出力値の基準時刻は Jetson が基板報告を受けた時刻で、元の操作時刻は `/teleop/command` が保持する。
 
 ## 機器の識別と受信
 
@@ -27,9 +37,15 @@ node / executable は `atd_vehicle_interface` / `atd_vehicle_interface_node`、c
 
 `rc_valid` は受信時点の観測条件であり、走行許可ではない。JPX1の受信期限に加え、`sbus_fresh`、`sbus_age_ms<=50`、frame_lost / failsafe のないこと、ホストで確認したS.BUSカウンタの進行を要求する。telemetryだけ再配信されてもRCの期限を更新しない。下流も受信期限・元stamp・sessionを確認し、再接続で保持ボタンを新しい押下として扱わない。`sbus_age_ms` は最後の構造正常フレームからの時間で、最後の正常制御値の年齢とは異なる。
 
-`active_path` は0待機・1プロポ・2HOST・3異常。`fault_bits`、`sbus_flags` は元の値を保持する。RPMは累積edge・周期等の生情報で、PPR未確定のRPM値や無パルス時の断線を推定しない。IMUの模擬値は作らない。
+`active_path` は0待機・1プロポ・2HOST・3異常。`fault_bits`、`sbus_flags` は元の値を保持する。`rpm_*` は基板入力で観測した累積エッジ数・周期・鮮度を表す。搭載予定のセンサの信号源はモータに加わる電圧で、機械的な回転との関係と応答の遅れは未測定。BEC 電圧は別の `vbec_mv` で取得する。
 
 ## 起動
+
+低速自動走行では専用の `auto_drive` が制御ポート CDC0 を開き、CH3 の HOST 許可中に同時刻の Pure Pursuit・速度 FF＋PID を実測校正に従って送る。Jetson ホストの `./scripts/bringup.sh autonomous` から使用する。[校正、手動への復帰、追跡喪失時の停止](../../../docs/bringup.md#低速前進の自動走行)
+
+自動走行の `/vehicle/auto_drive/status` は JSON を載せた `std_msgs/msg/String`。`command.stamp_ns` は JPB1 フレーム全体を USB に書き込んだ Jetson 時刻、`pico.stamp_ns` は Pico の状態フレームを受信した Jetson 時刻。両フレームの連番は独立している。`command.steering` と `throttle` は実送信した千分率を正規化した値で、制動時のスロットルは負。指令から換算した `servo_us`・`esc_us` は HOST 解除で null になり、基板の報告値は引き続き `pico` に入る。
+
+`speed` は同じ地図・追跡区間・元観測時刻の目標速度と推定速度 [m/s]。CH3 がプロポ側でも表示でき、追跡喪失や期限切れで null になる。`last_stop` は最後に自動走行を停止または開始を抑止した時刻と理由で、プロポへの切替後も同じノードのセッション内で参照できる。
 
 ```bash
 ./scripts/build.sh --packages-up-to atd_web_bridge

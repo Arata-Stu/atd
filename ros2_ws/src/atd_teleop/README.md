@@ -12,6 +12,7 @@ Jetson の `atd_joy` が正規化した入力に、操舵・駆動要求と操�
 | 購読 | `/joy/ready` | std_msgs/msg/Bool | 入力層の利用可否。鮮度も検査 |
 | 購読 | `/joy/status` | std_msgs/msg/String | YAML の ready / connected / configuring / profile_valid / generation / instance_id |
 | 配信 | `/teleop/command` | atd_interfaces/msg/DriveCommand | 既定100Hz、source=joy。利用不可時は valid=false・中立・enable=false |
+| 配信 | `/teleop/drive_command` | atd_interfaces/msg/DriveCommand | Jetson での手動走行用。enable が未割り当て、または割り当てボタンを保持中の有効な操作を配信。入力無効・ボタン解放時は valid=false・両軸0 |
 | 配信 | `/teleop/events` | atd_interfaces/msg/OperatorEvent | RECORD_START / RECORD_STOP の新規押下だけ。一回の要求であり、記録成功通知ではない |
 | 配信 | `/teleop/status` | std_msgs/msg/String | 1Hzと状態変化時。設定状態、理由、active profile、入力セッション、要求値 |
 

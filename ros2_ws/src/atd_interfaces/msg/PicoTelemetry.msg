@@ -12,6 +12,7 @@ uint32 sbus_failsafe_frames
 uint32 uart_errors
 uint8 sbus_flags
 uint16[16] channels
+# 搭載予定のセンサはモータ印加電圧由来。以下は基板入力のエッジ・周期で、実回転数への換算は未校正。
 uint32 rpm_edges
 uint32 rpm_last_us32
 uint32 rpm_period_us32

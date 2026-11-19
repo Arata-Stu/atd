@@ -17,11 +17,15 @@ ros2 launch atd_recording recording.launch.py profile:=inputs
 | --- | --- | --- |
 | mapping | 左右 IR Image / CameraInfo、`/tf_static` | RGB、IMU、動的 TF、Joy / プロポ / Pico / 車体設定の状態 |
 | calibration | mapping の必須 topic、accel / gyro sample、Pico telemetry | TF、入力・状態 |
-| inputs | カメラ不要。保存成功には記録メッセージが必要 | TF、Joy / プロポ / Pico / 車体設定の状態 |
+| inputs | カメラ不要。保存成功には記録メッセージが必要 | TF、Joy / プロポ / Pico / 車体設定の状態、起動中の D455 加速度・自己位置状態 |
 
 `topics` に列挙した topic だけを購読する。後から出現する任意 topic は rosbag2 の discovery で取得する。自身の `/recording/status` は記録対象にできない。inputs の空 bag が自身の状態通知だけで成功することを防ぐ。
 
+3つの標準プロファイルはいずれも、割り当て後の DualSense 操舵・スロットル（−1〜+1）を `/teleop/command` に、Pico の CH3、操作経路、サーボ・ESC の報告値（µs）と Joy の運転状態を `/vehicle/joy_drive/status` に記録する。後者は `atd_joy_drive` の best effort 配信を購読する。両方を収録するときは `joy-drive` または `manual` を起動し、Joy／プロポに割り当てたスイッチで記録を開始する。各信号には元の時刻と有効状態が残る。監視専用の `input` では、受信機の入力と基板経路を `/vehicle/pico/telemetry` に記録できる。CDC0 の出力パルス幅を収録するには手動走行 node の起動が必要になる。
+
 ## 入力と状態
+
+各プロファイルは起動中の `/localization/status` を記録する。自己位置ノードが追跡中に報告する `speed_mps` は、そのステレオ観測時刻における車体前方を正とする速度 [m/s]。D455 の加速度には `/camera/camera/accel/sample`、統合 IMU 設定では `/camera/camera/imu` と、取付姿勢を特定する `/tf_static` を使う。地図を使わずに記録し、走行後のステレオ VO で速度を得る場合は、左右 IR 画像と CameraInfo を含む `mapping` または `calibration` を選ぶ。
 
 - `/teleop/events`、`atd_interfaces/msg/OperatorEvent`、`source=joy`
 - `/rc/events`、同型、`source=propo`

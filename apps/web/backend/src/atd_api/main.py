@@ -165,12 +165,7 @@ def create_app(record_root=None, result_root=None, static_dir=None):
 
     @app.get('/api/calibration/runs/{run_id}/feedforward.json')
     def calibration_feedforward(run_id: str, proposal_sha256: str):
-        proposal = calibration.reviewed_candidates(store, run_id, proposal_sha256)
-        table = proposal['feedforward']
-        if not table['usable']:
-            raise ValueError(table['reason'])
-        return JSONResponse(content=dict(schema='atd.throttle_feedforward.v1', run_id=run_id, bag=proposal['bag'],
-                                         proposal_sha256=proposal_sha256, source=proposal['source'], **table),
+        return JSONResponse(content=calibration.feedforward_document(store, run_id, proposal_sha256),
                             headers={'Content-Disposition': f'attachment; filename="throttle-ff-{run_id}.json"'})
 
     @app.get('/api/calibration/runs/{run_id}/{filename}')
@@ -339,6 +334,14 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     from .localization_results import router as validation_results_router
     app.include_router(validation_router, prefix='/api')
     app.include_router(validation_results_router, prefix='/api')
+    from .planning_replay import router as planning_replay_router
+    app.include_router(planning_replay_router, prefix='/api')
+    from .speed_replay import router as speed_replay_router
+    app.include_router(speed_replay_router, prefix='/api')
+    from .speed_tables import router as speed_tables_router
+    app.include_router(speed_tables_router, prefix='/api')
+    from .manual_drive_replay import router as manual_drive_replay_router
+    app.include_router(manual_drive_replay_router, prefix='/api')
     from .live_input import router
     app.include_router(router, prefix='/api')
     static = Path(static_dir or os.environ.get('ATD_WEB_STATIC_DIR', Path(__file__).resolve().parents[3] / 'frontend/dist'))

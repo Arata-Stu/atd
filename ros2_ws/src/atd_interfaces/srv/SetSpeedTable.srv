@@ -1,0 +1,7 @@
+# Jetson の速度プレビューに適用する校正済み FF 表。
+string table_json
+---
+bool saved
+string run_id
+string proposal_sha256
+string message

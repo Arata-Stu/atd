@@ -1,4 +1,4 @@
-"""Pico Rev6 の CDC0 を排他使用するローカル ESC 試験用 JPB1 通信。"""
+"""Pico Rev6 の CDC0 を排他使用するJoy 手動走行と ESC 試験用の JPB1 通信。"""
 import binascii
 import fcntl
 import math
@@ -9,6 +9,7 @@ import select
 import stat
 import termios
 import time
+from time import time_ns
 import tty
 
 
@@ -16,6 +17,7 @@ _STATUS_FIELDS = ('sequence', 'rx_steer_us', 'rx_throttle_us', 'rx_mode_us', 'se
                   'esc_us', 'vbec_mv', 'selector', 'active_path', 'fault_bits')
 # S は 50ms 周期。指令 timeout (200ms) より先にホスト側でもセッションを失効させる。
 _FRESH_S = .15
+_MODE_UNKNOWN = 1 << 3  # Rev6, CH3 中間位置
 
 
 def _serial(tty_device):
@@ -33,16 +35,20 @@ def _serial(tty_device):
     raise ValueError('選択したポートは JPBB Rev6 Pico の CDC0 (if00) ではありません')
 
 
-def discover_ports(sysfs=Path('/sys/class/tty'), dev=Path('/dev')):
+def _devices(sysfs, dev):
     candidates = []
     for tty_dir in sorted(sysfs.glob('ttyACM*')):
         try:
-            _serial(tty_dir / 'device')
+            serial = _serial(tty_dir / 'device')
             if (dev / tty_dir.name).is_char_device():
-                candidates.append(str(dev / tty_dir.name))
+                candidates.append((str(dev / tty_dir.name), serial))
         except (ValueError, OSError):
             continue
     return candidates
+
+
+def discover_ports(sysfs=Path('/sys/class/tty'), dev=Path('/dev')):
+    return [port for port, _ in _devices(sysfs, dev)]
 
 
 def _identify(fd, sysfs=Path('/sys/dev/char')):
@@ -73,34 +79,119 @@ def _decode(line):
     return fields
 
 
-class Board:
-    """Jetson 上で一試験だけを実行する。異常・disable後の再armには新しいセッションが必要。"""
+class _ControlPort:
+    """CDC0 の識別と排他、CRC・連番を検査する JPB1 transport。"""
 
-    def __init__(self, port):
+    def __init__(self, port, serial=''):
         self.port = port
+        self._wanted_serial = serial
         self.fd = None
         self.serial = None
         self._sequence = 0
         self._buffer = bytearray()
         self._sample = None
         self._received = 0.
+        self._report_stamp_ns = 0
         self._sent = 0.
-        self._armed = False
-        self._ended = False
         self._verified = False
         self._short_write = False
 
-    def __enter__(self):
-        if self._ended or self.fd is not None:
-            raise RuntimeError('この試験のポートは使用済みです')
-        self.fd = os.open(self.port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK | os.O_CLOEXEC)
+    def _open_port(self):
+        if self.fd is not None:
+            raise RuntimeError('CDC0 は開かれています')
+        wanted = self._wanted_serial
+        port = self.port
+        if not port:
+            devices = [(p, s) for p, s in _devices(Path('/sys/class/tty'), Path('/dev'))
+                       if not wanted or wanted.casefold() == s.casefold()]
+            if len(devices) != 1:
+                raise RuntimeError(f'対象の Pico Rev6 CDC0 は {len(devices)} 件です。接続または固有 ID を確認してください')
+            port, wanted = devices[0]
+        self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK | os.O_CLOEXEC)
         try:
             self.serial = _identify(self.fd)
+            if wanted and wanted.casefold() != self.serial.casefold():
+                raise ValueError('選択した CDC0 の Pico 固有 ID が一致しません')
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             fcntl.ioctl(self.fd, termios.TIOCEXCL)
+            self._verified = True
             tty.setraw(self.fd, termios.TCSANOW)
             termios.tcflush(self.fd, termios.TCIOFLUSH)
-            self._verified = True
+        except BaseException:
+            self._close_port()
+            raise
+
+    def _close_port(self):
+        if self.fd is not None:
+            try:
+                if self._verified and hasattr(termios, 'TIOCNXCL'):
+                    fcntl.ioctl(self.fd, termios.TIOCNXCL)
+            except OSError:
+                pass
+            finally:
+                os.close(self.fd)
+                self.fd = None
+                self._verified = False
+
+    def _write(self, throttle, enabled, reverse=False, steering=0.):
+        milli = round(throttle * 1000)
+        negative = max(0, -milli)
+        forward, reverse_milli, brake = max(0, milli), negative if reverse else 0, 0 if reverse else negative
+        flags = 3 if enabled else 1
+        payload = f'JPB1,C,{self._sequence},{round(steering * 1000)},{forward},{reverse_milli},{brake},{flags}'
+        frame = _packet(payload.encode('ascii'))
+        # 途中で途切れた前の指令を firmware の行パーサで破棄してから disable を送る。
+        if self._short_write:
+            frame = b'\x00\n' + frame
+        if os.write(self.fd, frame) != len(frame):
+            self._short_write = True
+            raise RuntimeError('Pico に制御フレーム全体を書き込めませんでした')
+        self._short_write = False
+        self._sequence = (self._sequence + 1) & 0xffffffff
+        self._sent = time.monotonic()
+
+    def _samples(self, wait=0.):
+        if not select.select([self.fd], [], [], wait)[0]:
+            return
+        chunk = os.read(self.fd, 4096)
+        if not chunk:
+            raise RuntimeError('Pico との通信が切断されました')
+        received_ns = time_ns()
+        self._buffer.extend(chunk)
+        while b'\n' in self._buffer:
+            line, _, rest = self._buffer.partition(b'\n')
+            self._buffer = bytearray(rest)
+            sample = _decode(bytes(line).rstrip(b'\r'))
+            if self._sample and sample['sequence'] != ((self._sample['sequence'] + 1) & 0xffffffff):
+                raise RuntimeError('Pico の状態シーケンスが途切れました')
+            self._sample = sample
+            self._received = time.monotonic()
+            self._report_stamp_ns = received_ns
+            yield sample
+        if len(self._buffer) > 192:
+            raise RuntimeError('Pico 状態フレームが長すぎます')
+
+
+def _host_selected(sample):
+    # Rev6 は受信機未検出時も selector=1 を返す。この場合 CH1〜3 は 0。
+    return (sample['selector'] == 1 and sample['fault_bits'] == 0
+            and 1700 <= sample['rx_mode_us'] <= 2000
+            and all(1000 <= sample[k] <= 2000 for k in ('rx_steer_us', 'rx_throttle_us')))
+
+
+class Board(_ControlPort):
+    """Jetson 上で一試験だけを実行する。異常・disable後の再armには新しいセッションが必要。"""
+
+    def __init__(self, port):
+        super().__init__(port)
+        self._armed = False
+        self._ended = False
+
+    def __enter__(self):
+        if self._ended:
+            raise RuntimeError('この試験のポートは使用済みです')
+        self._open_port()
+        try:
             self._write(0, False)
             self._wait_path(0)
             return self
@@ -117,52 +208,16 @@ class Board:
                     self._abort()
         finally:
             self._ended = True
-            if self.fd is not None:
-                os.close(self.fd)
-                self.fd = None
-
-    def _write(self, throttle, enabled, reverse=False):
-        milli = round(throttle * 1000)
-        negative = max(0, -milli)
-        forward, reverse_milli, brake = max(0, milli), negative if reverse else 0, 0 if reverse else negative
-        flags = 3 if enabled else 1
-        payload = f'JPB1,C,{self._sequence},0,{forward},{reverse_milli},{brake},{flags}'
-        frame = _packet(payload.encode('ascii'))
-        # 途中で途切れた前の指令を firmware の行パーサで破棄してから disable を送る。
-        if self._short_write:
-            frame = b'\x00\n' + frame
-        if os.write(self.fd, frame) != len(frame):
-            self._short_write = True
-            raise RuntimeError('Pico に制御フレーム全体を書き込めませんでした')
-        self._short_write = False
-        self._sequence = (self._sequence + 1) & 0xffffffff
-        self._sent = time.monotonic()
+            self._close_port()
 
     def _receive(self, *, wait=0., expected_path=None):
-        if not select.select([self.fd], [], [], wait)[0]:
-            return
-        chunk = os.read(self.fd, 4096)
-        if not chunk:
-            raise RuntimeError('Pico との通信が切断されました')
-        self._buffer.extend(chunk)
-        while b'\n' in self._buffer:
-            line, _, rest = self._buffer.partition(b'\n')
-            self._buffer = bytearray(rest)
-            sample = _decode(bytes(line).rstrip(b'\r'))
-            if self._sample and sample['sequence'] != ((self._sample['sequence'] + 1) & 0xffffffff):
-                raise RuntimeError('Pico の状態シーケンスが途切れました')
-            if not (sample['selector'] == 1 and sample['fault_bits'] == 0
-                    and 1700 <= sample['rx_mode_us'] <= 2000
-                    and all(1000 <= sample[k] <= 2000 for k in ('rx_steer_us', 'rx_throttle_us'))):
+        for sample in self._samples(wait):
+            if not _host_selected(sample):
                 raise RuntimeError('プロポが HOST を許可していないか、Pico が異常を報告しました')
             if expected_path is not None and sample['active_path'] != expected_path:
                 raise RuntimeError('Pico の操作権が変化しました')
             if expected_path == 2 and sample['servo_us'] != 1500:
                 raise RuntimeError('試験中にステアリングが中立から変化しました')
-            self._sample = sample
-            self._received = time.monotonic()
-        if len(self._buffer) > 192:
-            raise RuntimeError('Pico 状態フレームが長すぎます')
 
     def _wait_path(self, target):
         # S の seq は基板独自の連番。実際に選ばれた path と PWM を確認する。
@@ -219,3 +274,114 @@ class Board:
         except (ValueError, TypeError, OSError, RuntimeError):
             self._abort()
             raise
+
+
+class ManualBoard(_ControlPort):
+    """Joy 用の非ブロッキング CDC0 接続。arm と運転指令を別の S フレームで照合する。"""
+
+    def __init__(self, port='', serial=''):
+        super().__init__(port, serial)
+        self._phase = 'idle'
+
+    def open(self):
+        self._open_port()
+        self._buffer.clear()
+        self._sample = None
+        self._phase = 'disarming'
+        try:
+            # CDC0 は最初の JPB1,C の後で S の定期配信を始める。
+            self._write(0., False)
+            self._received = self._sent
+        except BaseException:
+            self._close_port()
+            raise
+
+    def latest_report(self):
+        """最新 S の受信時刻と値を返す。状態監視では追加の USB I/O を行わない。"""
+        if self.fd is None or self._sample is None:
+            return None
+        return self._report_stamp_ns, dict(self._sample)
+
+    def poll(self):
+        if self.fd is None:
+            raise RuntimeError('Pico CDC0 が開いていません')
+        try:
+            now = time.monotonic()
+            requesting = self._phase in ('arming', 'active')
+            if now - self._received >= _FRESH_S or (requesting and now - self._sent >= _FRESH_S):
+                raise RuntimeError('Pico の状態または Joy の指令が古くなりました')
+            lost_selection = False
+            # S は 50 ms 周期。150 ms 分を超える滞留を今回の受信時刻で新鮮にしない。
+            for count, sample in enumerate(self._samples(), 1):
+                if count > 3:
+                    raise RuntimeError('CDC0 に古い Pico 状態フレームが滞留しています')
+                path = sample['active_path']
+                host = _host_selected(sample) and path in (0, 2)
+                sample['host_selected'] = host
+                lost_selection |= not host
+                if not host and self._phase in ('arming', 'active'):
+                    channels = (sample['rx_mode_us'], sample['rx_steer_us'], sample['rx_throttle_us'])
+                    if sample['fault_bits'] not in (0, _MODE_UNKNOWN) or not all(1000 <= v <= 2000 for v in channels):
+                        raise RuntimeError('プロポの受信が無効か、Pico が異常を報告しました')
+                    self.disarm()  # 通常の CH3 切替では CDC0 の受信を続ける。
+                if self._phase == 'active' and path != 2:
+                    raise RuntimeError('Pico の HOST 経路が解除されました')
+                if self._phase == 'arming' and path == 2:
+                    if sample['servo_us'] != 1500 or sample['esc_us'] != 1500:
+                        raise RuntimeError('Pico の arm 時に中立出力を確認できません')
+                    self._phase = 'active'
+                elif self._phase == 'disarming' and path != 2:
+                    self._phase = 'idle'
+            if self._sample is None:
+                return None
+            # 同じ read に RC → HOST が届いても、呼び手が一度操作権を解放できるようにする。
+            return dict(self._sample, host_selected=self._sample['host_selected'] and not lost_selection)
+        except (OSError, ValueError, RuntimeError):
+            self.close()
+            raise
+
+    def arm(self):
+        sample = self.poll()
+        if sample and not sample['host_selected']:
+            return False
+        if (self._phase != 'idle' or not sample or sample['active_path'] != 0
+                or sample['servo_us'] != 1500 or sample['esc_us'] != 1500):
+            raise RuntimeError('CH3 の HOST 許可と Pico の中立待機を確認してください')
+        self._phase = 'arming'
+        try:
+            self._write(0., True)
+            return True
+        except (OSError, RuntimeError):
+            self.close()
+            raise
+
+    def drive(self, steering, throttle):
+        sample = self.poll()
+        if sample and not sample['host_selected']:
+            return False
+        try:
+            if self._phase != 'active':
+                raise RuntimeError('Pico の中立 arm 確認を待っています')
+            if any(type(v) not in (int, float) or not math.isfinite(v) or abs(v) > 1
+                   for v in (steering, throttle)):
+                raise ValueError('Joy の操舵・スロットルは −1〜1 を指定してください')
+            # 負側のパルスは制動と後退で共通。物理 ESC の中立を介した入力履歴で決まる。
+            self._write(throttle, True, reverse=throttle < 0, steering=steering)
+            return True
+        except (OSError, RuntimeError, ValueError):
+            self.close()
+            raise
+
+    def disarm(self):
+        if self.fd is not None and self._phase in ('arming', 'active'):
+            self._write(0., False)
+            self._phase = 'disarming'
+
+    def close(self):
+        try:
+            self.disarm()
+        except (OSError, RuntimeError):
+            pass  # USB 断時は Pico の USB / 指令 watchdog が HOST 経路を解除する。
+        finally:
+            self._close_port()
+            self._phase = 'idle'

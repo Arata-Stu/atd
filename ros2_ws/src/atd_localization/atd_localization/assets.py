@@ -85,12 +85,18 @@ def map_metadata(results_root, map_id):
     return _source(results_root, map_id)[2]
 
 
-def save_validation_hdmap(results_root, metadata, run_dir):
-    """Keep the exact Raceline and boundaries used by this validation run."""
-    folder = _path(results_root, Path('maps') / _identifier(metadata['map_id']))
+def verified_hdmap(results_root, metadata):
+    """Read precisely the HDMap identified by a localization session."""
+    folder = _path(Path(results_root), Path('maps') / _identifier(metadata['map_id']))
     data = require_file(_path(folder, 'hdmap/map.json')).read_bytes()
     if hashlib.sha256(data).hexdigest() != metadata['hdmap_sha256']:
-        raise ValueError('検証の準備中に HDMap が変更されました。地図を再選択してください')
+        raise ValueError('HDMap が変更されました。地図を再選択してください')
+    return data
+
+
+def save_validation_hdmap(results_root, metadata, run_dir):
+    """Keep the exact reference lines and boundaries used by this validation run."""
+    data = verified_hdmap(results_root, metadata)
     with (run_dir / 'hdmap.json').open('xb') as stream:
         stream.write(data)
 

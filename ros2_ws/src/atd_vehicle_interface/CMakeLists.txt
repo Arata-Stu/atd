@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(atd_vehicle_interface)
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
+find_package(ament_cmake_python REQUIRED)
 find_package(yaml-cpp REQUIRED)
 ament_auto_add_library(atd_vehicle_interface_component SHARED src/pico_node.cpp)
 target_compile_features(atd_vehicle_interface_component PUBLIC cxx_std_20)
@@ -9,6 +10,8 @@ target_compile_options(atd_vehicle_interface_component PRIVATE -Wall -Wextra -Wp
 target_link_libraries(atd_vehicle_interface_component yaml-cpp)
 rclcpp_components_register_node(atd_vehicle_interface_component
   PLUGIN "atd_vehicle_interface::PicoNode" EXECUTABLE atd_vehicle_interface_node)
+ament_python_install_package(${PROJECT_NAME})
+install(PROGRAMS scripts/joy_drive scripts/auto_drive DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 # 小さい編集元だけを同梱する。Pico SDK と ARM 成果物は ROS の build/install に含めない。
@@ -24,6 +27,8 @@ install(FILES firmware/pico_rev6/CMakeLists.txt firmware/pico_rev6/README.md
   firmware/pico_rev6/BENCH_CHECK.md
   DESTINATION share/${PROJECT_NAME}/firmware/pico_rev6)
 if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(joy_drive_tests test APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   add_executable(test_pico_protocol test/test_protocol.cpp)
   target_compile_features(test_pico_protocol PRIVATE cxx_std_20)
   target_include_directories(test_pico_protocol PRIVATE include)

@@ -21,7 +21,7 @@ if type(port) is not int or not 1024 <= port <= 65535:
     raise ValueError('Invalid bridge port')
 path = request['path']
 allowed = {
-    '/live/status': ('GET',), '/live/parameters': ('POST',),
+    '/live/status': ('GET',), '/live/parameters': ('POST',), '/live/speed-table': ('PUT',),
     '/input/status': ('GET',), '/input/profile': ('GET', 'PUT'),
     '/input/reload': ('POST',), '/input/configure': ('POST',),
     '/teleop/status': ('GET',), '/teleop/profile': ('GET', 'PUT'),
@@ -61,10 +61,14 @@ def request(connection: dict, path: str, method: str = 'GET', body: dict | None 
     if type(bridge_port) is not int or not 1024 <= bridge_port <= 65535:
         raise BridgeUnavailable('Bridge port が不正です')
     nonce = uuid.uuid4().hex
-    command = ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
-               '-o', 'ConnectTimeout=5', '-o', 'ServerAliveInterval=5',
-               '-o', 'ServerAliveCountMax=1', '-p', str(port), f'{user}@{host}',
-               'python3 -c ' + shlex.quote(REMOTE)]
+    command = ['ssh', '-T']
+    if path == '/live/status':
+        # 速度・PWM 履歴の JSON は同じフィールドが多く、Wi-Fi の転送量を抑えられる。
+        command.append('-C')
+    command.extend(['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+                    '-o', 'ConnectTimeout=5', '-o', 'ServerAliveInterval=5',
+                    '-o', 'ServerAliveCountMax=1', '-p', str(port), f'{user}@{host}',
+                    'python3 -c ' + shlex.quote(REMOTE)])
     try:
         result = subprocess.run(command, input=json.dumps(dict(port=bridge_port, path=path,
             method=method, body=body or {}, nonce=nonce)), capture_output=True, text=True, timeout=14)

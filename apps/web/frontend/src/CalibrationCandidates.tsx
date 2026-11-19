@@ -29,6 +29,18 @@ function IntervalEvidence({candidate}: {candidate: LimitCandidate}) {
 function FeedforwardTable({proposal, onRefresh}: {proposal: VehicleCandidates; onRefresh: () => void}) {
   const ff = proposal.feedforward;
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [adopting, setAdopting] = useState(false), [adopted, setAdopted] = useState('');
+  async function adopt() {
+    if (adopting || !ff.usable) return;
+    setAdopting(true); setError('');
+    try {
+      const reply = await api<{table:{proposal_sha256:string}}>('speed/tables',
+        {run_id: proposal.run_id, proposal_sha256: proposal.proposal_sha256});
+      if (reply.table.proposal_sha256 !== proposal.proposal_sha256) throw new Error('採用した表の版を確認できません。');
+      setAdopted(reply.table.proposal_sha256);
+    } catch (e) { setError((e as Error).message); }
+    finally { setAdopting(false); }
+  }
   async function download() {
     if (busy || !ff.usable) return;
     setBusy(true); setError('');
@@ -57,9 +69,11 @@ function FeedforwardTable({proposal, onRefresh}: {proposal: VehicleCandidates; o
         <td>{point.episodes}</td><td>{point.samples.toLocaleString()}</td></tr>)}</tbody>
     </table></div>}
     {error && <div className="inline-note" role="alert">{error}<button className="button small" onClick={onRefresh}>候補を再取得</button></div>}
-    {ff.usable && <button className="button small" disabled={busy || !!error} onClick={() => void download()}>
+    {ff.usable && <div className="button-row wrapping"><button className="button small" disabled={adopting || adopted === proposal.proposal_sha256} onClick={() => void adopt()}>
+      {adopted === proposal.proposal_sha256 ? 'Notebook に採用済み' : adopting ? '採用中…' : '速度比較に採用'}
+    </button><button className="button small" disabled={busy} onClick={() => void download()}>
       <Icon name="download" size={14}/>{busy ? '保存準備中…' : 'フィードフォワード表を JSON で保存'}
-    </button>}
+    </button></div>}
   </section>;
 }
 

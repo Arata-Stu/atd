@@ -34,7 +34,7 @@ def build_payload(store, body):
     for name, value in inputs.items():
         if not (TOPIC if name in ('left_image', 'right_image', 'left_info', 'right_info') else FRAME).fullmatch(value):
             raise ValueError('topic または frame が不正です: ' + name)
-    if not shutil.which('ros2'):
+    if not (shutil.which('ros2') or os.access('/opt/ros/lyrical/bin/ros2', os.X_OK)):
         raise ValueError('ROS 2 がありません。Notebook の ROS/CUDA コンテナ内で実行してください')
     return dict(id=key, bag=body['bag'], **inputs)
 
@@ -44,7 +44,7 @@ def blank(key, title=None):
                 left=[], right=[], custom=[], lines={}, source={}, updated=time.time())
 
 
-def map_build(store, task, payload):
+def map_build(store, task, payload, *, validate_source=None):
     payload = build_payload(store, payload)
     key = payload['id']
     store.maps_root.mkdir(parents=True, exist_ok=True)
@@ -85,6 +85,8 @@ def map_build(store, task, payload):
         if poses and poses['size'] > 0:
             document['source']['odom_poses'] = dict(
                 path=ODOM_POSES.as_posix(), sha256=poses['sha256'], frame=payload['base_frame'])
+        if validate_source:
+            validate_source(document['source'])
         atomic_json(stage / 'hdmap/map.json', document)
         atomic_json(stage / 'mapping.json', dict(command=command, source=document['source'], completed=time.time()))
         target = confined(store.maps_root, key, exists=False)

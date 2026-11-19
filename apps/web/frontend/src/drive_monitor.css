@@ -1,0 +1,77 @@
+.manual-drive-panel { margin: 0 0 18px; padding: 15px 19px; gap: 12px; }
+.manual-drive-heading, .manual-drive-sources > div {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px;
+}
+.manual-drive-heading { justify-content: space-between; }
+.manual-drive-heading h3 { margin: 0; font-size: 14px; color: #294c3b; }
+.manual-drive-heading small, .manual-drive-sources small { color: #52705d; font-size: 11px; }
+.manual-drive-sources { display: flex; flex-wrap: wrap; gap: 7px 32px; }
+.manual-drive-sources span { font-size: 11px; color: #4d6655; }
+.manual-drive-sources strong { font-size: 15px; color: #245842; }
+.manual-drive-signals { width: 100%; border-collapse: collapse; text-align: left; }
+.manual-drive-signals th, .manual-drive-signals td { padding: 7px 10px; border-bottom: 1px solid #e4ebe6; }
+.manual-drive-signals thead { background: #f1f6f2; }
+.manual-drive-signals th { font-size: 12px; color: #425f4f; font-weight: 550; }
+.manual-drive-signals small, .manual-drive-signals td span { font-size: 10px; font-weight: normal; color: #526d5e; }
+.manual-drive-signals td { font-size: 15px; color: #1e4e3b; font-variant-numeric: tabular-nums; }
+.manual-drive-panel .drive-note { margin: 0; font-size: 11px; line-height: 1.5; color: #556b5e; }
+@media (max-width: 680px) {
+  .manual-drive-signals th, .manual-drive-signals td { padding: 6px; }
+  .manual-drive-signals small { display: block; }
+}
+
+.drive-replay { min-width: 0; }
+.drive-bag-choice, .drive-time-controls, .drive-window-controls, .drive-window-controls form, .drive-extraction, .drive-speed-choice, .drive-transitions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 7px 12px; min-width: 0;
+}
+.drive-replay label, .drive-extraction span, .drive-time-controls output { font-size: 12px; color: #435f50; }
+.drive-bag-choice select { width: auto; flex: 1 1 260px; min-width: 0; }
+.drive-speed-choice { padding-top: 8px; border-top: 1px solid #dae5dd; }
+.drive-speed-choice select { width: auto; min-width: 0; max-width: 100%; }
+.drive-speed-choice > span { color: #526d5e; font-size: 12px; }
+.drive-transitions label { display: inline-flex; align-items: center; gap: 7px; }
+.drive-transitions select { width: auto; padding: 5px; }
+.drive-transitions small, .drive-transitions span { font-size: 11px; color: #526d5e; }
+.drive-window-controls { border-bottom: 1px solid #dae5dd; padding-bottom: 12px; }
+.drive-window-controls label { display: inline-flex; align-items: center; gap: 6px; }
+.drive-window-controls select, .drive-window-controls input { width: 6em; padding: 5px; }
+.drive-window-controls form { margin-left: auto; }
+.drive-time-controls input { flex: 1 1 120px; width: auto; accent-color: #27694f; padding: 0; }
+.drive-time-controls output, .drive-inspector { font-variant-numeric: tabular-nums; }
+.drive-tracks { display: grid; grid-template-columns: 6.5em minmax(0, 1fr); gap: 6px 12px; align-items: center; color: #4c6353; font-size: 12px; }
+.drive-band, .drive-trace { position: relative; overflow: hidden; cursor: crosshair; min-width: 0; }
+.drive-band, .drive-state-key .drive-gap {
+  background: repeating-linear-gradient(135deg, #e5eae4, #e5eae4 2px, #f4f6f3 2px, #f4f6f3 5px);
+}
+.drive-band svg, .drive-trace svg { display: block; width: 100%; height: 18px; }
+.drive-trace svg { height: 82px; background: #f8faf7; }
+.drive-signal { stroke-width: 2; }
+.drive-signal.signal-0 { stroke: #177466; }
+.drive-signal.signal-1 { stroke: #b06030; stroke-dasharray: 5 3; }
+.drive-time-marker { position: absolute; top: 0; bottom: 0; width: 1px; background: #233b4b; transform: translateX(-.5px); pointer-events: none; }
+.drive-state-key { grid-column: 2; display: flex; flex-wrap: wrap; gap: 3px 11px; }
+.drive-state-key span, .drive-trace-heading div { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+.drive-state-key i { width: 10px; height: 10px; border-radius: 2px; }
+.drive-trace-heading { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 9px; margin-top: 8px; }
+.drive-trace-heading div { margin-left: auto; }
+.drive-trace-heading div span { display: inline-flex; align-items: center; gap: 4px; }
+.drive-trace-heading i { width: 15px; border-top: 2px solid #177466; }
+.drive-trace-heading i.line-second { margin-left: 8px; border-top: 2px dashed #b06030; }
+.drive-y-labels { align-self: stretch; display: flex; flex-direction: column; justify-content: space-between; text-align: right; font-size: 10px; }
+.drive-ticks { display: flex; justify-content: space-between; font-size: 10px; }
+.drive-inspector { padding: 10px 0 0; border-top: 1px solid #dce6df; }
+.drive-inspector h4 { margin: 0; font-size: 12px; color: #4a6956; }
+.drive-inspector h4 strong { font-size: 16px; margin-left: 6px; color: #244d38; }
+.drive-inspector dl { display: flex; flex-wrap: wrap; gap: 7px 30px; font-size: 12px; }
+.drive-inspector dl > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.drive-inspector dd { margin: 0; font-weight: 600; }
+.drive-inspector dd small { font-weight: 400; }
+.drive-motion-values div { padding: 6px 0; }
+.drive-inspector .drive-note { margin-top: 8px; }
+@media (max-width: 680px) {
+  .drive-bag-choice label { flex-basis: 100%; }
+  .drive-bag-choice select { flex-basis: 140px; }
+  .drive-tracks { grid-template-columns: 5em minmax(0, 1fr); gap: 5px 7px; }
+  .drive-time-controls output { flex-basis: 100%; text-align: right; }
+  .drive-window-controls form { margin-left: 0; }
+}

@@ -52,6 +52,44 @@ ROOT = '/api/calibration/runs/trial/'
 MAP = '/api/maps/course'
 
 
+def test_reviewed_speed_table_is_reusable_and_bound_to_its_source(api, monkeypatch):
+    import json
+    from atd_api import jetson_bridge, live_input
+    from atd_api.speed_tables import TABLES
+    from atd_api.store import read_json
+    digest = api.get(ROOT + 'candidates').json()['proposal_sha256']
+    selection = dict(run_id='trial', proposal_sha256=digest)
+    assert api.post('/api/speed/tables', json=dict(selection, proposal_sha256='f'*64)).status_code == 400
+    adopted = api.post('/api/speed/tables', json=selection)
+    assert adopted.status_code == 200, adopted.text
+    assert api.post('/api/speed/tables', json=selection).json() == adopted.json()
+    assert api.get('/api/speed/tables').json()['items'] == [adopted.json()['table']]
+    sent = []
+
+    def send(connection, path, method, body):
+        sent.append((path, method, body))
+        return dict(saved=True, proposal_sha256=body['table']['proposal_sha256'], run_id=body['table']['run_id'])
+
+    monkeypatch.setattr(live_input, 'bridge_request', send)
+    selected = dict(instance_id='jetson-a', proposal_sha256=digest)
+    reply = api.put('/api/live/speed-table', json=selected)
+    assert reply.status_code == 200 and reply.json()['proposal_sha256'] == digest
+    route, method, body = sent.pop()
+    assert (route, method) == ('/live/speed-table', 'PUT') and repr(route) in jetson_bridge.REMOTE
+    assert body['instance_id'] == selected['instance_id']
+    assert body['table']['points'] == [{k: point[k] for k in ('speed_mps', 'throttle_raw')}
+                                       for point in api.get(ROOT + 'feedforward.json',
+                                                            params={'proposal_sha256': digest}).json()['points']]
+    path = api.app.state.store.result_root / TABLES / (digest + '.json')
+    saved = read_json(path)
+    saved['table']['points'][0]['throttle_raw'] += 1
+    path.write_text(json.dumps(saved))
+    assert api.put('/api/live/speed-table', json=selected).status_code == 400
+    assert not sent
+    listing = api.get('/api/speed/tables').json()
+    assert not listing['items'] and listing['issues']
+
+
 def adopt(api, fields):
     proposal = api.get(ROOT + 'candidates')
     assert proposal.status_code == 200, proposal.text

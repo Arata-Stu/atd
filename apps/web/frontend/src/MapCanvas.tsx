@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Cloud, EditTarget, MapDocument, Point } from './types';
+import type { Cloud, EditTarget, LineKind, MapDocument, Point } from './types';
 import { Icon } from './ui';
+import type { ControlOverlay } from './control_view';
 import type { TrajectoryOverlay } from './localization_validation';
 
 const COLORS = { left: '#40aa96', right: '#d78d51', custom: '#9c7be2', centerline: '#40aa96', raceline: '#538ee4', customline: '#9c7be2' };
 interface Props {
   doc: MapDocument | null; cloud?: Cloud | null; target?: EditTarget; mode?: 'select' | 'add' | 'pan';
   visible?: Record<string, boolean>; onChange?: (target: EditTarget, points: Point[]) => void;
+  referenceLine?: LineKind | null; forwardPath?: Point[]; controlTarget?: ControlOverlay;
   overlay?: TrajectoryOverlay; selectedGap?: {index: number} | null; onSelectGap?: (index: number | null) => void;
-  pose?: { x?: number; y?: number; yaw?: number } | null; fitKey?: number; trail?: Point[];
+  pose?: { x?: number; y?: number; yaw?: number } | null; fitKey?: number; autoFit?: boolean; trail?: Point[];
 }
-export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visible = {}, onChange, pose, fitKey = 0, trail = [], overlay, selectedGap, onSelectGap }: Props) {
+export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visible = {}, onChange, pose, fitKey = 0, autoFit = false, trail = [], overlay, selectedGap, onSelectGap, referenceLine, forwardPath, controlTarget }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 500, height: 500 });
   const [view, setView] = useState({ x: 0, y: 0, scale: 38 });
@@ -27,23 +29,39 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
     for (const [x, y] of points) {
       x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
     }
-    setView({ x: (x0 + x1) / 2, y: (y0 + y1) / 2,
-      scale: Math.min(size.width / Math.max(x1 - x0 + 2, 4), size.height / Math.max(y1 - y0 + 2, 4)) * .84 });
-  }, [size]);
+    const scale = autoFit
+      ? Math.min(size.width / Math.max(x1 - x0, 1), size.height / Math.max(y1 - y0, 1)) * .84
+      : Math.min(size.width / Math.max(x1 - x0 + 2, 4), size.height / Math.max(y1 - y0 + 2, 4)) * .84;
+    setView({ x: (x0 + x1) / 2, y: (y0 + y1) / 2, scale });
+  }, [size, autoFit]);
   const fit = useCallback(() => {
-    const points: Point[] = doc ? [...doc.left, ...doc.right, ...doc.custom, ...Object.values(doc.lines).flatMap(line => line.points)] : [];
+    const layers: Point[][] = [];
+    if (doc) {
+      layers.push(doc.left, doc.right);
+      if (!autoFit || referenceLine === undefined) {
+        layers.push(doc.custom, ...Object.values(doc.lines).map(line => line.points));
+      } else if (referenceLine && doc.lines[referenceLine]) {
+        layers.push(doc.lines[referenceLine].points);
+      }
+    }
+    const points = layers.flat();
     if (points.length === 0 && cloud) points.push(...cloud.points.filter((_, i) => i % Math.max(1, Math.ceil(cloud.points.length / 10000)) === 0).map(p => [p[0], p[1]] as Point));
     if (overlay) {
       for (const segment of overlay.segments) for (const point of segment) points.push(point);
     }
     fitPoints(points);
-  }, [doc, cloud, fitPoints, overlay]);
+  }, [doc, cloud, fitPoints, overlay, autoFit, referenceLine]);
   useEffect(() => {
     const node = canvas.current!;
     const observer = new ResizeObserver(entries => { const { width, height } = entries[0].contentRect; setSize({ width, height }); });
     observer.observe(node); return () => observer.disconnect();
   }, []);
-  useEffect(() => { fit(); setSelected(-1); setDraft(null); }, [doc?.id, fitKey]);
+  useEffect(() => {
+    if (!autoFit) fit();
+    setSelected(-1); setDraft(null);
+  }, [doc?.id, fitKey, autoFit]);
+  // 録画用の地図は実際の表示枠に合わせる。走行中の姿勢更新では縮尺を変えない。
+  useEffect(() => { if (autoFit) fit(); }, [autoFit, fit, fitKey]);
   useEffect(() => { setSelected(-1); setDraft(null); }, [target]);
   useEffect(() => {
     if (!overlay) return;
@@ -84,8 +102,14 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
     };
     if (doc) {
       for (const side of ['left', 'right'] as const) path(target === side && draft ? draft : doc[side], COLORS[side], 2, false, doc.closed);
-      for (const [kind, line] of Object.entries(doc.lines)) if (visible[kind] !== false) path(line.points, COLORS[kind as keyof typeof COLORS] || '#538ee4', 2.5, false, doc.closed);
-      if (visible.custom !== false) path(target === 'custom' && draft ? draft : doc.custom, COLORS.custom, 2, true, doc.closed);
+      if (referenceLine) {
+        const line = doc.lines[referenceLine];
+        if (line) path(line.points, '#538ee4', 2.5, false, doc.closed);
+      } else if (referenceLine === undefined) {
+        for (const [kind, line] of Object.entries(doc.lines)) if (visible[kind] !== false)
+          path(line.points, COLORS[kind as keyof typeof COLORS] || '#538ee4', 2.5, false, doc.closed);
+      }
+      if (referenceLine === undefined && visible.custom !== false) path(target === 'custom' && draft ? draft : doc.custom, COLORS.custom, 2, true, doc.closed);
       if (onChange && mode !== 'pan') (draft || doc[target]).forEach((p, i) => {
         const [x, y] = project(p); ctx.beginPath(); ctx.arc(x, y, i === selected ? 6.5 : 4, 0, Math.PI * 2);
         ctx.fillStyle = i === selected ? COLORS[target] : '#fff'; ctx.fill(); ctx.strokeStyle = COLORS[target]; ctx.lineWidth = 2; ctx.stroke();
@@ -115,6 +139,24 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
         ctx.fill(); ctx.stroke(); ctx.restore();
       }
     }
+    if (doc && forwardPath?.length) {
+      path(forwardPath, '#ffffff', 6);
+      path(forwardPath, '#a04715', 3.5);
+      const projection = forwardPath[0];
+      if (typeof pose?.x === 'number' && typeof pose?.y === 'number')
+        path([[pose.x, pose.y], projection], '#a04715', 1.5, true);
+      const [x, y] = project(projection);
+      ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#a04715'; ctx.lineWidth = 2; ctx.stroke();
+    }
+    if (doc && controlTarget) {
+      path([controlTarget.origin, controlTarget.target], '#5234aa', 2, true);
+      const [x, y] = project(controlTarget.target);
+      ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.strokeStyle = 'white'; ctx.lineWidth = 5; ctx.stroke();
+      ctx.strokeStyle = '#5234aa'; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI * 2); ctx.fillStyle = '#5234aa'; ctx.fill();
+    }
     if (pose && typeof pose.x === 'number' && typeof pose.y === 'number') {
       const [x, y] = project([pose.x, pose.y]); ctx.save(); ctx.translate(x, y); ctx.rotate(-(pose.yaw || 0));
       ctx.shadowColor = '#2a806755'; ctx.shadowBlur = 12; ctx.fillStyle = '#16835e';
@@ -123,7 +165,7 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
     const scaleWidth = Math.max(1, Math.floor(90 / view.scale / step)) * step * view.scale;
     ctx.strokeStyle = '#65796d'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(24, size.height - 31); ctx.lineTo(24 + scaleWidth, size.height - 31); ctx.stroke();
     ctx.fillStyle = '#65796d'; ctx.font = '11px ui-monospace, monospace'; ctx.fillText(`${(scaleWidth / view.scale).toFixed(step < 1 ? 1 : 0)} m`, 24, size.height - 40);
-  }, [doc, cloud, view, size, target, mode, selected, draft, visible, pose, project, onChange, trail, overlay, selectedGap]);
+  }, [doc, cloud, view, size, target, mode, selected, draft, visible, pose, project, onChange, trail, overlay, selectedGap, referenceLine, forwardPath, controlTarget]);
   const pointAt = (e: React.PointerEvent | React.WheelEvent): Point => { const rect = canvas.current!.getBoundingClientRect(); return [e.clientX - rect.left, e.clientY - rect.top]; };
   return <div className="map-surface">
     <canvas ref={canvas} tabIndex={0} aria-label={onChange ? '地図編集キャンバス。点をクリックして選択、Deleteで削除。右ドラッグで移動、ホイールで拡大縮小。' : '地図閲覧キャンバス。右ドラッグで移動、ホイールで拡大縮小。'} style={{ cursor: mode === 'pan' ? 'grab' : mode === 'add' ? 'crosshair' : 'default' }}

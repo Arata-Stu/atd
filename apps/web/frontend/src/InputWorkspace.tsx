@@ -1,30 +1,70 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, availabilityText } from './api';
 import { Field, Icon, Tag } from './workspace_ui';
 import { TeleopSettingsPanel } from './TeleopSettingsPanel';
 import { PropoSettingsPanel } from './PropoSettingsPanel';
 import { RecordingStatusPanel } from './RecordingStatusPanel';
+import { ManualDrivePanel } from './ManualDrivePanel';
+import { ManualDriveReplay } from './ManualDriveReplay';
+import type { Job } from './types';
+import type { ManualDriveObservation } from './drive_monitor';
 
 interface AxisBinding { code: number; mode: 'bipolar' | 'unipolar'; negative: number; center: number; positive: number; deadzone: number }
 interface ButtonBinding { source: 'button' | 'axis'; code: number; direction: number; threshold: number }
 interface Profile { version: number; device: { vendor: number; product: number; name: string; unique: string }; axes: Record<string, AxisBinding>; buttons: Record<string, ButtonBinding> }
 interface Sample { axes: number[]; buttons: number[]; stale?: boolean; age_s?: number; frame?: string }
-interface InputState { connected: boolean; device_connected: boolean; ready: boolean; configuring: boolean | null; raw: Sample | null; normalized: Sample | null; status?: { generation?: number; device?: { name?: string; path?: string }; axes?: { code: number; name?: string }[]; buttons?: { code: number; name?: string }[] }; availability?: unknown }
+interface InputState { connected: boolean; device_connected: boolean; ready: boolean; configuring: boolean | null; raw: Sample | null; normalized: Sample | null; status?: { generation?: number; device?: { name?: string; path?: string }; axes?: { code: number; name?: string }[]; buttons?: { code: number; name?: string }[] }; availability?: unknown; drive_monitor?: ManualDriveObservation }
 interface ProfileResult { profile: Profile; revision: string | number | null; saved: boolean; connected: boolean; axes: string[]; buttons: string[] }
 interface Capture { kind: 'axes' | 'buttons'; name: string; baseline: Sample; generation?: number; deadline: number }
-export function InputWorkspace({ notify, onDirty }: { notify: (message: string, error?: boolean) => void; onDirty: (value: boolean) => void }) {
-  const [status, setStatus] = useState<InputState | null>(null), [error, setError] = useState(''), [profile, setProfile] = useState<Profile | null>(null);
+type InputProps = {notify: (message: string, error?: boolean) => void; onDirty: (value: boolean) => void};
+export function InputWorkspace({notify, onDirty, jobs, onLog}: InputProps & {jobs: Job[]; onLog: (id: string) => void}) {
+  const [view, setView] = useState(() => new URLSearchParams(window.location.hash.split('?')[1]).get('view') === 'bag' ? 'bag' : 'live');
+  const dirty = useRef(false);
+  const changes = useCallback((value: boolean) => { dirty.current = value; onDirty(value); }, [onDirty]);
+  function select(next: 'live' | 'bag') {
+    if (view === next || (dirty.current && !window.confirm('未保存の入力設定を破棄して切り替えますか？'))) return;
+    changes(false);
+    window.history.replaceState(null, '', next === 'bag' ? '#input?view=bag' : '#input');
+    setView(next);
+  }
+  return <div className="content-page input-page">
+    <div className="page-intro"><div><h2>コントローラ</h2></div></div>
+    <div className="tabs" role="group" aria-label="入力の表示">
+      <button className={view === 'live' ? 'active' : ''} aria-pressed={view === 'live'} onClick={() => select('live')}>ライブ・配置設定</button>
+      <button className={view === 'bag' ? 'active' : ''} aria-pressed={view === 'bag'} onClick={() => select('bag')}>記録した走行</button>
+    </div>
+    {view === 'live' ? <LiveInput notify={notify} onDirty={changes}/> : <ManualDriveReplay jobs={jobs} onLog={onLog}/>}
+  </div>;
+}
+
+function LiveInput({notify, onDirty}: InputProps) {
+  const [status, setStatus] = useState<(InputState & {requestedAt: number}) | null>(null), [error, setError] = useState(''), [profile, setProfile] = useState<Profile | null>(null);
   const [revision, setRevision] = useState<string | number | null>(null), [saved, setSaved] = useState(false), [dirty, setDirty] = useState(false), [needsReload, setNeedsReload] = useState(false), [busy, setBusy] = useState(false);
   const [section, setSection] = useState<'axes' | 'buttons'>('axes'), [capture, setCapture] = useState<Capture | null>(null);
   const [teleopDirty, setTeleopDirty] = useState(false), [inputReceivedAt, setInputReceivedAt] = useState(0);
   const [propoDirty, setPropoDirty] = useState(false);
   const [device, setDevice] = useState<'joy' | 'propo'>('joy');
-  const refreshProfile = useCallback(async () => { const result = await api<ProfileResult>('input/profile'); setProfile(result.profile); setRevision(result.revision); setSaved(result.saved); setDirty(false); }, []);
-  useEffect(() => { refreshProfile().catch(e => notify(e.message, true)); }, [refreshProfile, notify]);
+  useEffect(() => {
+    const abort = new AbortController();
+    api<ProfileResult>('input/profile', undefined, undefined, abort.signal).then(result => {
+      if (abort.signal.aborted) return;
+      setProfile(result.profile); setRevision(result.revision); setSaved(result.saved); setDirty(false);
+    }).catch(e => { if (!abort.signal.aborted) notify(e.message, true); });
+    return () => abort.abort();
+  }, [notify]);
   useEffect(() => { onDirty(dirty || teleopDirty || propoDirty); }, [dirty, teleopDirty, propoDirty, onDirty]);
   useEffect(() => {
     let cancelled = false; let timer: ReturnType<typeof setTimeout>;
-    async function poll() { try { const result = await api<InputState>('input/status'); if (!cancelled) { setStatus(result); setInputReceivedAt(Date.now()); setError(''); } } catch (e) { if (!cancelled) { setError((e as Error).message); setStatus(null); } } if (!cancelled) timer = setTimeout(poll, 180); }
+    async function poll() {
+      const requestedAt = performance.now();
+      try {
+        const result = await api<InputState>('input/status');
+        if (!cancelled) { setStatus({...result, requestedAt}); setInputReceivedAt(Date.now()); setError(''); }
+      } catch (e) {
+        if (!cancelled) { setError((e as Error).message); setStatus(null); }
+      }
+      if (!cancelled) timer = setTimeout(poll, 180);
+    }
     void poll(); return () => { cancelled = true; clearTimeout(timer); };
   }, []);
   const fresh = !!status?.connected && !!status.device_connected && !!status.raw && !status.raw.stale;
@@ -45,7 +85,8 @@ export function InputWorkspace({ notify, onDirty }: { notify: (message: string, 
     setCapture({ kind, name, baseline: structuredClone(raw), generation: status?.status?.generation, deadline: Date.now() + 10000 });
     notify(`${name} の入力を操作してください（10秒）`);
   }
-  return <div className="content-page input-page"><div className="page-intro"><div><span className="eyebrow">CONTROLLER SETUP</span><h2>入力を確認して、操作の基準を整える。</h2><p>Jetsonに接続したコントローラやプロポの生入力と、操作の配置を確認します。</p></div><span className="outline-chip">JETSON INPUT</span></div>
+  return <>
+    <ManualDrivePanel connected={status?.connected === true} observation={status?.drive_monitor} requestedAt={status?.requestedAt}/>
     <RecordingStatusPanel/>
     <div className="tabs" role="tablist" aria-label="入力デバイス"><button role="tab" id="input-tab-joy" aria-controls="input-panel-joy" aria-selected={device === 'joy'} className={device === 'joy' ? 'active' : ''} onClick={() => setDevice('joy')}>Bluetooth コントローラ{dirty || teleopDirty ? '（未保存）' : ''}</button><button role="tab" id="input-tab-propo" aria-controls="input-panel-propo" aria-selected={device === 'propo'} className={device === 'propo' ? 'active' : ''} onClick={() => setDevice('propo')}>プロポ・Pico{propoDirty ? '（未保存）' : ''}</button></div>
     <div role="tabpanel" id="input-panel-joy" aria-labelledby="input-tab-joy" style={{ display: device === 'joy' ? undefined : 'none' }}>
@@ -59,5 +100,5 @@ export function InputWorkspace({ notify, onDirty }: { notify: (message: string, 
     <TeleopSettingsPanel normalized={normalized ?? null} inputReady={fresh && !!status?.ready} inputReceivedAt={inputReceivedAt} notify={notify} onDirty={setTeleopDirty}/>
     </div>
     <div role="tabpanel" id="input-panel-propo" aria-labelledby="input-tab-propo" style={{ display: device === 'propo' ? undefined : 'none' }}><PropoSettingsPanel notify={notify} onDirty={setPropoDirty}/></div>
-  </div>;
+  </>;
 }

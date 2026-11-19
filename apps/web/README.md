@@ -11,7 +11,7 @@ Docker 設定を更新した場合は、利用中の処理を終了してイメ�
 # Notebook のホスト: Docker を起動・入室（初回・設定変更時は --build）
 ./scripts/dev.sh --build
 # ここから Notebook の Docker 内。初回・自作package更新時に実行
-atd-build --packages-up-to atd_localization atd_vehicle_calibration
+atd-build --packages-up-to atd_control atd_vehicle_calibration atd_web_bridge
 atd-web
 ```
 
@@ -30,25 +30,41 @@ atd-web --dry-run                 # 起動予定を表示
 
 コンテナ・センサ・車両・記録はこの入口では自動起動しない。API は loopback 待受。通常利用はビルド済み frontend と API を同じ origin で配信する。
 
-初回は上記の ROS build で Notebook の workspace に `atd_localization`（`atd_mapping` を含む）と `atd_vehicle_calibration` を準備する。`atd-web check` は ROS と workspace の setup を読み込んで package の導入状態を確認する。環境や package が未準備なら `FAIL` と表示する。
+初回は上記の ROS build で Notebook の workspace に `atd_control`（`atd_planning`・`atd_localization`・`atd_mapping` を含む）、`atd_vehicle_calibration`、手動走行 bag の読取に使う `atd_web_bridge` を準備する。`atd-web check` は ROS と workspace の setup を読み込んで package の導入状態を確認する。環境や package が未準備なら `FAIL` と表示する。
 
 ## 自己位置検証
 
-Notebook の [自己位置検証](http://127.0.0.1:8766/#localization) を開き、cuVSLAM・VGL 準備済みの地図と、地図作成に使った走行とは別の bag を選んで検証を開始する。Raceline は地図画面で生成・保存しておく。同じ名前の bag は親ディレクトリを含むパスで選択できる。ジョブのログと停止操作は同じ画面から開ける。
+Notebook の [自己位置検証](http://127.0.0.1:8766/#localization) を開き、cuVSLAM・VGL 準備済みの地図と、地図作成に使った走行とは別の bag を選んで検証を開始する。前方軌道を試したい Raceline・Centerline・Customline は、検証前に地図画面で生成・保存しておく。同じ名前の bag は親ディレクトリを含むパスで選択できる。ジョブのログと停止操作は同じ画面から開ける。
 
-結果の地図には、Raceline と追跡できた区間ごとの推定軌跡を重ねる。中断を選ぶと、最後に有効だった位置と、復帰した場合は最初に再取得した位置を確認できる。区間間の空白は位置が得られなかった範囲を表し、経路の補間は行わない。初期位置が一度も確定しなかった場合は、状態遷移と追跡率で確認する。
+結果の地図には、選んだラインと追跡できた区間ごとの推定軌跡を重ねる。中断を選ぶと、最後に有効だった位置と、復帰した場合は最初に再取得した位置を確認できる。区間間の空白は位置が得られなかった範囲を表し、経路の補間は行わない。初期位置が一度も確定しなかった場合は、状態遷移と追跡率で確認する。
 
-検証結果は `/data/results/runs/localization/<run>/` に保存される。既存の CLI 結果も履歴から開ける。新規検証では当時の Raceline を含む `hdmap.json` を一緒に保存する。過去にこのファイルを保存していなかった検証では、現在の地図の識別情報が結果に一致するときに重ねる。[検証用 ROS パッケージ](../../ros2_ws/src/atd_localization/README.md)
+検証結果は `/data/results/runs/localization/<run>/` に保存される。既存の CLI 結果も履歴から開ける。新規検証では当時の全保存ラインを含む `hdmap.json` を一緒に保存する。過去にこのファイルを保存していなかった検証では、現在の地図の識別情報が結果に一致するときに重ねる。[検証用 ROS パッケージ](../../ros2_ws/src/atd_localization/README.md)
+
+検証結果の「基準ライン」を選んで前方軌道を計算すると、時刻を選択・再生して、投影点から先の軌道・横ずれ・目標速度・推定速度を確認できる。同じ走行のライン比較には保存済みの姿勢・速度を再利用する。横ずれはラインの進行方向を向いて左側が正。Customline は編集後に速度付きのラインを生成しておく。[前方軌道の計算](../../ros2_ws/src/atd_planning/README.md)
+
+「この bag で先読み設定を試す」で最小距離・先読み時間・最大距離を変更すると、同じ走行時刻の Pure Pursuit の追従点と曲率を比較できる。実測ホイールベースを mm で入力すると等価操舵角 [°] も表示する。bag の自己位置推定は一度でよく、設定はこの画面での再計算に使う。ライブ画面の「Jetson の追従設定」では、Jetson 起動時に適用した値を確認できる。[先読みと舵角の定義](../../ros2_ws/src/atd_control/README.md)
 
 ## 車両校正
 
 「データ転送」で手動走行の bag を受信したら、「この bag を車両校正へ」→「解析を開始」と進む。Notebook が連続した VO 軌跡を準備し、プロポ入力・IMU と同期して速度、加速度、操舵応答を求める。同じ走行から作成した軌跡を再利用できる。進行中のログ、過去の解析、応答グラフと CSV／JSON をこの画面から確認できる。[記録から解析までの操作](../../docs/vehicle_calibration.md)
 
-## Map
-
 「車両校正」で走行結果を開くと、Raceline の曲率・横加速度・加減速の候補と前進スロットルのフィードフォワード表を確認できる。採用する制限と地図を選び、その地図で Raceline を生成すると反映される。速度フィードフォワード表は JSON で保存できる。[候補の算出条件と採用手順](../../docs/vehicle_calibration.md)
 
-同じ Map 画面で、次の順に進める。駐車機能は対象に含めない。
+### 速度制御を手動入力と比較する
+
+1. 「車両校正」で校正結果のスロットル表と速度域を確認し、「速度比較に採用」を押す。複数の走行から採用した表は出典と版で選び分けられる。
+2. **別 bag** は「自己位置検証」で地図作成と別の走行を選び、Notebook の GPU で自己位置を推定する。保存済みの結果があればそのまま開く。Raceline・Centerline・Customline から試したいラインの前方軌道を計算し、校正表と Kp・Ki・Kd を選んで「この設定で速度制御を計算」を押す。スライダー・再生に連動して、その時刻までの直近 5 秒間を表示する。速度比較を再計算するときは保存済みの姿勢・速度と元 bag の手動入力を使う。
+3. **ライブ** はプロポ走行なら Jetson で `./scripts/bringup.sh localization`、DualSense で運転しながら比較するなら `./scripts/bringup.sh localization joy_drive:=true` を起動する。DualSense は Jetson に Bluetooth 接続し、「コントローラ → 操作の役割」で操舵・スロットルの割り当てと入力状態を確認する。Notebook の「ライブ → Jetson の FF 表と PID 設定」で同じ校正表を選び、「Jetson の観測に適用」を押す。
+
+「スロットル表示」の初期値では、計算スロットルと実プロポ入力を CH2 raw、DualSense の割り当て後の入力を正規化値で表示する。「共通正規化」または「PWM 相当」を選ぶと、3 系列を同じグラフで比較できる。目標・推定速度 [m/s] と操作経路も同じ時間軸で読める。
+
+換算は Rev6 の既定値を使う。CH2 raw の 172／992／1811 は、順に正規化 +1／0／−1、PWM パルス幅 1000／1500／2000 µs に相当する。Pico の S.BUS 校正値や CH2 反転を変更した場合、プロポ入力の表示用換算と基板の出力値に差が生じうる。制動・後退の判定には ESC の状態も必要になる。
+
+操作元は Pico が報告した経路と `/teleop/command` の入力を照合する。プロポ経路でも DualSense を操作した時刻には両方の入力が見える。HOST 経路で Joy を観測した場合、Pico のテレメトリから確認できるのは HOST 経路が有効だったところまで。Joy だけを記録した bag では正規化スロットルを表示し、操作経路は不明とする。[速度制御の計算条件](../../ros2_ws/src/atd_control/README.md)
+
+## Map
+
+Map 画面で、次の順に進める。駐車機能は対象に含めない。
 
 1. **cuVSLAM 地図を作成**: `/data/record/rosbags/` の bag、地図 ID、左右画像・CameraInfo の topic、base / optical frame を指定する。NVIDIA の `isaac_mapping_ros/create_map_offline.py` を独立 worker で呼び、`maps/<id>/nvidia/` に公式の `cuvslam_map/`・`map_frames/` 等の構成を維持して保存する。
 2. **VGL 地図を準備**: Notebook の export bundle を指定し、この PC の GPU 用 engine を準備してから公式 `create_cuvgl_map.py` を実行する。model 資産側の engine と地図の `cuvgl_map/` は別に保持する。Notebook engine を Jetson 用として転送しない。
@@ -87,6 +103,33 @@ Jetson の SSH host・user・port、bag root と map root を画面で設定す�
 
 ## Live / Input
 
+### 手動走行の操作元と PWM を確認する
+
+Jetson で `./scripts/bringup.sh joy-drive` を起動し、Notebook の [コントローラ](http://127.0.0.1:8766/#input) を開く。Joy とプロポのどちらの設定タブでも、CH3 の位置、Pico が選んだ経路、割り当て後の DualSense の操舵・スロットル、サーボ・ESC の基板報告値を同じ画面で確認できる。
+
+CH3 を Jetson 側にした直後は、Joy の中立確認が済むまで待機する。運転元「DualSense」は、Pico が HOST 経路を報告し、Jetson の手動走行 node もその経路で運転中のときに表示する。PWM の数値は Pico の制御ポートが返した出力パルス幅 [µs]。個々の Joy 入力への応答を特定したり、物理端子の波形を計測したりするものではない。制御ポートの報告が途切れた区間は欠測になる。[Jetson の起動と操作](../../docs/bringup.md#dualsense-で手動走行する)
+
+走行後は「コントローラ → 記録した走行」で転送済みの bag を選び、「時系列を読み出す」を押す。CH3・操作元・DualSense とプロポのスロットル・ESC の PWM に、VSLAM の前後速度と IMU の前後加速度を同じ時刻で照合できる。「次の切替」で後退に移った時刻へジャンプできる。VSLAM 速度には走行中の記録、同じ bag の解析結果、Notebook GPU で新たに生成した連続 VO 軌跡を使える。[減速・停止付近・後退の確認手順](../../docs/recording.md#減速停止付近後退を確認する)
+
+### 自動走行の指令と基板出力を比較する
+
+Jetson で `./scripts/bringup.sh autonomous`、Notebook の Docker 内で `atd-web` を起動する。「データ転送」に Jetson の SSH 接続先を設定し、[ライブ画面](http://127.0.0.1:8766/#live)を開く。CH3 には Pico が受信したスイッチの位置、操作元「自動」は Pico が HOST 経路を報告し、自動走行ノードの状態と新しい USB 送信指令が一致したときに表示する。発進待ち・制動・停止要求・情報不足は区別して表示する。
+
+直近 15 秒の折れ線で目標速度と VSLAM 推定速度 [m/s] を比較する。操舵・スロットルは Jetson が USB に送った正規化値で、スロットルの負側は自動走行中のブレーキを表す。PWM [µs] は送信指令に対応するパルス幅と Pico が報告した値を照合する。横軸はそれぞれ速度の元観測、指令の送信、基板報告の受信に対応する Jetson 上の時刻。基板報告は車輪・サーボ角の実測ではない。追跡喪失による停止要求は縦線で示し、プロポに戻した後も理由と時刻が残る。未受信区間は折れ線が途切れ、前回取得した値には時刻を付けて表示する。
+
+### Notebook でライブプロットを画面収録する
+
+「ライブ」→「録画用表示」を開き、Notebook の画面収録ツールで Chrome のウィンドウを選ぶ。地図上の車両の位置・向きと、速度・操舵・スロットルの直近 15 秒のグラフを一画面に表示する。CH3、操作元、停止要求の理由も同じ画面で確認できる。[録画用表示を直接開く](http://127.0.0.1:8766/#live?view=capture)
+
+地図は Jetson で走行に使っている地図を自動選択する。Notebook に保存した HDMap のコース境界と選択ラインを背景に使い、地図を照合できたら追跡中の自己位置を矢印で重ねる。矢印の先が車両の前方。追跡喪失や地図の版違いは地図欄に表示し、現在位置の矢印を消す。「通常表示に戻る」で点群を含む地図やパラメータも確認できる。
+
+- **取得往復**は、Notebook のブラウザが最新状態を要求してから JSON を読み終えるまでの時間。SSH、Jetson の応答処理、Notebook 側の処理を含む。
+- **基板報告の経過（受信時）**は、Jetson が Pico の PWM 報告を読み取ってから、その報告を含む JSON を Notebook が読み終えるまでの推定範囲。Jetson で読み取ってから応答用に採取するまでが 20 ms、取得往復が 80 ms の場合は 20〜100 ms になる。両端末の時計は独立でよい。速度や PWM の折れ線には引き続き信号ごとの元時刻を使う。
+
+画面収録は、運転中に見えた状態や停止までの経緯を映像で確認する用途に使える。通信が途切れると画面の更新も止まる。数値を残したい走行では、Jetson の起動時に `./scripts/bringup.sh autonomous recording_profile:=inputs` を選ぶと、カメラ画像を除いた操作・制御・推定状態などをボタンで記録できる。後で画像から VSLAM を再実行する走行には、左右 IR・CameraInfo・TF などを含む `mapping` を使う。[記録プロファイル](../../docs/recording.md)
+
+### 入力監視と設定
+
 Jetson で自作 ROS package を build し、入力・teleop 操作要求・bridge を明示的に起動する。
 
 Pico 対応を初めて取り込むときは、Jetson の利用中の処理を終了して `./scripts/dev.sh --build` で image とコンテナを更新する。USB の後付け・再接続用 mount と通常ユーザーの serial group を起動時に準備するため、旧コンテナへの再接続だけでは反映されない。
@@ -100,7 +143,7 @@ Pico 対応を初めて取り込むときは、Jetson の利用中の処理を�
 入力 node が既に起動済みなら `./scripts/bringup.sh bridge`。bridge の設定は [atd_web_bridge](../../ros2_ws/src/atd_web_bridge/README.md) を参照する。既定 topic は実際の bringup の topic・型へ合わせる必要がある。bridge の設定ファイルを用意して `./scripts/bringup.sh input config:=/absolute/path/bridge.yaml` で指定できる。
 `input` profile は Joy・teleop・Pico 受信・プロポ役割処理・bridge、`bridge` profile は bridge だけを起動する。`input` では `teleop:=false` で Joy の役割処理、`propo:=false` で Pico とプロポ役割処理を除外できる。起動 profile は `./scripts/bringup.sh --list` で確認し、引数なしの対話端末でも選べる。Notebook では `./scripts/bringup.sh --dry-run input` による確認だけを行い、実際の起動は Jetson の既存 Docker 内で行う。いずれも基板出力・bag 記録は実行しない。[bringup の操作](../../docs/bringup.md)も参照する。
 
-ライブ画面では Jetson が使用中の地図を自動選択する。地図 ID、cuVSLAM 地図と HDMap の SHA256 を照合し、追跡中に同じ時刻で得た位置・向き・車体前後速度と実走軌跡を Raceline に重ねる。追跡喪失、通信途絶、地図不一致の理由も確認できる。[別 bag の検証と Jetson の起動](../../docs/bringup.md#プロポ手動走行中に自己位置を確認する)
+ライブ画面では Jetson が使用中の地図を自動選択する。地図 ID、cuVSLAM 地図と HDMap の SHA256 を照合し、追跡中に同じ時刻で得た位置・向き・車体前後速度と実走軌跡を Jetson で選択したラインに重ねる。前方軌道と横ずれ、同じ観測時刻の目標速度と推定速度を表示する。追跡喪失、通信途絶、地図不一致の理由も確認できる。[別 bag の検証と Jetson の起動](../../docs/bringup.md#プロポ手動走行中に自己位置を確認する)
 
 Notebook backend は SSH 経由で Jetson の `127.0.0.1:8790` へ接続する。Notebook は車載 DDS に参加しない。Live では地図・pose・軌跡・速度の観測と ROS parameter の読書きを扱い、欠落・古いデータは表示で区別する。
 
@@ -115,7 +158,7 @@ Input は Jetson に Bluetooth 接続した DualSense の生入力・正規化�
 
 物理配置は `/data/results/runs/input/dualsense.yaml`、役割設定は `/data/results/runs/input/teleop.yaml` に永続保存する。役割の初期値はすべて未割り当て。操舵・スロットルは標準軸と差し引く軸、倍率（負値で反転）を選択でき、ボタンは出力許可の要求・記録開始要求・記録終了要求へ割り当てる。保存済みと node への反映済みを区別し、未保存の編集中に監視更新で内容を置き換えない。接続先や bridge が変わった場合は設定を再取得してから操作する。
 
-`atd_teleop` が生成するのは正規化した運転要求と操作イベント。`valid` や `enable_requested` は最終的な走行許可ではない。記録ボタンのイベントは `atd_recording` が実際のrosbag開始・停止へ接続する。記録ボタンだけの役割設定でも操作要求を再開でき、運転用軸が未設定なら運転要求は無効のままになる。出力許可判断・ATD の基板通信は後続実装。詳細は [atd_joy](../../ros2_ws/src/atd_joy/README.md)、[atd_teleop](../../ros2_ws/src/atd_teleop/README.md)、[atd_interfaces](../../ros2_ws/src/atd_interfaces/README.md)を参照する。
+`atd_teleop` は正規化した運転要求と操作イベントを配信する。DualSense 走行時は `atd_joy_drive` が CH3、Joy の入力状態、Pico の操作経路を確認して CDC0 に運転指令を送る。記録ボタンのイベントは `atd_recording` が rosbag の開始・停止へ接続する。記録ボタンだけを割り当てた場合も記録操作は利用でき、運転用軸が未設定の間は運転要求が無効になる。詳細は [atd_joy](../../ros2_ws/src/atd_joy/README.md)、[atd_teleop](../../ros2_ws/src/atd_teleop/README.md)、[atd_interfaces](../../ros2_ws/src/atd_interfaces/README.md)を参照する。
 
 「コントローラ」→「プロポ・Pico」では、受信機 → S.BUS → Pico → USB → Jetson で受け取った入力の PWM 相当値（µs）と raw 値（0〜2047）、USB・S.BUS・操作経路・電源・異常・受信カウンタを監視する。CH1〜CH6を既定表示し、表示数を6／10／16chに切り替えられる。表示数は Notebook のブラウザに保持し、高いCHに役割があれば表示を自動で広げる。受信・ROS・APIでは常に全16chを保持するため、10chプロポへの変更で通信の型を作り直す必要はない。現在のUSB監視データから使用中のch数は判別できないため、表示数を送受信機の自動検出結果とは扱わない。Pico の CH1＝操舵・CH2＝スロットル・CH3＝操作権は固定で、この画面では変更しない。
 
@@ -123,7 +166,7 @@ Input は Jetson に Bluetooth 接続した DualSense の生入力・正規化�
 
 Jetson 側の「記録の開始・停止」「予備1」「予備2」は CH4〜CH16 へ割り当てられ、初期値は全て未割り当て。低側・高側の raw 閾値、反転、位置の確認時間を設定できる。使用するプロポが送信できるCHを選ぶ。設定開始 → 保存 → 再読込 → 操作要求を再開の順で反映し、保存先は `/data/results/runs/input/propo.yaml`。既存の version 1 の設定も利用できる。設定開始は役割イベントだけを停止し、Pico の基本手動操作は継続する。再開には正常で新鮮な RC 入力が必要で、現在のスイッチ位置を基準に取り直す。通常は安定した低側→高側で記録開始要求、高側→低側で停止要求となる。中間位置とチャタリングでは要求を出さない。予備2枠は状態表示のみ。記録要求は `/rc/events` から `atd_recording` へ渡し、Joyと同じ記録セッションを開始・停止する。
 
-`atd_vehicle_interface` は Rev6 の監視用 CDC1 / if02 を USB 属性と Pico 固有 serial で識別し、`INFO` と `STREAM ON` だけを送信する。複数 Pico があれば自動選択せず、`./scripts/bringup.sh input pico_serial:=<ID>` で選ぶ。必要なら `pico_sensor_path:=/dev/serial/by-id/<CDC1>`・`pico_config:=<YAML>`・`rc_profile:=<YAML>` を指定できる。CDC0 と走行指令は使わず、firmware の制御処理は変更していない。firmware ソースは [Pico firmware](../../ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/README.md) として同じ ROS package 内で Git 管理する。詳細は [Pico 受信](../../ros2_ws/src/atd_vehicle_interface/README.md)、[プロポ役割](../../ros2_ws/src/atd_rc_input/README.md)、[要件3.10節](../../docs/project_requirements.md#310-rev6-pico-firmware-の確認2026-11-18)を参照する。ホスト検証と Jetson Docker・実 USB・実機の確認は別である。
+`atd_vehicle_interface` は Rev6 の監視用 CDC1 / if02 を USB 属性と Pico 固有 serial で識別し、`INFO` と `STREAM ON` だけを送信する。複数 Pico があれば自動選択せず、`./scripts/bringup.sh input pico_serial:=<ID>` で選ぶ。必要なら `pico_sensor_path:=/dev/serial/by-id/<CDC1>`・`pico_config:=<YAML>`・`rc_profile:=<YAML>` を指定できる。DualSense で実際に運転する場合は Jetson の `joy-drive` または `manual` を起動し、CH3 が HOST のときに別 node から CDC0 / if00 へ操作値を送る。firmware ソースは [Pico firmware](../../ros2_ws/src/atd_vehicle_interface/firmware/pico_rev6/README.md) として同じ ROS package 内で Git 管理する。詳細は [Pico 受信](../../ros2_ws/src/atd_vehicle_interface/README.md)、[プロポ役割](../../ros2_ws/src/atd_rc_input/README.md)、[要件3.10節](../../docs/project_requirements.md#310-rev6-pico-firmware-の確認2026-11-18)を参照する。ホスト検証と Jetson Docker・実 USB・実機の確認は別である。
 
 ## rosbagの記録状態
 
@@ -148,6 +191,8 @@ Jetson で `./scripts/build.sh --packages-up-to atd_bringup` 後、`./scripts/br
 | `frontend/` | React / TypeScript / Vite。依存は pnpm lock で固定 |
 | `backend/` | FastAPI、資産・設定・ジョブ管理、SCP、公式 ROS CLI、Jetson 接続 |
 | `processing/` | Web に依存しない HDMap 幾何処理・ライン生成 |
+| `../../ros2_ws/src/atd_planning/` | 手動走行・別 bag 共通のライン投影と前方軌道・速度計算 |
+| `../../ros2_ws/src/atd_control/` | 速度適応 Pure Pursuit、速度 FF＋PID、プロポと DualSense の入力・操作経路との時刻照合 |
 | `../../ros2_ws/src/atd_localization/` | 別走行 bag による保存地図での自己位置推定と追跡区間の検証 |
 | `../../ros2_ws/src/atd_mapping/` | 保存地図の localize と点群 snapshot の取得 |
 | `../../ros2_ws/src/atd_web_bridge/` | Jetson の ROS 観測・設定と loopback HTTP |

@@ -13,12 +13,23 @@
       - /teleop/command
       - /teleop/events
       - /teleop/status
+      - /vehicle/joy_drive/status
+      - /localization/status
+      - /planning/status
+      - /control/status
+      - /control/speed_status
+      - /vehicle/auto_drive/status
+      - /camera/camera/accel/sample
+      - /camera/camera/imu
       - /vehicle/pico/telemetry
       - /vehicle/pico/status
       - /rc/events
       - /rc/status
       - /vehicle/layout/status
     best_effort_topics:
+      - /camera/camera/accel/sample
+      - /camera/camera/imu
       - /joy/raw
+      - /vehicle/joy_drive/status
     transient_local_topics:
       - /tf_static

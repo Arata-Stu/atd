@@ -1,6 +1,6 @@
-export async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {
+export async function api<T>(path: string, body?: unknown, method?: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch('/api/' + path, {
-    method: method ?? (body === undefined ? 'GET' : 'POST'),
+    method: method ?? (body === undefined ? 'GET' : 'POST'), signal,
     ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   });
   const contentType = response.headers.get('content-type') || '';

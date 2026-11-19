@@ -1,0 +1,5 @@
+#!/usr/bin/python3
+from atd_control.bag_propo import main
+
+if __name__ == '__main__':
+    main()

@@ -1,15 +1,20 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>atd_vehicle_interface</name><version>0.1.0</version>
-  <description>Receive JPBB Rev6 Pico telemetry and RC channels without driving outputs.</description>
+  <description>JPBB Rev6 Pico telemetry, RC channels, CH3-selected manual and low-speed autonomous drive.</description>
   <maintainer email="carbuncle01@users.noreply.github.com">carbuncle01</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake_auto</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
   <depend>atd_interfaces</depend><depend>rclcpp</depend>
   <depend>rclcpp_components</depend><depend>rcl_interfaces</depend>
   <depend>std_msgs</depend><depend>yaml-cpp</depend>
   <exec_depend>ament_index_python</exec_depend><exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>atd_esc_trials</exec_depend><exec_depend>rclpy</exec_depend>
+  <exec_depend>atd_control</exec_depend><exec_depend>python3-yaml</exec_depend>
   <test_depend>python3</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>sensor_msgs</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -130,7 +130,7 @@ bag の記録対象や各 bag の topic / frame は実データに合わせて�
 ### 2.7. シェルスクリプト・TUI・ブラウザ UI の操作方針
 
 - ノート PC と Jetson の日常操作では、シェルスクリプト（`.sh`）や UI を基本とし、ターミナルコマンドを繰り返し手入力する負担を減らす。
-- 共通コマンド `atd` で日常操作の選択メニューを開く。Notebook・Jetson とホスト・Docker に応じて選択肢を表示し、`atd build` などの直接指定も既存のスクリプトに渡す。
+- 共通コマンド `atd` で日常操作の選択メニューを開く。Notebook・Jetson とホスト・Docker に応じて選択肢を表示し、`atd build` などの直接指定も既存のスクリプトに渡す。Jetson Docker で選んだ Bluetooth・Hotspot・表示モード・性能設定は、SSH で同じ Jetson ホストのスクリプトを呼び出す。
 - よく使う日常入口を `scripts/` 直下に置き、現在は `setup.sh`・`dev.sh`・`build.sh`・`vgl.sh`・`bluetooth.sh`・`hotspot.sh`・`jetson_display_mode.sh`・`jetson_max_performance.sh`・`bringup.sh`・`webui.sh` を置く。診断・Python 環境管理の補助入口は `scripts/tools/`、ホスト判定等の共通関数は `scripts/lib/` に置く。
 - ユーザーは CUI であっても対話形式や TUI を好む。ユーザー向けの CLI・補助スクリプトでは、この操作方針を優先する。
 - `fzf` を用いた TUI を積極的に活用し、候補を検索・選択して対話的に実行できるようにする。

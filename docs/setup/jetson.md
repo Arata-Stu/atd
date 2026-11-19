@@ -41,7 +41,26 @@ runtime の設定変更で Docker の再起動が必要な場合は、既存の�
 
 ### Jetson ホストの操作
 
-次のコマンドは Jetson ホストのリポジトリ直下で実行する。
+`atd` の `bluetooth`・`hotspot`・`display`・`performance` は、Jetson ホストと Jetson Docker の両方から使える。Docker 内では「Jetson ホストへ SSH」と表示され、host network を通じて同じ Jetson の `127.0.0.1:22` にログインする。
+
+初回は Jetson **ホスト**で次を実行する。接続確認が表示されたら、表示中のフィンガープリントを最初のコマンドの出力と照合して登録する。SSH サーバーが起動し、このユーザーでログインできることが前提。
+
+```bash
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+ssh -F /dev/null -o HostKeyAlgorithms=ssh-ed25519 atd@127.0.0.1 true
+```
+
+`dev.sh` は起動時に存在するホストの `~/.ssh` を読み取り専用で共有する。このディレクトリを起動後に初めて作った場合は、作業を終えてからコンテナを再作成する。ログイン名が `atd` 以外の場合は上の接続先を変更し、Docker 内でも `ATD_JETSON_SSH_USER` にその名前を設定する。ホスト側は登録済みの `~/.local/bin/atd` または標準 clone の `~/workspaces/atd/scripts/atd` を使う。
+
+Jetson **Docker 内**で、状態確認から試せる。対話端末では SSH・sudo の認証や初回 AP パスワードの入力も同じ端末で行える。
+
+```bash
+atd hotspot status
+atd bluetooth status
+atd hotspot on --band 5
+```
+
+個別のスクリプトを直接呼ぶ場合は Jetson ホストのリポジトリ直下で実行する。
 
 | 操作 | コマンド |
 | --- | --- |

@@ -16,7 +16,9 @@ export PATH="$HOME/.local/bin:$PATH"
 atd
 ```
 
-メニューではコマンド名を入力して絞り込み、Enter で選択する。fzf がない場合は番号で選べる。Jetson ホストでは `bluetooth` から DualSense の接続、`hotspot` から起動・帯域切替・停止を選べる。`build` ではワークスペース全体または対象パッケージとその依存先を選ぶ。Notebook の Web UI は `web` から開く。
+メニューではコマンド名を入力して絞り込み、Enter で選択する。fzf がない場合は番号で選べる。`build` ではワークスペース全体または対象パッケージとその依存先を選ぶ。Notebook の Web UI は `web` から開く。
+
+Jetson ではホスト・Docker のどちらからも `bluetooth`、`hotspot`、`display`、`performance` を選べる。Docker 内で「Jetson ホストへ SSH」と表示される操作は、同じ Jetson の `atd@127.0.0.1` に接続して実行する。[初回接続と使用例](docs/setup/jetson.md#jetson-host-tools)
 
 ホストから `build` や `web` を使うには、先に `dev` で開発コンテナを起動する。コンテナ内でも再入室すると `atd` が使える。今いる環境の一覧は `atd --list` で確認でき、`atd build --packages-up-to atd_bringup` のように直接実行もできる。登録前はプロジェクト直下の `./scripts/atd` で開ける。
 

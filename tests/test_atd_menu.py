@@ -33,8 +33,25 @@ class AtdMenuTests(unittest.TestCase):
         uname.write_text('#!/bin/sh\nif [ "$MENU_TEST_HOST" = jetson ]; then echo aarch64; else echo x86_64; fi\n')
         uname.chmod(0o755)
         self.calls = self.root / 'calls'
+        self.ssh_args = self.root / 'ssh-args'
+        self.host_calls = self.root / 'host-calls'
         self.env = {'PATH': str(self.bin), 'HOME': str(self.root), 'TERM': 'xterm',
-                    'MENU_TEST_HOST': 'pc', 'MENU_TEST_CALLS': str(self.calls)}
+                    'MENU_TEST_HOST': 'pc', 'MENU_TEST_CALLS': str(self.calls),
+                    'MENU_TEST_SSH_ARGS': str(self.ssh_args), 'MENU_TEST_HOST_CALLS': str(self.host_calls)}
+        ssh = self.bin / 'ssh'
+        # コンテナ内で試験する場合も、模擬 SSH 先はホストのファイル配置を使う。
+        ssh.write_text('#!/bin/bash\nprintf "%s\\0" "$@" > "$MENU_TEST_SSH_ARGS"\n'
+                       'if [[ -n "${MENU_TEST_SSH_RC:-}" ]]; then exit "$MENU_TEST_SSH_RC"; fi\n'
+                       'remote="${!#}"\n'
+                       'remote="${remote//\\/.dockerenv/fixture.dockerenv}"\n'
+                       'remote="${remote//\\/run\\/.containerenv/fixture.containerenv}"\n'
+                       'exec /bin/sh -c "$remote"\n')
+        ssh.chmod(0o755)
+        remote = self.root / '.local/bin/atd'
+        remote.parent.mkdir(parents=True)
+        remote.write_text('#!/bin/sh\nprintf "%s\\0" "$@" > "$MENU_TEST_HOST_CALLS"\n'
+                          'exit "${MENU_TEST_REMOTE_RC:-0}"\n')
+        remote.chmod(0o755)
         for filename in ('build', 'dev', 'setup', 'webui', 'bluetooth', 'hotspot',
                          'bringup', 'vgl', 'jetson_display_mode', 'jetson_max_performance'):
             wrapper = self.scripts / (filename + '.sh')
@@ -110,7 +127,7 @@ exit 130
     def listed(self, host, container=False):
         result = self.invoke('--list', MENU_TEST_HOST=host, MENU_TEST_CONTAINER=str(int(container)))
         self.assertEqual(result.returncode, 0, result.stderr)
-        return [line.split()[0] for line in result.stdout.splitlines() if line.strip()]
+        return dict(line.split('\t', 1) for line in result.stdout.splitlines() if line.strip())
 
     def test_list_matches_host_and_container(self):
         for host in ('pc', 'jetson'):
@@ -119,13 +136,63 @@ exit 130
                     menu = self.listed(host, container)
                     self.assertIn('build', menu)
                     self.assertEqual('web' in menu, host == 'pc')
-                    self.assertEqual('dev' in menu, not container)
-                    self.assertEqual('hotspot' in menu, host == 'jetson' and not container)
-                    self.assertEqual('bluetooth' in menu, host == 'jetson' and not container)
-                    if 'hotspot' not in menu:
+                    jetson_commands = ['bluetooth', 'hotspot', 'display', 'performance']
+                    if host == 'jetson':
+                        for command in jetson_commands:
+                            self.assertIn(command, menu)
+                            if container:
+                                self.assertIn('SSH', menu[command])
+                                self.assertIn('ホスト', menu[command])
+                    else:
+                        self.assertTrue(set(jetson_commands).isdisjoint(menu))
                         result = self.invoke('hotspot', 'on', MENU_TEST_HOST=host,
                                              MENU_TEST_CONTAINER=str(int(container)))
                         self.assertNotEqual(result.returncode, 0)
+                    for command in ('dev', 'vgl', 'setup', 'docker', 'cache'):
+                        self.assertEqual(command in menu, not container)
+        self.assertFalse(self.calls.exists())
+        self.assertFalse(self.ssh_args.exists())
+
+    def test_jetson_docker_delegates_selected_band_to_host(self):
+        self.menu(picks=['hotspot', '5', 'quit'], MENU_TEST_HOST='jetson', MENU_TEST_CONTAINER='1')
+        arguments = self.ssh_args.read_bytes().decode().split('\0')[:-1]
+        self.assertEqual(arguments[-2], '127.0.0.1')
+        self.assertEqual(arguments[arguments.index('-l') + 1], 'atd')
+        self.assertEqual(arguments[arguments.index('-p') + 1], '22')
+        self.assertIn('-t', arguments)
+        self.assertEqual(self.host_calls.read_bytes().decode().split('\0'), ['hotspot', 'on', '--band', '5', ''])
+        self.assertFalse(self.calls.exists())
+
+    def test_jetson_docker_preserves_arguments_through_remote_shell(self):
+        marker = self.root / 'evaluated'
+        profile = f"team's AP; : > '{marker}'"
+        result = self.invoke('hotspot', 'on', '--profile', profile, MENU_TEST_HOST='jetson',
+                             MENU_TEST_CONTAINER='1', ATD_JETSON_SSH_USER='operator', MENU_TEST_REMOTE_RC='17')
+        self.assertEqual(result.returncode, 17, result.stderr)
+        arguments = self.ssh_args.read_bytes().decode().split('\0')[:-1]
+        self.assertEqual(arguments[-2], '127.0.0.1')
+        self.assertEqual(arguments[arguments.index('-l') + 1], 'operator')
+        self.assertIn('-T', arguments)
+        self.assertIn('BatchMode=yes', arguments)
+        self.assertEqual(self.host_calls.read_bytes().decode().split('\0'), ['hotspot', 'on', '--profile', profile, ''])
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.calls.exists())
+
+    def test_jetson_docker_ssh_failure_returns_error_and_host_command(self):
+        result = self.invoke('bluetooth', 'status', MENU_TEST_HOST='jetson', MENU_TEST_CONTAINER='1',
+                             MENU_TEST_SSH_RC='255')
+        self.assertEqual(result.returncode, 255)
+        self.assertIn('atd bluetooth status', result.stderr + result.stdout)
+        self.assertTrue(self.ssh_args.exists())
+        self.assertFalse(self.host_calls.exists())
+        self.assertFalse(self.calls.exists())
+
+    def test_jetson_docker_rejects_another_container_as_ssh_target(self):
+        (self.root / 'fixture.dockerenv').touch()
+        result = self.invoke('performance', '--check', MENU_TEST_HOST='jetson', MENU_TEST_CONTAINER='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.ssh_args.exists())
+        self.assertFalse(self.host_calls.exists())
         self.assertFalse(self.calls.exists())
 
     def test_fzf_selects_band_and_back_returns_to_main_menu(self):
@@ -146,7 +213,7 @@ exit 130
                 self.assertFalse(self.calls.exists())
 
     def test_numbered_menu_selects_bluetooth_status_without_fzf(self):
-        options = self.listed('jetson')
+        options = list(self.listed('jetson'))
         choice = options.index('bluetooth') + 1
         self.menu(keys=f'{choice}\n2\n{len(options) + 1}\n'.encode(), MENU_TEST_HOST='jetson')
         self.assert_call('bluetooth.sh', 'status')

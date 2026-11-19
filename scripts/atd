@@ -17,10 +17,16 @@ if [[ "$host" = jetson ]]; then device=Jetson; else device=Notebook; fi
 commands=()
 paths=()
 labels=()
+host_ssh=lib/jetson_host_ssh.sh
 add_command() {
     commands+=("$1")
-    paths+=("$2")
-    labels+=("$3")
+    if [[ "${4:-}" = host-control && "$location" = Docker ]]; then
+        paths+=("$host_ssh")
+        labels+=("$3（Jetson ホストへ SSH）")
+    else
+        paths+=("$2")
+        labels+=("$3")
+    fi
 }
 
 if [[ "$location" = ホスト ]]; then
@@ -29,12 +35,10 @@ fi
 add_command build build.sh 'ROS パッケージをビルド'
 if [[ "$host" = jetson ]]; then
     add_command bringup bringup.sh '車両の起動構成を選ぶ'
-    if [[ "$location" = ホスト ]]; then
-        add_command bluetooth bluetooth.sh 'DualSense の接続・状態確認'
-        add_command hotspot hotspot.sh 'Wi-Fi アクセスポイントの起動・帯域切替・停止'
-        add_command display jetson_display_mode.sh 'GUI / CUI 起動モードを設定'
-        add_command performance jetson_max_performance.sh '最大クロック・ファンの確認と適用'
-    fi
+    add_command bluetooth bluetooth.sh 'DualSense の接続・状態確認' host-control
+    add_command hotspot hotspot.sh 'Wi-Fi アクセスポイントの起動・帯域切替・停止' host-control
+    add_command display jetson_display_mode.sh 'GUI / CUI 起動モードを設定' host-control
+    add_command performance jetson_max_performance.sh '最大クロック・ファンの確認と適用' host-control
 elif [[ "$location" = ホスト || "$(uname -m)" = x86_64 ]]; then
     add_command web webui.sh 'Notebook の Web UI を起動・準備'
 fi
@@ -45,6 +49,19 @@ if [[ "$location" = ホスト ]]; then
     add_command docker tools/docker.sh 'Docker 環境を診断'
     add_command cache tools/clean-docker-cache.sh 'Docker キャッシュの確認・整理'
 fi
+
+# 直接実行と TUI で同じ起動先を解決する。
+resolve_command() {
+    local index
+    for index in "${!commands[@]}"; do
+        if [[ "${commands[index]}" = "$1" ]]; then
+            runner=("$scripts_dir/${paths[index]}")
+            if [[ "${paths[index]}" = "$host_ssh" ]]; then runner+=("$1"); fi
+            return 0
+        fi
+    done
+    return 1
+}
 
 usage() {
     cat <<'EOF'
@@ -100,7 +117,8 @@ choose() {
 }
 
 run_from_menu() {
-    local key="$1" script="$2" title="$device $location / $1" action manifest package
+    local key="$1" title="$device $location / $1" action manifest package
+    shift
     local -a options=()
     case "$key" in
         build)
@@ -124,17 +142,17 @@ run_from_menu() {
             options=(check 'クロックとファンを確認' apply '最大クロック・最大ファンを適用') ;;
         cache)
             options=(inspect '使用量と削除候補を確認' prune '未使用のビルドキャッシュを整理（確認あり）') ;;
-        *) "$script"; return ;;
+        *) "$@"; return ;;
     esac
     action="$(choose "$title" "${options[@]}" back '前のメニューへ')" || return 0
     [[ "$action" != back ]] || return 0
     case "$key/$action" in
-        build/all|performance/apply|cache/prune) "$script" ;;
-        build/*) "$script" --packages-up-to "$action" ;;
-        hotspot/2.4|hotspot/5) "$script" on --band "$action" ;;
-        performance/check) "$script" --check ;;
-        cache/inspect) "$script" --dry-run ;;
-        *) "$script" "$action" ;;
+        build/all|performance/apply|cache/prune) "$@" ;;
+        build/*) "$@" --packages-up-to "$action" ;;
+        hotspot/2.4|hotspot/5) "$@" on --band "$action" ;;
+        performance/check) "$@" --check ;;
+        cache/inspect) "$@" --dry-run ;;
+        *) "$@" "$action" ;;
     esac
 }
 
@@ -145,12 +163,10 @@ if (($#)); then
             for i in "${!commands[@]}"; do printf '%s\t%s\n' "${commands[i]}" "${labels[i]}"; done
             exit 0 ;;
     esac
-    for i in "${!commands[@]}"; do
-        if [[ "$1" = "${commands[i]}" ]]; then
-            shift
-            exec "$scripts_dir/${paths[i]}" "$@"
-        fi
-    done
+    if resolve_command "$1"; then
+        shift
+        exec "${runner[@]}" "$@"
+    fi
     printf 'atd: %s %s で選べないコマンドです: %s（atd --list で一覧）\n' "$device" "$location" "$1" >&2
     exit 2
 fi
@@ -160,11 +176,8 @@ menu=()
 for i in "${!commands[@]}"; do menu+=("${commands[i]}" "${labels[i]}"); done
 while selected="$(choose "ATD / $device $location" "${menu[@]}" quit '終了')"; do
     [[ "$selected" != quit ]] || break
-    for i in "${!commands[@]}"; do
-        if [[ "${commands[i]}" = "$selected" ]]; then
-            run_from_menu "$selected" "$scripts_dir/${paths[i]}" ||
-                printf 'atd: %s は終了コード %d で終了しました。\n' "$selected" "$?" >&2
-            break
-        fi
-    done
+    if resolve_command "$selected"; then
+        run_from_menu "$selected" "${runner[@]}" ||
+            printf 'atd: %s は終了コード %d で終了しました。\n' "$selected" "$?" >&2
+    fi
 done

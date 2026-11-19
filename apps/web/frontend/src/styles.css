@@ -139,3 +139,11 @@
 @media(max-width:1100px) { .validation-review-grid { grid-template-columns:minmax(0,1.5fr) minmax(220px,1fr); } }
 @media(max-width:900px) { .validation-review-grid { grid-template-columns:minmax(0,1fr); } .validation-gap-panel { border:0; border-top:1px solid var(--line); } }
 @media(max-width:760px) { .validation-fields, .validation-option-grid { grid-template-columns:minmax(0,1fr); } .validation-fields .button { justify-self:start; } .validation-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } .validation-job { align-items:flex-start; flex-direction:column; } }
+
+.transfer-settings { border: 0; margin: 0; padding: 0; min-width: 0; }
+.transfer-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 18px; }
+.transfer-preset { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 6px; padding: 7px 11px; background: #fff; color: #42564a; border: 1px solid var(--line); border-radius: 6px; }
+.transfer-preset strong { font-size: 11px; }
+.transfer-preset span { font-size: 11px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.transfer-preset[aria-pressed="true"] { color: #24573b; background: #edf6ef; border-color: #83ad91; }
+.transfer-error { color: #9a362f; font-size: 12px; }

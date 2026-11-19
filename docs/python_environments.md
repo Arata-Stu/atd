@@ -62,7 +62,9 @@ venv の architecture は `uname -m` の値を使う。workspace の bind mount 
 `ros` / `train` の追加 Python 依存は空であり、学習用ライブラリの導入・動作確認までは含まない。`vgl-export` は PyTorch / torchvision・ONNX 等を固定する Notebook 専用環境で、モデルからの export を選んだときに同期する。依存の版は project と lockfile を参照する。
 VGL export・既存 bundle の package・Jetson の engine build は [専用の操作手順](vgl_models.md)を使う。Jetson の engine build に Notebook の export 用 venv をコピーしない。
 
-共通 Web UI は Notebook の Docker 内で `atd-web` を実行し、`web` 環境を同期・選択して起動する。ホストの `scripts/tools/webui.sh` は同じコンテナ内コマンドを呼ぶ補助入口である。ソースの backend / processing は ホストと共有する checkout から読み、frontend の build と node_modules は workspace の `.atd-web/frontend/` へ作成する。`web` は Linux x86_64 の Notebook 専用で、ROS CLI を呼ぶ子プロセスでだけシステムの ROS 環境を読み込む。通常起動時に `atd-python raceline sync` で最小曲率 helper 用環境も同期し、`ATD_RACELINE_PYTHON` にその Python を設定して別プロセスを起動する。`raceline` は Python 3.12 と NumPy・SciPy・quadprog・固定 commit の trajectory-planning-helpers 等を独立した lock で管理する。`atd-web build` は frontend の build だけで、Python 環境の同期とは別である。`atd-web check` は `web` / `raceline` 環境と公式・自作 ROS package の導入状態を診断する。操作は [Web アプリ](../apps/web/README.md)を参照する。
+Notebook の Docker 内でオンライン時に `atd-web prepare` を実行し、`web` / `raceline` を同期して frontend をビルドする。venv、ビルド済み画面と node_modules はマウント済み workspace に保存する。Web frontend や依存の更新時にもこの準備を行う。通常は `atd-web` で準備済み環境を使ってオフラインで起動できる。backend / processing のソースは共有 checkout から読み込む。
+
+`web` は Linux x86_64 の Notebook 専用で、ROS CLI を呼ぶ子プロセスでだけシステムの ROS 環境を読み込む。`ATD_RACELINE_PYTHON` は最小曲率 helper の別プロセスが使う Python を指す。`raceline` は Python 3.12 と NumPy・SciPy・quadprog・固定 commit の trajectory-planning-helpers 等を独立した lock で管理する。`atd-web check` は `web` / `raceline` 環境と公式・自作 ROS package の導入状態を診断する。操作は [Web アプリ](../apps/web/README.md)を参照する。
 
 ## ROS 2 と Python interpreter
 

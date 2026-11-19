@@ -116,8 +116,10 @@ class SetupScriptTests(unittest.TestCase):
         # CI が root の場合も dispatcher の通常ユーザー経路を検証する。
         (self.bin / "id").write_text('#!/bin/sh\n[ "$1" = -u ] || exit 1\nprintf "1000\\n"\n')
         (self.bin / "id").chmod(0o755)
-        for relative, tool in (("scripts/setup/host.sh", "host"), ("scripts/dev.sh", "dev")):
+        for relative, tool in (("scripts/setup/host.sh", "host"), ("scripts/dev.sh", "dev"),
+                               ("scripts/tools/webui.sh", "webui")):
             executable = self.project / relative
+            executable.parent.mkdir(exist_ok=True)
             executable.write_text(
                 '#!/bin/bash\nexec "$ATD_TEST_PYTHON" "$ATD_TEST_RECORDER" '
                 + shlex.quote(tool) + ' "$@"\n'
@@ -308,6 +310,15 @@ class SetupScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls("dev")[0]["workspace"], selected)
         self.assertFalse(self.workspace_config.exists())
+
+    def test_web_prepares_in_the_running_notebook_container(self):
+        result = self.invoke("--host", "notebook", "--action", "web")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls("webui")[0]["args"], ["prepare"])
+        self.reset_calls()
+        result = self.invoke("--host", "jetson", "--action", "web")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.calls(), [])
 
     def test_workspace_dry_run_does_not_source_local_configuration(self):
         sentinel = self.root / "workspace-should-not-be-created"

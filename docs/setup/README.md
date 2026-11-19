@@ -30,6 +30,7 @@ Notebook と Jetson は driver / BSP と CLI の apt suite が異なるため、
 3. workspace で ROS workspace のパスを入力して保存し、CLI 設定とホスト / コンテナの対応を確認する。
 4. Docker と NVIDIA runtime、CLI の状態を確認する。
 5. 初回イメージを build してコンテナへ入る。
+6. Notebook の Web UI を使う場合は、インターネットに接続した状態でコンテナ内から `atd-web prepare` を実行する。同じ準備をホストの別端末から `./scripts/setup.sh --action web` でも実行できる。
 
 直接指定する場合も、同じ入口を使える。
 
@@ -66,6 +67,7 @@ OS のフラッシュ、GPU driver の自動置換、ディスクの初期化、
 | `verify` | Docker、CLI の Docker モード、NVIDIA runtime の起動確認 |
 | `build` | `dev.sh --build` で初回イメージを build・起動 |
 | `start` | `dev.sh` で通常起動・稼働中コンテナへ再接続 |
+| `web` | 起動済み Notebook コンテナで Web UI の Python・フロントエンド依存を準備し、画面をビルド |
 | `all` | ホスト準備、保存先・workspace 設定、verify、初回 build を順に実行 |
 
 `--dry-run` は予定する操作の表示だけを行い、`sudo`、通信、ファイル作成を実行しない。macOS でも操作の確認に使えるが、実際のホスト導入は Ubuntu 24.04 で行う。
@@ -114,7 +116,8 @@ CLI 設定テンプレートは `docker/isaac_ros/`、Docker の生成物は `<A
 | 更新したもの | 反映方法 |
 | --- | --- |
 | `docker/scripts/atd-{web,build,vgl,shell}.sh`、`atd.bashrc`、`tools/vgl/*.py` | 同じコンテナでコマンドを再実行する。Web サーバーなら終了して `atd-web` を再実行する。 |
-| Web・Raceline・VGL export・学習の Python 依存、Web frontend の依存 | 同じコンテナで該当コマンドを実行し、マウントした workspace の venv や `node_modules` に同期する。 |
+| Web frontend のソース・依存、Web・Raceline の Python 依存 | Notebook Docker 内で `atd-web prepare` を実行し、Web サーバーを再起動する。 |
+| VGL export・学習の Python 依存 | 同じコンテナで該当する Python 環境を同期する。 |
 | 起動 hook、DDS の XML・配置処理、USB serial の初期化、起動時の ROS 用 Python 同期・lock | 利用中の処理を終了してコンテナを停止し、ホストで `./scripts/dev.sh` を実行する。同じイメージで初期化が走る。 |
 | Dockerfile、apt 依存・導入スクリプト、SDK、uv・Node・pnpm 本体、イメージの固定入口 | コンテナを停止し、ホストで `./scripts/dev.sh --build` を実行する。旧イメージからこの構成に移るときも、各ホストで一度必要。 |
 | 自作 ROS package のソース | コンテナ内で `./scripts/build.sh --packages-up-to <package>` を実行し、workspace にビルドする。 |

@@ -115,7 +115,7 @@
 5. 作成した地図を Jetson へ転送する。
 
 地図作成は NVIDIA の公式 offline 処理を利用し、cuVSLAM / VGL で使う地図を準備する。保存地図への localize と点群 snapshot の取得、HDMap の作成・編集、centerline / raceline / 必要に応じた custom line の生成まで共通 Web アプリで扱う。駐車機能は対象に含めない。
-bag の Jetson → ノート PC、作成地図のノート PC → Jetson の転送は、SCP を簡単に実行できる機能として提供する。
+bag の Jetson → ノート PC、作成地図のノート PC → Jetson の転送は、SCP を簡単に実行できる機能として提供する。転送画面には USB・Hotspot の接続先を用意し、よく使う Wi-Fi の IP も登録できるようにする。重いデータの転送には USB を基本とし、USB 用 IP 以外で bag 受信・地図送信を開始するときは接続先を示して実行を確認する。
 
 VGL モデルの準備・配備は、次の分担とする。
 
@@ -149,7 +149,7 @@ bag の記録対象や各 bag の topic / frame は実データに合わせて�
 - 用途ごとに Python 環境を分離し、ROS 2 用の追加依存と AI 学習用の依存を別の環境で管理する。
 - 具体的な学習 framework、Python / CUDA wheel の組み合わせや、その他の用途別環境は必要になった段階で決める。
 
-Notebook の VGL export は `vgl-export`、Web API は `web`、Raceline の最小曲率・反復最小曲率 helper は Python 3.12 の `raceline` という独立した uv project / lock / venv を持つ。通常の `atd-web` 起動で `web` / `raceline` を同期し、QP / IQP 計算は別プロセスへ分離する。これらは AI 学習用 framework の採用とは分ける。
+Notebook の VGL export は `vgl-export`、Web API は `web`、Raceline の最小曲率・反復最小曲率 helper は Python 3.12 の `raceline` という独立した uv project / lock / venv を持つ。初回と Web frontend・依存の更新後はオンラインで `atd-web prepare` を実行し、`web` / `raceline` の依存とビルド済み画面を workspace に用意する。通常の `atd-web` はこれらを使ってオフラインで起動する。QP / IQP 計算は別プロセスへ分離する。これらは AI 学習用 framework の採用とは分ける。
 
 用途別環境の構成・操作・実装上の制約は [Python 環境](python_environments.md) を参照する。ROS 2 package の CMake / `ament_cmake_auto` による build 方針は維持する。
 

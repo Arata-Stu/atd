@@ -85,7 +85,7 @@
 - ROS 2 の apt パッケージと OS の Python はシステム側で管理する。ROS 2 用 venv はコンテナの `/usr/bin/python3` と `--system-site-packages` を使い、配布済み ROS 2 Python 拡張との ABI を合わせる。
 - AI 学習用 venv には ROS 2 の system site-packages や `PYTHONPATH` を引き継がせない。ROS 2 の追加依存と学習依存を同じ venv に混在させない。
 - Notebook の VGL export は `docker/python/vgl-export/` の独立した project / lock / venv を使う。重い export 依存を ROS 用・学習用へ混在させず、Jetson の標準起動時には同期しない。
-- Notebook の Web API と最小曲率計算は `docker/python/web/` / `docker/python/raceline/` の独立した uv project / lock / venv を使う。`raceline` は Python 3.12 の QP / IQP helper 用で、通常の `atd-web` 起動から同期し別プロセスで実行する。Web・ROS・学習依存へ混在させず、Jetson の標準環境へ追加しない。
+- Notebook の Web API と最小曲率計算は `docker/python/web/` / `docker/python/raceline/` の独立した uv project / lock / venv を使う。`raceline` は Python 3.12 の QP / IQP helper 用で、別プロセスで実行する。初回と Web frontend・依存の更新後はオンラインで `atd-web prepare` を実行し、通常起動は準備済みの venv と画面を使ってオフラインで行えるようにする。Web・ROS・学習依存へ混在させず、Jetson の標準環境へ追加しない。
 - OS Python への `pip install`、`uv pip install --system`、`--break-system-packages` による追加依存の導入を標準手順にしない。
 - `uv.lock` を管理対象とし、venv・cache・ダウンロード済み Python は各ホスト・コンテナで作成する。Notebook と Jetson の venv をコピーして共有しない。
 - 学習 framework、CUDA wheel、学習用 Python のバージョンと Jetson での学習対応は用途が決まった段階で選定する。Notebook と Jetson の GPU 依存を同一と仮定しない。

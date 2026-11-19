@@ -101,6 +101,37 @@ def test_api_disconnect_security_and_cloud(client):
     assert client.get('/api/maps/cloud/cloud').json()['source_count'] == 1
 
 
+def test_transfer_defaults_and_saved_settings(client):
+    defaults = client.get('/api/connection').json()
+    assert defaults == dict(host='', user='atd', port=22, bridge_port=8790,
+                            record_root='/home/atd/workspaces/atd/data/record/rosbags',
+                            map_root='/home/atd/workspaces/atd/data/results/maps')
+    custom = dict(host='jetson.local', user='driver', port=2222, bridge_port=8791,
+                  record_root='/mnt/usb/records', map_root='/mnt/usb/maps')
+    assert client.put('/api/connection', json=custom).json() == custom
+    assert client.get('/api/connection').json() == custom
+
+
+def test_transfer_uses_the_connection_reviewed_in_the_ui(client, monkeypatch):
+    usb = dict(client.get('/api/connection').json(), host='192.168.55.1')
+    hotspot = dict(usb, host='10.42.0.1')
+    assert client.put('/api/connection', json=usb).status_code == 200
+    assert client.put('/api/connection', json=hotspot).status_code == 200
+    monkeypatch.setattr('atd_api.transfers.request', lambda config, *_: {'host': config['host']})
+    monkeypatch.setattr(client.app.state.jobs, 'start', lambda _, payload, *args: payload)
+    client.app.state.store.create_map('track')
+    for route, data in [('browse', {'relative': ''}), ('pull', {'relative': 'run'}), ('push', {'id': 'track'})]:
+        url = '/api/transfer/' + route
+        assert client.post(url, json=dict(data, expected_connection=usb)).status_code == 409
+        for body in (dict(data, expected_connection=hotspot), data):
+            response = client.post(url, json=body)
+            assert response.status_code == 200
+            if route == 'browse':
+                assert response.json()['host'] == hotspot['host']
+            else:
+                assert response.json()['connection'] == hotspot
+
+
 def test_transfer_paths_and_hash_publish(tmp_path):
     for name in ('../out', '/out', 'foo;pwd', 'foo$HOME', '-oProxyCommand=anything'):
         with pytest.raises(ValueError):

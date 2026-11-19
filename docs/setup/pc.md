@@ -181,7 +181,7 @@ read -r -p 'NVIDIA の行に表示された版番号: ' atd_cli_version &&
 ## 4. 通常の使い方
 
 通常は `./scripts/setup.sh --action start` または `./scripts/dev.sh` で入る。
-PC では受信した bag の offline 処理、地図作成・編集、解析、可視化を行う。共通 Web アプリは `./scripts/tools/webui.sh` で起動し、Notebook ホストの Chrome から `http://127.0.0.1:8766` を開く。[Web アプリ](../../apps/web/README.md)を参照する。Jetson では UI を起動せず、入力・観測用の `./scripts/bringup.sh input` を使用する。
+PC では受信した bag の offline 処理、地図作成・編集、解析、可視化を行う。Web UI は初回と frontend・依存の更新後に、オンラインの Notebook Docker 内で `atd-web prepare` を実行する。現地ではコンテナ内の `atd-web` で起動し、Notebook ホストの Chrome から `http://127.0.0.1:8766` を開く。ホストで準備・起動する方法は [Web アプリ](../../apps/web/README.md)を参照する。Jetson では入力・観測用の `./scripts/bringup.sh input` を使用する。
 
 D455 を PC に直接接続する場合は devices のホスト準備も行い、[Jetson 手順の D455 確認](jetson.md#3-d455-と-dualsense)と同じ順に確認する。
 PC の Docker と Jetson の Docker は別々に build し、PC の `build/` / `install/` を Jetson 用として転送しない。
@@ -196,7 +196,8 @@ ssh -p 22 USER@JETSON_HOST true
 # パスフレーズ付き鍵は既存の SSH agent へ読み込んでおく。
 ssh-add ~/.ssh/id_ed25519
 ./scripts/dev.sh
-./scripts/tools/webui.sh
+# ここから Notebook の Docker 内（Web UI は準備済み）
+atd-web
 ```
 
 `ssh-add` は agent を利用する場合だけ実行し、鍵ファイル名は利用中のものに合わせる。Web の「転送」で同じ接続先・ユーザー名・SSH portを保存する。ライブ・入力画面もこの接続設定を共用する。アプリは `BatchMode=yes` / `StrictHostKeyChecking=yes` を使うため、未登録のホスト鍵や未解除の鍵を接続成功扱いしない。

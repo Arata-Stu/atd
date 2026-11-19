@@ -4,18 +4,26 @@ Notebook の Chrome から使う React + TypeScript / Vite と FastAPI のロー
 
 ## 起動
 
-Notebook のホストで Docker を起動・入室し、コンテナ内から `atd-web` を実行する。
-Docker 設定を更新した場合は、利用中の処理を終了してイメージを再構築する。
+オンラインで Notebook の Docker を起動し、初回はコンテナ内で Web UI を準備する。
 
 ```bash
-# Notebook のホスト: Docker を起動・入室（初回・設定変更時は --build）
+# Notebook ホストから初回のイメージをビルドして入室
 ./scripts/dev.sh --build
-# ここから Notebook の Docker 内。初回・自作package更新時に実行
+# ここから Notebook の Docker 内
+atd-web prepare
+# bag 解析・地図作成に使う自作 ROS package は初回・更新時にビルド
 atd-build --packages-up-to atd_control atd_vehicle_calibration atd_web_bridge
+```
+
+`atd-web prepare` は Web API と Raceline 用の Python 依存を同期し、画面をビルドする。Python 環境は選択した workspace の `.atd-python/`、フロントエンドの `node_modules` と `dist` は `.atd-web/frontend/` に残る。以前の自動インストール版から更新した場合も、このコマンドを一度実行する。その後は Web・Raceline の依存やフロントエンドを更新したときに、現地へ行く前に同じ workspace で再実行する。
+
+現地では Notebook の Docker 内で次を実行し、Notebook ホストの Chrome で [Web UI](http://127.0.0.1:8766) を開く。
+
+```bash
 atd-web
 ```
 
-ブラウザは Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。FastAPI・frontend の build / 配信・地図作成等のジョブは Notebook の Docker 内で実行する。`atd-web` は専用の `web` 用 uv 環境を同期・選択して API を起動する。Raceline の最小曲率計算用には、独立した Python 3.12 の `raceline` 環境も同期する。初回は frontend 依存の同期と build を行い、以後はソースの変更時だけ再buildする。ソースをホストと共有し、`node_modules` と `dist` は選択した workspace の `.atd-web/frontend/` へ生成する。
+通常起動は準備済みの環境・画面を使い、依存の取得やビルドを行わない。インターネット接続は不要。ライブ監視とデータ転送には Notebook と Jetson の間の接続が必要になる。
 
 ```bash
 # Notebook の Docker 内
@@ -26,7 +34,7 @@ atd-web --port 8769                # 通常 UI / API の port を変更
 atd-web --dry-run                 # 起動予定を表示
 ```
 
-ホストから起動したい場合の補助入口として `./scripts/tools/webui.sh` も用意している。これは既存コンテナへ `docker exec` で入って同じ `atd-web` を実行する。ホストに Web サーバーや Node / FastAPI を導入する経路ではない。
+Notebook ホストから準備する場合は、コンテナを起動してから `./scripts/setup.sh --action web` または `./scripts/tools/webui.sh prepare` を実行する。ホストからの通常起動は `./scripts/tools/webui.sh` を使う。いずれも同じコンテナ内の `atd-web` に委譲する。
 
 コンテナ・センサ・車両・記録はこの入口では自動起動しない。API は loopback 待受。通常利用はビルド済み frontend と API を同じ origin で配信する。
 
@@ -95,7 +103,11 @@ cuVSLAM 地図の内容 hash、VGL 地図・保存画像・モデルの対応情
 
 ## Transfer
 
-Jetson の SSH host・user・port、bag root と map root を画面で設定する。Jetson の bag ディレクトリを階層から選んで Notebook へ受信し、作成した地図ディレクトリを Jetson へ送信する。map root の例は Jetson ホストの `<result_dir>/maps`、bag root は `<record_dir>/rosbags`。コンテナ内の `/data/...` とホストのパスを混同しない。
+「データ転送」で USB（`192.168.55.1`）または Hotspot（`10.42.0.1`）を選ぶ。普段使う Wi-Fi の IP も名前を付けて登録できる。追加したプリセットは Notebook の同じブラウザで次回も選べる。「接続設定を保存」で選んだ宛先を転送とライブ監視に適用する。
+
+SSH ユーザーの初期値は `atd`。Jetson ホスト上の bag ディレクトリは `/home/atd/workspaces/atd/data/record/rosbags`、地図ディレクトリは `/home/atd/workspaces/atd/data/results/maps` が初期値で、実際の配置に合わせて変更できる。
+
+Jetson からは一覧で選んだ停止済み bag を受信し、Notebook からは保存済みの地図を送信する。USB 用 IP 以外の宛先では、いずれも開始前に接続先を確認する。判定には転送先のホスト名・IP を使う。Notebook のネットワークインターフェースや実際の経路は検出していない。
 
 鍵認証と既存の `known_hosts` を使い、password・秘密鍵をアプリ設定に保存しない。SCP は一時領域へ転送し、転送前後のファイル内容 SHA256 を確認して新規ディレクトリへ公開する。既存 ID は上書きしない。転送完了と Jetson が地図を読み込み走行に適用したことは別である。
 
@@ -209,7 +221,7 @@ Jetson で `./scripts/build.sh --packages-up-to atd_bringup` 後、`./scripts/br
 
 Docker の追加 apt 依存は [dependencies.apt](../../docker/dependencies.apt)、追加処理は [Dockerfile.atd](../../docker/Dockerfile.atd)。cuVSLAM・公式 mapping・visual mapping・VGL の apt package を使う。Node / pnpm と Web 用 Python 環境は Notebook 専用で、Jetson の通常起動では Web 依存を同期しない。
 
-Docker の Web 用 Python は `docker/python/web/` の独立した uv project / lock と、workspace の `.atd-python/<architecture>/web` を使う。最小曲率 helper は `docker/python/raceline/` と `.atd-python/<architecture>/raceline` の Python 3.12 環境を使い、通常の `atd-web` 起動で同期する。API は ROS の `PYTHONPATH` を引き継がず、公式 CLI を実行する子プロセスでだけ ROS 環境を読み込む。ローカル開発用には `backend/pyproject.toml` と `uv.lock` があり、`processing` をローカル依存として参照する。
+Docker の Web 用 Python は `docker/python/web/` の独立した uv project / lock と、workspace の `.atd-python/<architecture>/web` を使う。最小曲率 helper は `docker/python/raceline/` と `.atd-python/<architecture>/raceline` の Python 3.12 環境を使う。API は ROS の `PYTHONPATH` を引き継がず、公式 CLI を実行する子プロセスでだけ ROS 環境を読み込む。ローカル開発用には `backend/pyproject.toml` と `uv.lock` があり、`processing` をローカル依存として参照する。
 
 モデルのダウンロードや対象 GPU の engine build は、apt インストール成功とは別の操作・検証である。公式手順: [cuVSLAM](https://nvidia-isaac-ros.github.io/v/release-5.0/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_cuvslam/index.html)、[地図作成](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/visual_global_localization/tutorials/tutorial_map_creation.html)。
 

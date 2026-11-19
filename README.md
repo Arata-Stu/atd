@@ -32,7 +32,7 @@ RealSense D455 を初期センサとし、Jetson Orin Nano 8GB を搭載した R
 
 `bringup.sh` は引数なしの対話端末では profile を fzf で選択し、未導入時は番号選択を使う。D455を含む `manual` / `d455` では、各ストリームのOFF・解像度・Hzを実機の対応モードから選択する。初期値はInfra1/2 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。`--list` は一覧、`--dry-run manual` は Notebook からも実行予定だけを確認できる。実際の起動は Jetson の既存 Docker 内で行い、車両出力や bag 記録は自動開始しない。`manual` / `input` は記録managerを待機させ、割り当てたJoy・プロポ操作で開始・停止する。[bringup の操作と拡張方針](docs/bringup.md)を参照する。
 
-診断・Python 環境管理・Web のホスト側補助入口は `scripts/tools/{docker,python,webui}.sh` に置く。Web UI は通常 Notebook の Docker 内で `atd-web` を実行し、Notebook ホストの Chrome で `http://127.0.0.1:8766` を開く。ホストからは `./scripts/tools/webui.sh` でも同じ処理を呼べる。FastAPI・frontend の build / 配信・地図作成ジョブはコンテナ内で動く。
+診断・Python 環境管理・Web のホスト側補助入口は `scripts/tools/{docker,python,webui}.sh` に置く。Web UI は初回とフロントエンド・依存の更新後に、オンラインの Notebook Docker 内で `atd-web prepare` を実行する。その後は `atd-web` でオフラインでも起動できる。Notebook ホストの Chrome で [Web UI](http://127.0.0.1:8766) を開く。起動済みコンテナを使ってホストから準備するには `./scripts/setup.sh --action web`、通常起動には `./scripts/tools/webui.sh` を使う。
 
 setup・dev・build・vgl の PC / Jetson 判定は機種・BSP 情報を使い、必要な場合だけ `--host notebook`（`pc` と同義）/ `--host jetson` で上書きする。bringup の対象ホストは profile ごとに決める。実行予定の確認には `--dry-run` を使う。
 ホストのセットアップを最初から確認する場合は、[共通手順](docs/setup/README.md)、[Notebook](docs/setup/pc.md)、[Jetson](docs/setup/jetson.md)を参照する。

@@ -45,11 +45,15 @@ class Connection(Strict):
     bridge_port: int = 8790
 
 
-class Relative(Strict):
+class TransferRequest(Strict):
+    expected_connection: Connection | None = None
+
+
+class Relative(TransferRequest):
     relative: str = ''
 
 
-class Push(Strict):
+class Push(TransferRequest):
     id: str
 
 
@@ -293,14 +297,20 @@ def create_app(record_root=None, result_root=None, static_dir=None):
             atomic_json(store.folder(key) / 'hdmap/map.json', document)
         return document
 
+    def transfer_connection(expected: Connection | None):
+        saved = store.connection()
+        if expected is not None and expected.model_dump() != saved:
+            raise HTTPException(status_code=409, detail='Jetson の接続設定が変更されました。データ転送画面を再読み込みしてください。')
+        return transfers.connection(saved)
+
     @app.post('/api/transfer/browse')
     def browse(body: Relative):
-        p = transfers.connection(store.connection())
+        p = transfer_connection(body.expected_connection)
         return transfers.request(p, 'browse', p['record_root'], body.relative)
 
     @app.post('/api/transfer/pull')
     def pull(body: Relative):
-        p = transfers.connection(store.connection())
+        p = transfer_connection(body.expected_connection)
         relative = transfers.relative(body.relative)
         if not relative or relative == '.':
             raise ValueError('bag ディレクトリを選択してください')
@@ -310,7 +320,7 @@ def create_app(record_root=None, result_root=None, static_dir=None):
 
     @app.post('/api/transfer/push')
     def push(body: Push):
-        p = transfers.connection(store.connection())
+        p = transfer_connection(body.expected_connection)
         store.load_map(body.id)
         return jobs.start('push', dict(connection=p, id=body.id), ['transfer', 'map:' + body.id], 'SCP 地図送信: ' + body.id)
 

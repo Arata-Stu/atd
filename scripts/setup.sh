@@ -8,7 +8,7 @@ usage() {
 
 引数なし: fzf の対話メニュー（未導入時は番号選択）
 ACTION: menu, check, tools, docker, runtime, isaac, storage, workspace, devices,
-        verify, build, start, all
+        verify, build, start, web, all
   check       ホスト・GPU・Docker 等の状態を表示
   tools       ホストの基本ツール・fzf を準備
   docker      Docker を準備（既存導入は維持）
@@ -20,6 +20,7 @@ ACTION: menu, check, tools, docker, runtime, isaac, storage, workspace, devices,
   verify      Docker / CLI / GPU runtime の起動を確認
   build       ATD イメージを build して入室
   start       ATD コンテナを起動、または再接続
+  web         起動済み Notebook コンテナで Web UI をオフライン利用できるよう事前準備
   all         tools → docker → runtime → isaac → devices → storage → workspace → verify → build
 
 --record-dir DIR / --result-dir DIR: storage の保存先を直接指定
@@ -64,7 +65,7 @@ while (($#)); do
 done
 if [[ "$task_host" = notebook ]]; then task_host=pc; fi
 case "$task_host" in ""|pc|jetson) ;; *) fail '--host は notebook、pc または jetson を指定してください'; exit 1 ;; esac
-case "$task_action" in menu|check|tools|docker|runtime|isaac|storage|workspace|devices|verify|build|start|all) ;;
+case "$task_action" in menu|check|tools|docker|runtime|isaac|storage|workspace|devices|verify|build|start|web|all) ;;
     *) fail "不明な action: $task_action"; exit 1 ;;
 esac
 
@@ -274,6 +275,10 @@ run_action() {
         storage) configure_storage ;;
         workspace) prepare_workspace ;;
         verify) verify_environment ;;
+        web)
+            [[ "$task_host" = pc ]] || { fail 'Web UI の事前準備は Notebook 専用です'; return 1; }
+            run_command bash "${task_project_dir}/scripts/tools/webui.sh" prepare
+            ;;
         build|start)
             task_dev_command=(bash "${task_project_dir}/scripts/dev.sh")
             if [[ -n "$task_workspace_override" ]]; then
@@ -293,7 +298,11 @@ run_action() {
 
 choose_action() {
     local task_choices task_choice task_number task_index=0 task_label
-    task_choices=$'all\t初回セットアップ一式\ncheck\t現在の環境を確認\ntools\t基本ツール・fzf を準備\ndocker\tDocker を準備\nruntime\tNVIDIA GPU runtime を準備\nisaac\tIsaac ROS CLI を準備\nstorage\t記録・解析の保存先を設定\nworkspace\tROS workspace のパス・設定を準備\ndevices\tD455・Bluetooth 等を準備\nverify\tDocker・CLI・GPU runtime を確認\nbuild\tATD を build して入室\nstart\tATD に入室・再接続\nquit\t終了'
+    task_choices=$'all\t初回セットアップ一式\ncheck\t現在の環境を確認\ntools\t基本ツール・fzf を準備\ndocker\tDocker を準備\nruntime\tNVIDIA GPU runtime を準備\nisaac\tIsaac ROS CLI を準備\nstorage\t記録・解析の保存先を設定\nworkspace\tROS workspace のパス・設定を準備\ndevices\tD455・Bluetooth 等を準備\nverify\tDocker・CLI・GPU runtime を確認\nbuild\tATD を build して入室\nstart\tATD に入室・再接続'
+    if [[ "$task_host" = pc ]]; then
+        task_choices+=$'\nweb\tWeb UI のオフライン利用を準備'
+    fi
+    task_choices+=$'\nquit\t終了'
     if command -v fzf >/dev/null 2>&1; then
         task_choice="$(printf '%s\n' "$task_choices" | fzf --delimiter=$'\t' --with-nth=2 \
             --height=75% --border --prompt='ATD setup > ' --header="${task_host}: 実行する操作を選択")" || return 1

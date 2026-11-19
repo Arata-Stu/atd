@@ -3,7 +3,7 @@
 set -euo pipefail
 task_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 if [[ "${1:-}" = --help || "${1:-}" = -h ]]; then
-    printf '使い方: scripts/tools/webui.sh [serve|build|dev|check] [--port 8766] [--dry-run]\nホストから既存コンテナへ起動を委譲する補助入口です。通常は scripts/dev.sh で入室後、Docker 内で atd-web を実行します。Jetson では UI を起動しません。\n'
+    printf '使い方: scripts/tools/webui.sh [serve|prepare|build|dev|check] [--port 8766] [--dry-run]\nホストから既存コンテナへ起動を委譲します。初回・更新時はオンラインで prepare、通常起動は引数なしです。\n'
     exit 0
 fi
 source "$task_root/scripts/lib/detect_host.sh"
@@ -12,11 +12,12 @@ if [[ "$(detect_atd_host)" = jetson ]]; then
     exit 1
 fi
 task_dry_run=false
-task_arguments=(web run -- /usr/local/bin/atd-web)
+if [[ -f /.dockerenv && -x /usr/local/bin/atd-web ]]; then
+    exec /usr/local/bin/atd-web "$@"
+fi
+task_arguments=(/usr/local/bin/atd-web)
 for task_argument in "$@"; do
     if [[ "$task_argument" = --dry-run ]]; then task_dry_run=true; else task_arguments+=("$task_argument"); fi
 done
-if $task_dry_run; then
-    exec bash "$task_root/scripts/tools/python.sh" --host pc --dry-run "${task_arguments[@]}"
-fi
-exec bash "$task_root/scripts/tools/python.sh" --host pc "${task_arguments[@]}"
+source "$task_root/scripts/lib/container.sh"
+atd_container_exec "$task_root" pc "$task_dry_run" "${task_arguments[@]}"

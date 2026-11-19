@@ -184,7 +184,9 @@ class Store:
 
     def connection(self):
         path = self.state_root / 'connection.json'
-        default = dict(host='', user='', port=22, record_root='', map_root='', bridge_port=8790)
+        data_root = '/home/atd/workspaces/atd/data'
+        default = dict(host='', user='atd', port=22, bridge_port=8790,
+                       record_root=f'{data_root}/record/rosbags', map_root=f'{data_root}/results/maps')
         return dict(default, **read_json(path)) if path.is_file() else default
 
     def save_connection(self, data):

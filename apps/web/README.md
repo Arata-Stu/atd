@@ -11,7 +11,7 @@ Docker 設定を更新した場合は、利用中の処理を終了してイメ�
 # Notebook のホスト: Docker を起動・入室（初回・設定変更時は --build）
 ./scripts/dev.sh --build
 # ここから Notebook の Docker 内。初回・自作package更新時に実行
-atd-build --packages-up-to atd_mapping atd_vehicle_calibration
+atd-build --packages-up-to atd_localization atd_vehicle_calibration
 atd-web
 ```
 
@@ -19,7 +19,7 @@ atd-web
 
 ```bash
 # Notebook の Docker 内
-atd-web check                     # Web / Raceline 環境と、地図作成・車両校正用の ROS package を確認
+atd-web check                     # Web / Raceline 環境と、地図作成・自己位置検証・車両校正用の ROS package を確認
 atd-web build                     # frontend を明示的に再build
 atd-web dev                       # 開発用 UI: http://127.0.0.1:5173
 atd-web --port 8769                # 通常 UI / API の port を変更
@@ -30,7 +30,15 @@ atd-web --dry-run                 # 起動予定を表示
 
 コンテナ・センサ・車両・記録はこの入口では自動起動しない。API は loopback 待受。通常利用はビルド済み frontend と API を同じ origin で配信する。
 
-初回は上記の ROS build で Notebook の workspace に `atd_mapping` と `atd_vehicle_calibration` を準備する。`atd-web check` は ROS と workspace の setup を読み込んで package の導入状態を確認する。環境や package が未準備なら `FAIL` と表示する。
+初回は上記の ROS build で Notebook の workspace に `atd_localization`（`atd_mapping` を含む）と `atd_vehicle_calibration` を準備する。`atd-web check` は ROS と workspace の setup を読み込んで package の導入状態を確認する。環境や package が未準備なら `FAIL` と表示する。
+
+## 自己位置検証
+
+Notebook の [自己位置検証](http://127.0.0.1:8766/#localization) を開き、cuVSLAM・VGL 準備済みの地図と、地図作成に使った走行とは別の bag を選んで検証を開始する。Raceline は地図画面で生成・保存しておく。同じ名前の bag は親ディレクトリを含むパスで選択できる。ジョブのログと停止操作は同じ画面から開ける。
+
+結果の地図には、Raceline と追跡できた区間ごとの推定軌跡を重ねる。中断を選ぶと、最後に有効だった位置と、復帰した場合は最初に再取得した位置を確認できる。区間間の空白は位置が得られなかった範囲を表し、経路の補間は行わない。初期位置が一度も確定しなかった場合は、状態遷移と追跡率で確認する。
+
+検証結果は `/data/results/runs/localization/<run>/` に保存される。既存の CLI 結果も履歴から開ける。新規検証では当時の Raceline を含む `hdmap.json` を一緒に保存する。過去にこのファイルを保存していなかった検証では、現在の地図の識別情報が結果に一致するときに重ねる。[検証用 ROS パッケージ](../../ros2_ws/src/atd_localization/README.md)
 
 ## 車両校正
 
@@ -92,6 +100,8 @@ Pico 対応を初めて取り込むときは、Jetson の利用中の処理を�
 入力 node が既に起動済みなら `./scripts/bringup.sh bridge`。bridge の設定は [atd_web_bridge](../../ros2_ws/src/atd_web_bridge/README.md) を参照する。既定 topic は実際の bringup の topic・型へ合わせる必要がある。bridge の設定ファイルを用意して `./scripts/bringup.sh input config:=/absolute/path/bridge.yaml` で指定できる。
 `input` profile は Joy・teleop・Pico 受信・プロポ役割処理・bridge、`bridge` profile は bridge だけを起動する。`input` では `teleop:=false` で Joy の役割処理、`propo:=false` で Pico とプロポ役割処理を除外できる。起動 profile は `./scripts/bringup.sh --list` で確認し、引数なしの対話端末でも選べる。Notebook では `./scripts/bringup.sh --dry-run input` による確認だけを行い、実際の起動は Jetson の既存 Docker 内で行う。いずれも基板出力・bag 記録は実行しない。[bringup の操作](../../docs/bringup.md)も参照する。
 
+ライブ画面では Jetson が使用中の地図を自動選択する。地図 ID、cuVSLAM 地図と HDMap の SHA256 を照合し、追跡中に同じ時刻で得た位置・向き・車体前後速度と実走軌跡を Raceline に重ねる。追跡喪失、通信途絶、地図不一致の理由も確認できる。[別 bag の検証と Jetson の起動](../../docs/bringup.md#プロポ手動走行中に自己位置を確認する)
+
 Notebook backend は SSH 経由で Jetson の `127.0.0.1:8790` へ接続する。Notebook は車載 DDS に参加しない。Live では地図・pose・軌跡・速度の観測と ROS parameter の読書きを扱い、欠落・古いデータは表示で区別する。
 
 parameter の閲覧は node prefix、変更は node と parameter 名の allowlist で指定する。既定では変更許可なし。descriptor の型・範囲・read_only を検査し、atomic 変更後の値を再取得する。変更を永続 YAML へ自動保存しない。
@@ -138,6 +148,7 @@ Jetson で `./scripts/build.sh --packages-up-to atd_bringup` 後、`./scripts/br
 | `frontend/` | React / TypeScript / Vite。依存は pnpm lock で固定 |
 | `backend/` | FastAPI、資産・設定・ジョブ管理、SCP、公式 ROS CLI、Jetson 接続 |
 | `processing/` | Web に依存しない HDMap 幾何処理・ライン生成 |
+| `../../ros2_ws/src/atd_localization/` | 別走行 bag による保存地図での自己位置推定と追跡区間の検証 |
 | `../../ros2_ws/src/atd_mapping/` | 保存地図の localize と点群 snapshot の取得 |
 | `../../ros2_ws/src/atd_web_bridge/` | Jetson の ROS 観測・設定と loopback HTTP |
 | `../../ros2_ws/src/atd_joy/` | evdev の入力取得・正規化を行う C++ component |
@@ -160,3 +171,7 @@ Docker の Web 用 Python は `docker/python/web/` の独立した uv project / 
 ## 検証の境界
 
 ローカルの API・保存競合・capture の資産整合と成功条件・geometry・worker・SSH 引数・入力 profile の単体テスト、実際の QP / IQP solver を使う小規模閉路テスト、frontend の型検査・build を確認した。teleop の C++ 単体検証、役割設定・bridge/API の単体テスト、疑似 Jetson データを使ったブラウザの保存・再読込・要求出力再開も確認した。車両配置のnull・単位換算・保存競合・適用判定、純粋C++のTF計算と、疑似APIによる上面／側面の寸法選択・保存・通信断時の編集保持も確認した。実 GPU と実 bag による地図作成・localize・点群取得、ROS package の build / install・型生成・service 結合、Docker image build、実 SCP、Bluetooth / evdev、実走行は未検証であり、対象機で別に確認する。
+
+## ESC 試験
+
+Studio の [ESC 試験](http://127.0.0.1:8766/#esc) で前進・制動・停止確認・中立・後退を順番に配置し、出力と時間を設定する。Jetson の試験用 bringup が起動すると予約できる。Jetson 端末で対象と手順を確認して開始し、Notebook から基板報告 PWM、指令、推定 ESC 状態と履歴を確認する。[準備・操作手順](../../docs/bringup.md#タミヤ-esc-の手順試験)

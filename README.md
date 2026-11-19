@@ -23,6 +23,7 @@ RealSense D455 を初期センサとし、Jetson Orin Nano 8GB を搭載した R
 ./scripts/dev.sh --build
 ./scripts/build.sh --packages-up-to atd_bringup
 ./scripts/bringup.sh manual    # D455・車体TF・入力監視をTUIで設定して起動
+./scripts/bringup.sh localization  # 保存地図を選んでプロポ手動走行の自己位置を監視
 ./scripts/bringup.sh input     # Joy・Pico入力、役割処理、観測設定bridge
 ./scripts/bringup.sh bridge    # bridgeだけ。入力nodeが別途起動済みの場合
 ```

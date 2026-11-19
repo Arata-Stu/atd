@@ -8,12 +8,14 @@
 ./scripts/bringup.sh
 ```
 
-引数なしでは fzf（未導入時は番号）で profile を選ぶ。D455 を含む profile では、その後ストリーム設定の TUI を開く。
+引数なしでは fzf（未導入時は番号）で profile を選ぶ。`manual` / `d455` ではストリーム設定、`localization` では使用する保存地図を選ぶ。
 
-| profile | 起動する処理 | ROS launch |
+| profile | 起動する処理 | 起動先 |
 | --- | --- | --- |
 | `manual` | D455、車体static TF、Joy・Pico入力、役割処理、地図用記録待機、bridge | `atd_bringup manual.launch.py` |
+| `localization` | manual 一式と cuVGL・cuVSLAM・追跡状態の配信 | `atd_bringup localization.launch.py` |
 | `d455` | D455 と車体static TF | `atd_bringup d455.launch.py` |
+| `esc-trial` | ESC 試験用 bridge と端末での手順実行 | `atd_bringup esc_trial_session` |
 | `input` | Joy・Pico入力、役割処理、入力記録待機、bridge | `atd_web_bridge input.launch.py` |
 | `bridge` | 観測・設定bridgeのみ | `atd_web_bridge bridge.launch.py` |
 
@@ -78,4 +80,34 @@ TTY で D455 profile を選び、launch引数を付けなかった場合に設�
 
 ## profile の追加方針
 
-日常の入口は `scripts/bringup.sh`、一覧は `scripts/lib/bringup.sh`、構成の組み合わせは `atd_bringup`、各 node の実装・launch・config は担当 package 内に置く。新しい profile は実装済みの launch・引数・対象ホストと対応させ、一覧・操作説明・起動テストを更新する。未実装の自己位置推定・自律走行 profile を先に追加しない。
+日常の入口は `scripts/bringup.sh`、一覧は `scripts/lib/bringup.sh`、構成の組み合わせは `atd_bringup`、各 node の実装・launch・config は担当 package 内に置く。新しい profile は実装済みの launch・引数・対象ホストと対応させ、一覧・操作説明・起動テストを更新する。自律走行の profile は対応する実装に合わせて追加する。
+
+## プロポ手動走行中に自己位置を確認する
+
+1. Notebook で左右の Infra と車体 TF を記録した走行 A から cuVSLAM 地図と VGL 地図を作り、点群取得・HDMap 編集・Raceline 生成を完了する。地図の車体フレームは後輪軸中心の `base_link` を使う。
+2. 同じコースを別に走行した bag B を Notebook に転送する。Notebook Docker 内で初回・パッケージ更新時に `atd-build --packages-up-to atd_localization` を実行し、`atd-web` を起動する。[自己位置検証](http://127.0.0.1:8766/#localization)で地図と bag B を選んで検証を開始する。結果では Raceline と推定軌跡を重ね、喪失前後の観測地点、初期位置の確定時間、追跡時間率、末尾の状態を確認できる。CLI での再生・保存先は [検証 package](../ros2_ws/src/atd_localization/README.md) を参照。
+3. Notebook の「データ転送」から同じ地図を Jetson に送る。VGL の export も転送し、その Jetson 用の TensorRT engine を準備する。D455 の左右 IR 解像度・optical frame と車体取付 TF は地図作成時に合わせる。[VGL のモデル転送・engine build](vgl_models.md)
+4. Jetson ホストのリポジトリで実行する。既に `manual` で起動中の場合は先にその launch を終了する。
+
+   ```bash
+   ./scripts/build.sh --packages-up-to atd_bringup
+   ./scripts/bringup.sh localization
+   ```
+
+   地図を直接指定する場合は `./scripts/bringup.sh localization map_id:=course_a`。対応する engine が複数あるときは、表示された候補を `engine_dir:=models/vgl/<asset>/engines/<target>/<build>` で選ぶ。左右 IR を有効にした保存済み D455 設定が使われる。運転にはプロポ・Pico の手動モードを使う。
+5. Notebook Docker で `atd-web` を起動し、「データ転送」の SSH 接続先を確認して [ライブ画面](http://127.0.0.1:8766/#live)を開く。「Jetson の地図を表示」で青い Raceline に緑の実走軌跡と車両前方を示す矢印が重なる。車速は VO の車体前後速度 [m/s] で、後退は負。初期位置待ち・地図照合中・追跡中・追跡喪失・更新途絶を区別する。同じ ID でも cuVSLAM 地図や HDMap の版が異なる場合は重畳を保留する。再照合を確認できない場合は、プロポで停車し、この profile を起動し直して初期位置を確認する。
+
+地図作成・モデル選択・別 bag の再生と Jetson での手動走行はそれぞれ個別に検証する。実機の GPU における初期化時間・追跡率・位置精度はまだ未計測。[NVIDIA cuVSLAM](https://nvidia-isaac-ros.github.io/v/release-5.0/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_cuvslam/index.html)
+
+## タミヤ ESC の手順試験
+
+1. Jetson で Rev6 Pico・プロポ受信機・ESC を準備し、最初は駆動輪を浮かせる。プロポのスロットルを中立、CH3 を HOST 側にする。Jetson ホストで `./scripts/build.sh --packages-up-to atd_bringup` を実行し、対話端末で `./scripts/bringup.sh esc-trial` を起動する。制御用 USB CDC0 が複数見つかった場合は、使う機体の `port:=/dev/serial/by-id/…-if00` を指定する。
+2. Notebook Docker で `atd-web` を起動し、Studio の「データ転送」で Jetson の SSH 接続先を設定する。「ESC 試験」で動作、出力の大きさ、保持時間を並べて予約する。ステアリングは試験中、中立に固定する。
+3. Jetson 端末に表示された手順・対象ポートを確認し、試験 ID を入力する。初期例では前進 → 制動 → 停止確認 → 中立 → 後退 → 中立の順に出力する。「停止確認」では直前の負指令を保持する。車輪の停止を目視して端末に `STOP` を入力する。設定時間内に確認できなければ試験を中止する。後退中に「前進」を置くと直接正の指令に切り替わる。
+4. 試験中は UI でステップ、符号付き指令、基板報告の ESC パルス幅 [µs]、推定 ESC 状態を確認する。UI の中止は Jetson への要求。Jetson 端末の Ctrl-C でも試験を中止できる。プロポに切り替えると Pico が手動操作を引き継ぐ。試験終了時は HOST 出力を解除する。試験ごとの手順・結果は Jetson の `/data/results/runs/esc_trials/<id>.json`、時系列は同名の `.jsonl` に残る。
+
+各手順は、保持時間内に Pico から指令と一致する新しい PWM 報告を受けて次へ進む。状態報告は 20 Hz のため、ごく短い指令は基板で出力されても観測できない場合がある。その場合は未確認として試験を終了し、時間を延長して後退へ移ることはない。
+
+既定の目視試験はカメラ・地図・Joy を使わない。実車の自己位置推定が別途稼働している場合は `./scripts/bringup.sh esc-trial stop_source:=localization` で速度による停止確認を選べる。D455・車両 TF と `atd_localization/localization.launch.py` を同じ Jetson で起動しておく。試験セッションが Web bridge を起動するため、同じポートの bridge は一つにする。停止推定には同じ追跡区間の新しい車体速度・ヨーレートを使う。駆動輪を浮かせた場合は車体が動かず、車輪だけが回転するため、停止確認は目視を選ぶ。
+
+前進・制動・後退はユーザー指定の ESC 挙動に基づく推定。Rev6 の基板報告で確認できるのは操作経路と出力設定のパルス幅。実際の回転方向、制動力、ニュートラルの必要時間は対象のモータ・ESC で確認する。

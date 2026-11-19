@@ -12,6 +12,8 @@ def call(request: Request, path: str, method: str = 'GET', body: dict | None = N
     try:
         return bridge_request(request.app.state.store.connection(), path, method, body)
     except BridgeUnavailable as exc:
+        if method == 'GET' and path == '/esc/status':
+            return {'connected': False, 'enabled': False, 'trial': None, 'message': str(exc)}
         if method == 'GET' and path == '/recording/status':
             return {'connected': False, 'status': None, 'message': str(exc),
                     'availability': {'bridge': 'disconnected', 'status': 'missing'}}
@@ -140,3 +142,18 @@ def save_vehicle_profile(request: Request, body: dict):
 @router.get('/recording/status')
 def recording_status(request: Request):
     return call(request, '/recording/status')
+
+
+@router.get('/esc/status')
+def esc_status(request: Request):
+    return call(request, '/esc/status')
+
+
+@router.post('/esc/prepare')
+def esc_prepare(request: Request, body: dict):
+    return call(request, '/esc/prepare', 'POST', body)
+
+
+@router.post('/esc/cancel')
+def esc_cancel(request: Request, body: dict):
+    return call(request, '/esc/cancel', 'POST', body)

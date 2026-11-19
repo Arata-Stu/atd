@@ -5,20 +5,24 @@ import { Icon } from './ui';
 import { ACTIVE, STATUS } from './job_status';
 import { calibrationHash, receivedBag } from './calibration';
 import { CalibrationWorkspace } from './CalibrationWorkspace';
+import { EscTrialWorkspace } from './EscTrialWorkspace';
+import { LocalizationWorkspace } from './LocalizationWorkspace';
 import { MapWorkspace } from './MapWorkspace';
 import { TransferWorkspace } from './TransferWorkspace';
 import { LiveWorkspace } from './LiveWorkspace';
 import { InputWorkspace } from './InputWorkspace';
 import { VehicleWorkspace } from './VehicleWorkspace';
 
-type Page = 'map' | 'transfer' | 'live' | 'input' | 'vehicle' | 'calibration';
+type Page = 'map' | 'transfer' | 'live' | 'input' | 'vehicle' | 'calibration' | 'localization' | 'esc';
 const PAGES: { id: Page; icon: string; title: string; subtitle: string }[] = [
   { id: 'map', icon: 'map', title: '地図とライン', subtitle: '地図作成・HDMap編集' },
   { id: 'transfer', icon: 'transfer', title: 'データ転送', subtitle: 'bag受信・地図送信' },
   { id: 'calibration', icon: 'chart', title: '車両校正', subtitle: '速度・加速度・操舵応答' },
+  { id: 'localization', icon: 'map', title: '自己位置検証', subtitle: '別走行の軌跡・追跡喪失' },
   { id: 'live', icon: 'live', title: 'ライブ', subtitle: '自己位置・パラメータ' },
   { id: 'input', icon: 'settings', title: 'コントローラ', subtitle: '入力監視・配置調整' },
   { id: 'vehicle', icon: 'settings', title: '車両設定', subtitle: '実測寸法・センサ配置' },
+  { id: 'esc', icon: 'controller', title: 'ESC 試験', subtitle: '試験手順・状態監視' },
 ];
 export function App() {
   const [page, setPage] = useState<Page>(() => PAGES.find(item => '#' + item.id === window.location.hash.split('?')[0])?.id ?? 'map'), [connected, setConnected] = useState(false), [notice, setNotice] = useState<{ message: string; error: boolean } | null>(null);
@@ -55,7 +59,7 @@ export function App() {
   return <div className="app-shell"><aside className="app-sidebar"><a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('map'); }} aria-label="ATD Studio ホーム"><span className="brand-mark">A<span/></span><span>ATD<small>STUDIO</small></span></a><div className="workspace-label">WORKSPACE</div><nav aria-label="メインメニュー">{PAGES.map(item => <button key={item.id} aria-label={item.title + ' ' + item.subtitle} title={item.title} className={page === item.id ? 'active' : ''} onClick={() => navigate(item.id)}><Icon name={item.icon} size={20}/><span>{item.title}<small>{item.subtitle}</small></span>{page === item.id && <i/>}</button>)}</nav><div className="sidebar-bottom"><div className="host-card"><span className="host-icon"><Icon name="folder" size={18}/></span><div><strong>Notebook</strong><small>ローカルワークスペース</small></div><span className="status-dot"/></div><p>BUILD · OBSERVE · REFINE</p></div></aside>
     <main className="main-shell"><header className="app-header"><div className="breadcrumb">ワークスペース<Icon name="chevron" size={14}/><strong>{current.title}</strong></div><div className="header-right"><span className={'connection-indicator ' + (connected ? 'online' : '')}><i/>{connected ? 'ローカル接続' : '接続を確認中'}</span><span className="header-separator"/><span className="local-label">ATD / DEVELOPMENT</span></div></header>
       {!connected && <div className="backend-banner"><Icon name="info" size={16}/>ローカルサーバーに接続できません。起動状態を確認してください。</div>}
-      <div className="page-container">{page === 'map' && <MapWorkspace notify={notify} onDirty={onDirty} onJob={onJob} jobs={jobs} onTransfer={() => navigate('transfer')}/>} {page === 'transfer' && <TransferWorkspace notify={notify} onJob={onJob} jobs={jobs} onCalibration={bag => navigate('calibration', bag)}/>} {page === 'live' && <LiveWorkspace notify={notify}/>} {page === 'input' && <InputWorkspace notify={notify} onDirty={onDirty}/>} {page === 'calibration' && <CalibrationWorkspace jobs={jobs} onLog={onJob} onTransfer={() => navigate('transfer')} onOpenMap={id => navigate('map', id)}/>} {page === 'vehicle' && <VehicleWorkspace notify={notify} onDirty={onDirty}/>}</div>
+      <div className="page-container">{page === 'map' && <MapWorkspace notify={notify} onDirty={onDirty} onJob={onJob} jobs={jobs} onTransfer={() => navigate('transfer')}/>} {page === 'transfer' && <TransferWorkspace notify={notify} onJob={onJob} jobs={jobs} onCalibration={bag => navigate('calibration', bag)}/>} {page === 'localization' && <LocalizationWorkspace jobs={jobs} onLog={onJob}/>} {page === 'live' && <LiveWorkspace notify={notify}/>} {page === 'input' && <InputWorkspace notify={notify} onDirty={onDirty}/>} {page === 'calibration' && <CalibrationWorkspace jobs={jobs} onLog={onJob} onTransfer={() => navigate('transfer')} onOpenMap={id => navigate('map', id)}/>} {page === 'esc' && <EscTrialWorkspace/>} {page === 'vehicle' && <VehicleWorkspace notify={notify} onDirty={onDirty}/>}</div>
       <footer className="app-footer"><span><i className={connected ? 'online' : ''}/>{connected ? 'ワークスペース接続中' : 'ローカルサーバー未接続'}</span><span>ATD Studio <b>v0.1</b></span></footer>
     </main>
     {notice && <div className={'toast ' + (notice.error ? 'error' : '')} role={notice.error ? 'alert' : 'status'}><Icon name={notice.error ? 'info' : 'check'} size={19}/><span>{notice.message}</span><button className="icon-button" aria-label="通知を閉じる" onClick={() => setNotice(null)}><Icon name="close" size={16}/></button></div>}

@@ -1,4 +1,4 @@
-"""保存地図の capture を単独 package の設定から解決する。"""
+"""保存地図を使う共通のステレオ設定と、点群取得用の検証・起動設定。"""
 from __future__ import annotations
 
 import hashlib
@@ -43,9 +43,8 @@ def inspect_engines(engines, shape):
             del engine
 
 
-def resolve_capture(config_dir, job, inspect=None):
-    config_dir = Path(config_dir)
-    workflow = dict(job['workflow'])
+def tracking_workflow(inputs):
+    workflow = dict(inputs)
     required = ('left_image', 'right_image', 'left_info', 'right_info', 'base_frame', 'left_frame', 'right_frame')
     for key in required:
         expression = r'/[A-Za-z_][A-Za-z0-9_/]*' if key in required[:4] else r'[A-Za-z_][A-Za-z0-9_/]*'
@@ -58,9 +57,42 @@ def resolve_capture(config_dir, job, inspect=None):
         raise ValueError('左右画像・CameraInfo topic は別々に指定してください')
     workflow.setdefault('tf_static', '/tf_static')
     if workflow['tf_static'] != '/tf_static':
-        raise ValueError('この capture は /tf_static の入力を必要とします')
+        raise ValueError('車体とステレオカメラを結ぶ /tf_static の入力が必要です')
     if type(workflow.get('ground_constraint')) is not bool:
         raise ValueError('地図作成時の ground_constraint を boolean で明示してください')
+    return workflow
+
+
+def component_configuration(config_dir, workflow, map_dir, map_root, model_dir, runtime_config, *,
+                            namespace, use_sim_time, capture_visualization):
+    """NVIDIA stereo tracking parameters and remaps shared by live localization and capture."""
+    slam = yaml.safe_load((config_dir / 'capture_cuvslam.yaml').read_text())['/**/visual_slam']['ros__parameters']
+    global_ = yaml.safe_load((config_dir / 'capture_vgl.yaml').read_text())['/**/visual_global_localization']['ros__parameters']
+    common = dict(use_sim_time=use_sim_time, base_frame=workflow['base_frame'], map_frame='map', odom_frame='odom',
+                  camera_optical_frames=[workflow['left_frame'], workflow['right_frame']])
+    slam.update(common, tracking_mode=0, load_map_folder_path=str(map_dir), save_map_folder_path='',
+                localize_on_startup=False, enable_request_hint=True,
+                enable_ground_constraint_in_odometry=workflow['ground_constraint'],
+                enable_ground_constraint_in_slam=workflow['ground_constraint'])
+    if not capture_visualization:
+        slam.update(enable_slam_visualization=False, enable_landmarks_view=False)
+    global_.update(common, map_dir=str(map_root / 'cuvgl_map'), model_dir=str(model_dir), config_dir=str(runtime_config))
+    if global_['publish_map_to_base_tf'] or global_['publish_map_to_odom_tf']:
+        raise ValueError('動的 TF は cuVSLAM だけが配信する必要があります')
+    remaps = {}
+    for kind, prefix in (('cuvslam', 'visual_slam'), ('vgl', 'visual_localization')):
+        remaps[kind] = [(f'{prefix}/{topic}_{index}', workflow[key]) for topic, index, key in (
+            ('image', 0, 'left_image'), ('image', 1, 'right_image'), ('camera_info', 0, 'left_info'), ('camera_info', 1, 'right_info'))]
+    hint, request_hint = namespace + '/pose_hint', namespace + '/request_hint'
+    remaps['cuvslam'] += [('visual_slam/initial_pose', hint), ('visual_slam/trigger_hint', request_hint)]
+    remaps['vgl'] += [('visual_localization/pose', hint), ('visual_localization/trigger_localization', request_hint),
+                      ('/diagnostics', namespace + '/vgl_diagnostics')]
+    return dict(parameters={'cuvslam': slam, 'vgl': global_}, remaps=remaps, hint_topic=hint)
+
+
+def resolve_capture(config_dir, job, inspect=None):
+    config_dir = Path(config_dir)
+    workflow = tracking_workflow(job['workflow'])
     if type(workflow.get('ros_domain_id')) is not int or not 1 <= workflow['ros_domain_id'] <= 232:
         raise ValueError('隔離 ROS domain は1〜232で指定してください')
     capture = dict(DEFAULT_CAPTURE, **job.get('capture', {}))
@@ -104,27 +136,9 @@ def resolve_capture(config_dir, job, inspect=None):
     onnx = require_file(model_dir / 'aliked_lightglue/aliked.onnx')
     if inspect:
         inspect(engines, shape)
-    slam = yaml.safe_load((config_dir / 'capture_cuvslam.yaml').read_text())['/**/visual_slam']['ros__parameters']
-    global_ = yaml.safe_load((config_dir / 'capture_vgl.yaml').read_text())['/**/visual_global_localization']['ros__parameters']
-    common = dict(use_sim_time=True, base_frame=workflow['base_frame'], map_frame='map', odom_frame='odom',
-                  camera_optical_frames=[workflow['left_frame'], workflow['right_frame']])
-    slam.update(common, tracking_mode=0, load_map_folder_path=str(map_dir), save_map_folder_path='',
-                localize_on_startup=False, enable_request_hint=True,
-                enable_ground_constraint_in_odometry=workflow['ground_constraint'],
-                enable_ground_constraint_in_slam=workflow['ground_constraint'])
-    global_.update(common, map_dir=str(map_root / 'cuvgl_map'), model_dir=str(model_dir), config_dir=str(runtime_config))
-    if global_['publish_map_to_base_tf'] or global_['publish_map_to_odom_tf']:
-        raise ValueError('動的 TF は cuVSLAM だけが配信する必要があります')
-    remaps = {}
-    for kind, prefix in (('cuvslam', 'visual_slam'), ('vgl', 'visual_localization')):
-        remaps[kind] = [(f'{prefix}/{topic}_{index}', workflow[key]) for topic, index, key in (
-            ('image', 0, 'left_image'), ('image', 1, 'right_image'), ('camera_info', 0, 'left_info'), ('camera_info', 1, 'right_info'))]
-    hint, request_hint = '/atd_mapping/pose_hint', '/atd_mapping/request_hint'
-    remaps['cuvslam'] += [('visual_slam/initial_pose', hint), ('visual_slam/trigger_hint', request_hint)]
-    remaps['vgl'] += [('visual_localization/pose', hint), ('visual_localization/trigger_localization', request_hint),
-                      ('/diagnostics', '/atd_mapping/vgl_diagnostics')]
-    return dict(parameters={'cuvslam': slam, 'vgl': global_}, remaps=remaps, workflow=workflow,
-                capture=capture, input_shape=shape, hint_topic=hint,
+    components = component_configuration(config_dir, workflow, map_dir, map_root, model_dir, runtime_config,
+        namespace='/atd_mapping', use_sim_time=True, capture_visualization=True)
+    return dict(**components, workflow=workflow, capture=capture, input_shape=shape,
                 assets=dict(cuvslam_sha256={name: digest(path) for name, path in files.items()},
                             config_sha256={name: digest(path) for name, path in configs.items()},
                             onnx_sha256=digest(onnx), engine_sha256={k: digest(p) for k, p in engines.items()}))

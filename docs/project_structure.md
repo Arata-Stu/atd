@@ -145,6 +145,7 @@ CAD 等の編集元データと提供された印刷用3MFは `hardware/cad/` �
 | Python venv / cache | `<選択した workspace>/.atd-python/`。各ホスト・アーキテクチャで生成する |
 | Web の node_modules / frontend build | `<選択した workspace>/.atd-web/frontend/`。Git checkout のソースと分け、Notebook 上で生成する |
 | Joy 物理配置・入力の役割設定 | Jetson の `/data/results/runs/input/{dualsense,teleop,propo}.yaml`。再生成用 cache ではなく永続設定として保持 |
+| ESC 試験 | Jetson の `/data/results/runs/esc_trials/` に予約手順・最終状態と試験ごとの時系列ログを保持 |
 | D455起動・車両配置設定 | Jetsonの `/data/results/runs/bringup/d455.yaml` と `/data/results/runs/vehicle/layout.yaml`。再起動後も保持 |
 | bag | ホスト別設定の記録先。コンテナでは `/data/record` |
 | 地図・モデル・解析・学習結果 | ホスト別設定の結果先。コンテナでは `/data/results` |
@@ -212,7 +213,7 @@ NVIDIA 公式の地図生成には `maps/<map_id>/nvidia/` を `map_dir` とし�
 
 転送 bundle は `models/`・`configs/` と `manifest.json` を持ち、graph、external data、必要な設定、元モデル・export の由来と hash をまとめて内部の参照関係を保つ。SCP 後にも検証してから正式な保存先へ反映し、既存 ID の資産は上書きしない。Jetson は受信済み export を engine 化する役割とし、必要な場合の学習や元 checkpoint からの中間 export は Notebook 側で行う。
 
-操作は `scripts/vgl.sh` と [VGL モデルの手順](vgl_models.md)を使う。Notebook の export は専用の Python 処理、Jetson の engine build は公式の `export_lightglue_engine`・`export_extractor_engine` を呼び出す。これらの公式コマンドは TensorRT engine 生成の段階で使い、Notebook の ONNX export と混同しない。localization の `vgl_model_dir` には Jetson で生成した model 資産側の出力先を渡す。[公式 VGL localization](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/visual_global_localization/tutorials/tutorial_cuvgl_localization.html)
+操作は `scripts/vgl.sh` と [VGL モデルの手順](vgl_models.md)を使う。Notebook の export は専用の Python 処理、Jetson の engine build は公式の `export_lightglue_engine`・`export_extractor_engine` を呼び出す。これらの公式コマンドは TensorRT engine 生成の段階で使い、Notebook の ONNX export と混同しない。`atd_localization` は対象機の GPU・TensorRT・export に対応する engine を model 資産から解決する。候補が複数ある場合は `engine_dir` で build を選ぶ。[公式 VGL localization](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/visual_global_localization/tutorials/tutorial_cuvgl_localization.html)
 
 engine は対象 GPU・TensorRT 等の環境別に生成・管理する。実装では model / export ID と hash、GPU の識別情報、TensorRT の版、CUDA driver version、関連 package の版、起動構成 hash `atd_runtime_revision` と build ログを対応付ける。Docker image digest 自体は現実装では記録していない。転送する中間表現も Jetson 側の対応演算・依存を確認し、CPU / GPU 間での利用を検証済みとは扱わない。[TensorRT の engine 互換性](https://docs.nvidia.com/deeplearning/tensorrt/latest/getting-started/support-matrix.html#software-and-system-requirements)
 地図には元 bag と使用 model の ID、座標系・較正等の対応を持たせる方針とし、地図用の管理ファイルの名前・schema は実装時に決める。

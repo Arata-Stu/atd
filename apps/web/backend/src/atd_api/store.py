@@ -77,6 +77,19 @@ class Store:
     def load_map(self, key):
         return read_json(confined(self.folder(key), 'hdmap/map.json'))
 
+    def live_reference(self, key):
+        folder = self.folder(key)
+        raw = confined(folder, 'hdmap/map.json').read_bytes()
+        document = json.loads(raw)
+        marker = confined(folder, 'vgl.json', exists=False)
+        profile = read_json(marker) if marker.is_file() else {}
+        fingerprint = profile.get('cuvslam_sha256')
+        map_digest = None
+        if profile.get('status') == 'complete' and isinstance(fingerprint, dict) and fingerprint:
+            encoded = json.dumps(fingerprint, sort_keys=True, ensure_ascii=True, separators=(',', ':'))
+            map_digest = hashlib.sha256(encoded.encode('utf-8')).hexdigest()
+        return dict(document=document, hdmap_sha256=hashlib.sha256(raw).hexdigest(), map_sha256=map_digest)
+
     def list_maps(self):
         result = []
         for directory in sorted(self.maps_root.iterdir()):

@@ -3,6 +3,7 @@
     use_sim_time: false
     port: 8790
     freshness_s: 2.5
+    localization_topic: /localization/status
     odometry_topic: /localization/odometry
     pose_topic: /localization/pose
     velocity_topic: /vehicle/velocity

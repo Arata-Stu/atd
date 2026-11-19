@@ -198,6 +198,10 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     def load_map(key: str):
         return store.load_map(key)
 
+    @app.get('/api/maps/{key}/live-reference')
+    def live_reference(key: str):
+        return store.live_reference(key)
+
     @app.put('/api/maps/{key}')
     def save_map(key: str, body: dict):
         with jobs.registry():
@@ -331,6 +335,10 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     def job_cancel(key: str):
         return jobs.cancel(key)
 
+    from .localization_validation import router as validation_router
+    from .localization_results import router as validation_results_router
+    app.include_router(validation_router, prefix='/api')
+    app.include_router(validation_results_router, prefix='/api')
     from .live_input import router
     app.include_router(router, prefix='/api')
     static = Path(static_dir or os.environ.get('ATD_WEB_STATIC_DIR', Path(__file__).resolve().parents[3] / 'frontend/dist'))

@@ -45,6 +45,13 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(self.args(), ['--host', 'jetson', '--dry-run', 'ros', 'run', '--',
             'ros2', 'launch', 'atd_web_bridge', 'bridge.launch.py', 'config:=/path with spaces/config.yaml'])
 
+    def test_esc_trial_preserves_tty_entry_and_board_selection(self):
+        result = self.invoke('bringup.sh', '--dry-run', 'esc-trial', 'port:=/dev/serial/by-id/board-if00')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.args()[-5:], ['ros2', 'run', 'atd_bringup', 'esc_trial_session',
+                                           'port:=/dev/serial/by-id/board-if00'])
+        self.assertNotEqual(self.invoke('bringup.sh', 'esc-trial', ATD_TEST_HOST='jetson').returncode, 0)
+
     def test_bringup_keeps_literal_launch_arguments_and_exit_code(self):
         marker = self.root / 'must-not-exist'
         literal = f'profile:=$(touch {marker})'
@@ -139,7 +146,7 @@ class EntryTests(unittest.TestCase):
         awk = shutil.which('awk')
         self.assertIsNotNone(awk)
         (commands / 'awk').symlink_to(awk)
-        for response, expected in (('2\n', 'bridge'), ('3\n', 'd455'), ('5\n', 'quit'), ('\n', ''), ('90\n', '')):
+        for response, expected in (('2\n', 'bridge'), ('3\n', 'd455'), ('5\n', 'localization'), ('6\n', 'esc-trial'), ('7\n', 'quit'), ('\n', ''), ('90\n', '')):
             with self.subTest(response=response):
                 result = subprocess.run(['/bin/bash', '-c', 'source "$1"; atd_bringup_choose',
                     'picker-test', str(helper)], input=response, text=True, capture_output=True,
@@ -154,6 +161,17 @@ class EntryTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.args()[-5:], ['ros2', 'launch', 'atd_bringup', profile + '.launch.py',
                                                    'camera_serial:=123456'])
+
+    def test_localization_direct_or_interactive_map_choice(self):
+        for args in (('localization',), ('localization', 'map_id:='), ('localization', 'map_id:=A', 'map_id:=B')):
+            result = self.invoke('bringup.sh', *args, ATD_TEST_HOST='jetson')
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+        result = self.invoke('bringup.sh', '--dry-run', 'localization')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.args()[-3:], ['run', 'atd_bringup', 'choose_localization_map'])
+        result = self.invoke('bringup.sh', 'localization', 'map_id:=track', 'pico_serial:=PICO', ATD_TEST_HOST='jetson')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.args()[-4:], ['atd_bringup', 'localization.launch.py', 'map_id:=track', 'pico_serial:=PICO'])
 
     def test_camera_dry_run_has_no_tui_and_marks_capabilities_unqueried(self):
         result = self.invoke('bringup.sh', '--dry-run', 'd455')

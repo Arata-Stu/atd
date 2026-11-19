@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Jetson のコンテナから参照できる地図を選び、通常の launch に渡す。"""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+from atd_localization.assets import map_metadata
+
+
+def main(args):
+    roots = [arg.partition(':=')[2] for arg in args if arg.startswith('results_root:=')]
+    if len(roots) > 1 or any(arg.startswith('map_id:=') for arg in args):
+        raise ValueError('地図または results_root の指定が重複しています')
+    root = Path(roots[0] if roots else '/data/results')
+    if not root.is_absolute():
+        raise ValueError('results_root はコンテナ内の絶対パスを指定してください')
+    folder = root / 'maps'
+    options = []
+    if folder.is_dir():
+        for entry in sorted(folder.iterdir()):
+            if entry.name.startswith('.') or not entry.is_dir() or entry.is_symlink():
+                continue
+            try:
+                map_metadata(root, entry.name)
+            except (ValueError, OSError) as error:
+                print(f'{entry.name} は選択できません（{error}）', file=sys.stderr)
+                continue
+            options.append(entry.name)
+    if not options:
+        raise ValueError(f'{folder} に選択できる地図がありません。Notebook から準備済み地図を転送してください')
+    if shutil.which('fzf'):
+        result = subprocess.run(['fzf', '--prompt=自己位置推定の地図 > '],
+                                input='\n'.join(options), stdout=subprocess.PIPE, text=True)
+        if result.returncode in (1, 130):
+            return 0
+        result.check_returncode()
+        choice = result.stdout.strip()
+    else:
+        for index, name in enumerate(options, 1):
+            print(f'{index:2d}) {name}')
+        answer = input('使用する地図の番号（空欄で終了）: ').strip()
+        if not answer:
+            return 0
+        if not answer.isdecimal() or not 1 <= int(answer) <= len(options):
+            raise ValueError('一覧の番号を指定してください')
+        choice = options[int(answer) - 1]
+    if choice not in options:
+        raise ValueError('一覧の地図を選択してください')
+    os.execvp('ros2', ['ros2', 'launch', 'atd_bringup', 'localization.launch.py', f'map_id:={choice}', *args])
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        sys.exit(str(error))
+    except (KeyboardInterrupt, EOFError):
+        sys.exit(0)

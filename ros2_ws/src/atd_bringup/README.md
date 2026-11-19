@@ -5,6 +5,7 @@ Jetson 内の実装済みlaunchを組み合わせる。`d455` は D455 と車両
 | launch | 内容 |
 | --- | --- |
 | `d455.launch.py` | `atd_sensors/d455.launch.py` + `atd_vehicle_description/vehicle.launch.py`。bridgeなし |
+| `localization.launch.py` | D455・車両TF・入力一式と `atd_localization`。地図を選んでプロポ手動走行中の姿勢を監視する |
 | `manual.launch.py` | 上記 + `atd_web_bridge/input.launch.py`。bridgeはinput由来の1つ |
 
 ```bash
@@ -21,3 +22,5 @@ manual では既存inputの `config`、`profile`、`joy_config`、`teleop`、`te
 vehicle の未知の寸法・取付姿勢を補完しない。camera_linkの車体取付TFは有効な設定があるときだけ車両packageが配信し、D455内部のframeは公式driverが配信する。カメラ・車両・入力の保存と再起動はそれぞれの契約に従う。
 
 portable tests はfake ROS launch modulesで構成・scope・引数を確認する。ROS build/install・実camera・TF配信の結合検証は未実施。
+
+`./scripts/bringup.sh esc-trial` は試験用 bridge を起動し、Jetson の端末で予約した手順を確認して実行する。[ESC 試験の手順](../../../docs/bringup.md#タミヤ-esc-の手順試験)

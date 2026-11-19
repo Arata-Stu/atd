@@ -49,7 +49,7 @@ if [[ "$task_action" = check ]]; then
         if [[ -f "$task_workspace/install/setup.bash" ]]; then source "$task_workspace/install/setup.bash"; fi
         set -u
         task_failed=false
-        for task_package in isaac_mapping_ros isaac_ros_cuvslam isaac_ros_visual_mapping isaac_ros_visual_global_localization atd_mapping atd_vehicle_calibration; do
+        for task_package in isaac_mapping_ros isaac_ros_cuvslam isaac_ros_visual_mapping isaac_ros_visual_global_localization atd_mapping atd_vehicle_calibration atd_localization; do
             if ros2 pkg prefix "$task_package" >/dev/null 2>&1; then printf '[OK] %s\n' "$task_package"; else printf '[FAIL] %s 未導入 / 未build\n' "$task_package"; task_failed=true; fi
         done
         ! $task_failed

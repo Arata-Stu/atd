@@ -76,6 +76,7 @@ Propo profile は `recording`・`auxiliary_1`・`auxiliary_2` の役割を CH4�
 | vehicle_status_topic | /vehicle/layout/status | 車体TF nodeの発行状態 |
 | vehicle_profile_path | /data/results/runs/vehicle/layout.yaml | 車両配置の永続設定 |
 | freshness_s | 2.5 | 0.1〜30秒、受信monotonic時刻で鮮度判定 |
+| localization_topic | /localization/status | LocalizationStatus。使用地図・追跡状態・同じ観測時刻の姿勢と車体速度をまとめて取得 |
 | odometry_topic | /localization/odometry | Odometry入力 |
 | pose_topic | /localization/pose | PoseStamped入力 |
 | velocity_topic | /vehicle/velocity | TwistStamped入力 |
@@ -97,3 +98,5 @@ Propo profile は `recording`・`auxiliary_1`・`auxiliary_2` の役割を CH4�
 ## 検証
 
 `colcon test --packages-select atd_web_bridge` はキャッシュ鮮度・世代不一致・profile競合、操作割り当ての保存と反映の区別、設定 service の単発要求・timeout 後の状態失効を検証する。Pico は受信済み telemetry 自体の古さ、切断、S.BUS異常、役割 node との入力世代の不一致、固定 CH の編集拒否も検査する。service の単体テストには in-process fake を用い、ROS 通信は行わない。Notebook単体でROSをimportせずWebを起動できる。ROS build/install・DDS/service結合・Jetson/実機は未検証であり、単体テスト通過をこれらの検証済みとは扱わない。
+
+ESC 試験専用の起動では、`GET /esc/status`、`POST /esc/prepare`（接続中の instance_id と手順列）、`POST /esc/cancel`（試験 ID）を使う。prepare は Jetson の試験キューへ保存する。出力を開始する操作は Jetson の実行端末が担当する。[手順](../../../docs/bringup.md#タミヤ-esc-の手順試験)

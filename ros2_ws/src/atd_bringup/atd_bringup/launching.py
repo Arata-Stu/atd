@@ -9,7 +9,8 @@ INPUT_ARGUMENTS = ('config', 'profile', 'joy_config', 'teleop', 'teleop_profile'
                    'vehicle_profile', 'recording', 'recording_profile', 'recording_config')
 
 
-def description(manual=False):
+def description(manual=False, localization=False):
+    manual = manual or localization
     from ament_index_python.packages import get_package_share_directory
     from launch import LaunchDescription
     from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
@@ -43,6 +44,8 @@ def description(manual=False):
             'rc_profile': '/data/results/runs/input/propo.yaml',
             'recording': 'true', 'recording_profile': 'mapping', 'recording_config': '',
         })
+    if localization:
+        defaults.update(map_id='', results_root='/data/results', engine_dir='')
     arguments = {key: LaunchConfiguration(key) for key in defaults}
     actions = [DeclareLaunchArgument(key, default_value=value) for key, value in defaults.items()]
     actions += [
@@ -56,4 +59,7 @@ def description(manual=False):
         # input.launch.py already owns the only web_bridge instance.
         actions.append(include('atd_web_bridge', 'input.launch.py',
                                {key: arguments[key] for key in INPUT_ARGUMENTS}))
+    if localization:
+        actions.append(include('atd_localization', 'localization.launch.py',
+                               {key: arguments[key] for key in ('map_id', 'results_root', 'engine_dir')}))
     return LaunchDescription(actions)

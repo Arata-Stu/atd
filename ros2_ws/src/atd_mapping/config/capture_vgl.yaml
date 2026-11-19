@@ -9,10 +9,10 @@
 # Textproto algorithm config is supplied in the map bundle, matched to its feature model.
 /**/visual_global_localization:
   ros__parameters:
-    use_sim_time: true
+    use_sim_time: true  # Bag clock; live localization overrides false.
     map_dir: ''  # Required bundle/cuvgl_map; launch override
     config_dir: ''  # Required bundle/vgl_runtime_config; launch override
-    model_dir: ''  # Required explicitly selected local GPU engines; no large fallback
+    model_dir: ''  # Capture or localization supplies the verified GPU-specific engine build.
     debug_dir: ''
     debug_map_raw_dir: ''
     num_cameras: 2

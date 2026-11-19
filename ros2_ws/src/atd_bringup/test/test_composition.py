@@ -98,6 +98,17 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(declarations['recording_profile'], 'mapping')
         self.assertEqual(declarations['recording_config'], '')
 
+    def test_localization_runs_one_camera_vehicle_input_and_estimator(self):
+        from atd_bringup.launching import description
+        with fake_launch():
+            groups = [item for item in description(localization=True).entities if hasattr(item, 'actions')]
+        included = [group.actions[0] for group in groups]
+        self.assertEqual([entry.args[0].args[0] for entry in included], [
+            '/share/atd_sensors/launch/d455.launch.py', '/share/atd_vehicle_description/launch/vehicle.launch.py',
+            '/share/atd_web_bridge/launch/input.launch.py', '/share/atd_localization/launch/localization.launch.py'])
+        self.assertEqual({k: v.name for k, v in included[-1].launch_arguments},
+                         {k: k for k in ('map_id', 'results_root', 'engine_dir')})
+
     def test_sensor_only_profile_does_not_start_or_configure_a_recorder(self):
         declarations = {value.args[0] for value in self.generate(False) if hasattr(value, 'default_value')}
         self.assertTrue({'recording', 'recording_profile', 'recording_config'}.isdisjoint(declarations))

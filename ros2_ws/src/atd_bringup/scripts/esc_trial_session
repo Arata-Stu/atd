@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Keep the bench bridge available while the foreground runner owns the Jetson TTY."""
+import json
+import signal
+import subprocess
+import sys
+import time
+import urllib.request
+import uuid
+from pathlib import Path
+
+from ament_index_python.packages import get_package_prefix
+from atd_esc_trials.store import TrialStore
+
+
+def executable(package, name):
+    return str(Path(get_package_prefix(package)) / 'lib' / package / name)
+
+
+def stop(child):
+    if child and child.poll() is None:
+        child.send_signal(signal.SIGINT)
+        try:
+            child.wait(timeout=4)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+
+
+def run():
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise ValueError('Jetson の対話端末が必要です')
+    options = {}
+    for arg in sys.argv[1:]:
+        key, sep, value = arg.partition(':=')
+        if not sep or key not in ('port', 'stop_source') or key in options or not value:
+            raise ValueError('port:=制御ポート、stop_source:=visual|localization を指定できます')
+        options[key] = value
+    source = options.get('stop_source', 'visual')
+    if source not in ('visual', 'localization'):
+        raise ValueError('stop_source は visual / localization から選択してください')
+    port = options.get('port')
+    if port is None:
+        from atd_esc_trials.board import discover_ports
+        ports = discover_ports()
+        if len(ports) != 1:
+            raise ValueError('Rev6 制御ポートを一意に選べません。接続と port:= の指定を確認してください')
+        port = str(ports[0])
+
+    bridge_cmd = [executable('atd_web_bridge', 'web_bridge'), '--ros-args', '-p', 'esc_trials_enabled:=true']
+    runner_cmd = [executable('atd_esc_trials', 'run_trial'), '--port', port, '--stop-source', source]
+    store = TrialStore()
+    bridge = subprocess.Popen(bridge_cmd, stdin=subprocess.DEVNULL, start_new_session=True)
+    runner = None
+    try:
+        # Only accept reservations once our own bridge has bound the loopback port.
+        nonce = uuid.uuid4().hex
+        request = urllib.request.Request('http://127.0.0.1:8790/esc/status',
+                                         headers={'X-ATD-Request': nonce})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        deadline = time.monotonic() + 20
+        while bridge.poll() is None and time.monotonic() < deadline:
+            try:
+                with opener.open(request, timeout=.5) as response:
+                    reply = json.load(response)
+            except OSError:
+                time.sleep(.1)
+                continue
+            if reply.get('request_id') != nonce or reply.get('identity', {}).get('pid') != bridge.pid:
+                raise RuntimeError('既に別の Web bridge が同じポートで起動しています')
+            if reply.get('data', {}).get('enabled') is True:
+                break
+            raise RuntimeError('ESC 試験用 bridge の起動に失敗しました')
+        else:
+            raise RuntimeError('ESC 試験用 bridge の起動を確認できませんでした')
+        print(f'制御ポート {port}  /  停止確認 {source}\nNotebook の「ESC 試験」で手順を予約してください。', flush=True)
+        last_id = None
+        while bridge.poll() is None:
+            trial = store.status()['trial']
+            if trial and trial['status'] == 'queued' and trial['id'] != last_id:
+                last_id = trial['id']
+                runner = subprocess.Popen(runner_cmd)
+                while runner.poll() is None and bridge.poll() is None:
+                    time.sleep(.1)
+                if bridge.poll() is not None:
+                    break
+                if runner.returncode:
+                    print('試験端末が終了しました。残っている予約は UI で取り消せます。', flush=True)
+                runner = None
+            time.sleep(.25)
+        raise RuntimeError('試験用 bridge が終了しました。同じポートを使う bringup の起動状況を確認してください')
+    finally:
+        stop(runner)
+        stop(bridge)
+
+
+if __name__ == '__main__':
+    def terminate(_signum, _frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        run()
+    except KeyboardInterrupt:
+        pass
+    except (OSError, RuntimeError, ValueError) as exc:
+        sys.exit(str(exc))

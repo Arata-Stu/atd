@@ -23,6 +23,9 @@ def execute(store, task, action, payload):
     if action == 'map_build':
         from .offline import map_build
         return map_build(store, task, payload)
+    if action == 'localization_validation':
+        from .localization_validation import execute as validate
+        return validate(store, task, payload)
     if action == 'calibration':
         from .calibration import execute as calibrate
         return calibrate(store, task, payload)

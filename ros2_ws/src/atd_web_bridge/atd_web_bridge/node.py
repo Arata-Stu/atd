@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import socket
 import threading
@@ -23,6 +24,7 @@ from std_srvs.srv import SetBool, Trigger
 import yaml
 from atd_teleop_tools import profile as teleop_profiles
 
+from .localization import live_observations, observation
 from .core import Cache, ProfileStore, TeleopProfileStore, PropoProfileStore, VehicleProfileStore, prepare_parameter_value
 
 
@@ -55,9 +57,12 @@ def parameter_value(value):
 
 class BridgeNode(Node):
     def __init__(self):
+        from atd_interfaces.msg import LocalizationStatus
+        from atd_esc_trials.store import TrialStore
         super().__init__('atd_web_bridge')
         fixed = ParameterDescriptor(read_only=True)
-        defaults = {'port': 8790, 'freshness_s': 2.5,
+        defaults = {'port': 8790, 'freshness_s': 2.5, 'esc_trials_enabled': False,
+            'localization_topic': '/localization/status',
             'odometry_topic': '/localization/odometry', 'pose_topic': '/localization/pose',
             'velocity_topic': '/vehicle/velocity', 'joy_topic': '/joy',
             'joy_raw_topic': '/joy/raw', 'joy_status_topic': '/joy/status',
@@ -78,14 +83,17 @@ class BridgeNode(Node):
                 or any(not isinstance(name, str) for name in v) for k, v in self.allowed.items()):
             raise ValueError('parameter_allowlist_json must map nodes to parameter-name lists')
         self.cache = Cache(self.settings['freshness_s'])
+        self.esc_trials = TrialStore()
         self.profiles = ProfileStore(self.settings['profile_path'])
         self.teleop_profiles = TeleopProfileStore(self.settings['teleop_profile_path'])
         self.propo_profiles = PropoProfileStore(self.settings['rc_profile_path'])
         self.vehicle_profiles = VehicleProfileStore(self.settings['vehicle_profile_path'])
         self.operation_lock = threading.RLock()
         self.identity = {'schema': 'atd.web_bridge.v1', 'instance_id': uuid.uuid4().hex,
-                         'hostname': socket.gethostname(), 'node': self.get_fully_qualified_name()}
+                         'hostname': socket.gethostname(), 'node': self.get_fully_qualified_name(), 'pid': os.getpid()}
         self.subscriptions_ = []
+        self.subscribe(LocalizationStatus, 'localization_topic',
+                       lambda m: self.cache.put('localization', observation(m)))
         self.subscribe(Odometry, 'odometry_topic', self.odometry)
         self.subscribe(PoseStamped, 'pose_topic', lambda m: self.cache.put('pose', pose_value(m.pose, m.header)))
         self.subscribe(TwistStamped, 'velocity_topic', lambda m: self.cache.put('velocity', velocity_value(m.twist, m.header)))
@@ -335,10 +343,23 @@ class BridgeNode(Node):
                 if type(body.get('instance_id')) is not str or body['instance_id'] != self.identity['instance_id']:
                     raise ValueError('Jetson bridge の接続先が変更されています。状態と設定を再取得してください')
             if path == '/live/status' and method == 'GET':
-                return {'pose': self.cache.get('pose'), 'velocity': self.cache.get('velocity'),
-                        'parameter_nodes': self.nodes(), 'topics': [self.settings[k] for k in ('odometry_topic', 'pose_topic', 'velocity_topic')]}
+                return {**live_observations(self.cache, self.count_publishers(self.settings['localization_topic']),
+                                            self.get_clock().now().nanoseconds * 1e-9),
+                        'parameter_nodes': self.nodes(), 'topics': [self.settings[k] for k in ('odometry_topic', 'pose_topic', 'velocity_topic', 'localization_topic')]}
             if path == '/live/parameters' and method == 'POST':
                 return self.apply_parameters(body.get('node'), body['values']) if 'values' in body else self.parameters(body.get('node'))
+            if path == '/esc/status' and method == 'GET':
+                return {'enabled': self.settings['esc_trials_enabled'], **self.esc_trials.status()}
+            if path == '/esc/prepare' and method == 'POST':
+                if not self.settings['esc_trials_enabled']:
+                    raise ValueError('Jetson で bringup.sh esc-trial を起動してください')
+                if body.get('instance_id') != self.identity['instance_id']:
+                    raise ValueError('接続先が変わりました。試験状態を再取得してください')
+                if set(body) != {'steps', 'instance_id'}:
+                    raise ValueError('手順と接続先を指定してください')
+                return {'enabled': True, **self.esc_trials.prepare(body['steps'])}
+            if path == '/esc/cancel' and method == 'POST':
+                return {'enabled': self.settings['esc_trials_enabled'], **self.esc_trials.cancel(body.get('id'))}
             if path == '/input/status' and method == 'GET':
                 return self.cache.input_status()
             if path == '/teleop/status' and method == 'GET':

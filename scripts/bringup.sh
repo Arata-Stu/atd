@@ -4,13 +4,15 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-使い方: scripts/bringup.sh [--dry-run] [--configure] [input|bridge|d455|manual] [name:=value ...]
+使い方: scripts/bringup.sh [--dry-run] [--configure] [input|bridge|d455|manual|localization|esc-trial] [name:=value ...]
 
 引数なし: fzf で起動構成を選択（未導入時は番号選択）
   input      Jetson の Joy・Pico入力、入力記録待機、観測・設定bridge
   bridge     観測・設定bridgeのみ。入力・役割 node は別途起動する
   d455       D455・車両TF（bridgeなし）
   manual     D455・車両TF・input一式・地図用記録待機（bridgeは1つ）
+  localization  保存地図を選び D455・車両TF・手動入力・自己位置推定と監視を起動
+  esc-trial  ESC 試験用 bridge と Jetson の実行端末（port:=/dev/serial/by-id/...-if00、stop_source:=visual|localization）
   --configure D455設定TUIを明示して開く（対話端末専用）
   --list     現在の起動構成を表示
   --dry-run  起動せず予定を表示。構成省略時は input。Notebookでも利用可能
@@ -23,6 +25,8 @@ usage() {
     scripts/bringup.sh manual camera_serial:=D455_SERIAL enable_depth:=false
     scripts/bringup.sh manual recording_profile:=mapping
     scripts/bringup.sh manual recording_profile:=calibration
+    scripts/bringup.sh localization
+    scripts/bringup.sh localization map_id:=course_a
     scripts/bringup.sh input recording:=false
 
 d455/manual は対話端末かつlaunch引数なしなら設定TUIへ進みます。
@@ -69,7 +73,7 @@ if [[ -z "$task_profile" ]]; then
     if $task_dry_run; then
         task_profile=input
     else
-        [[ -t 0 && -t 1 ]] || fail '対話端末で起動するか、input / bridge / d455 / manual を指定してください'
+        [[ -t 0 && -t 1 ]] || fail '対話端末で起動するか、input / bridge / d455 / manual / localization / esc-trial を指定してください'
         task_profile="$(atd_bringup_choose)" || exit 0
         [[ "$task_profile" != quit ]] || exit 0
     fi
@@ -97,7 +101,24 @@ if $task_dry_run && [[ "$task_setup" == camera ]]; then
 fi
 task_command=(bash "$task_root/scripts/tools/python.sh" --host "$task_host")
 if $task_dry_run; then task_command+=(--dry-run); fi
-if $task_use_setup; then
+if [[ "$task_setup" == trial ]]; then
+    if ! $task_dry_run && [[ ! -t 0 || ! -t 1 ]]; then fail 'ESC 試験は Jetson の対話端末で起動してください'; fi
+    task_command+=(ros run -- ros2 run "$task_package" "$task_launch")
+elif [[ "$task_setup" == map ]]; then
+    task_has_map=false
+    for task_arg in ${task_launch_arguments[@]+"${task_launch_arguments[@]}"}; do
+        case "$task_arg" in
+            map_id:=) fail 'map_id に地図 ID を指定してください' ;;
+            map_id:=*) $task_has_map && fail 'map_id が重複しています'; task_has_map=true ;;
+        esac
+    done
+    if $task_has_map; then
+        task_command+=(ros run -- ros2 launch "$task_package" "$task_launch")
+    else
+        if ! $task_dry_run && [[ ! -t 0 || ! -t 1 ]]; then fail '非対話実行では map_id:=地図ID を指定してください'; fi
+        task_command+=(ros run -- ros2 run atd_bringup choose_localization_map)
+    fi
+elif $task_use_setup; then
     task_command+=(ros run -- ros2 run atd_sensors d455_setup --bringup-profile "$task_profile" --)
 else
     task_command+=(ros run -- ros2 launch "$task_package" "$task_launch")

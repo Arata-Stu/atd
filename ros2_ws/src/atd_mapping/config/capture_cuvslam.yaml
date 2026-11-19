@@ -1,4 +1,4 @@
-# Capture-only config: all cuVSLAM parameters explicit. Original map is never saved.
+# Shared cuVSLAM defaults for capture and runtime localization. Neither saves the reference map.
 # ROS package: isaac_ros_cuvslam; APT: ros-lyrical-isaac-ros-cuvslam
 # Target: Isaac ROS release-5.0. Installed APT version is checked/recorded at run time.
 # Source: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_visual_slam/blob/e4dc8f59816dfca387bcb92364ecaf9207216475/isaac_ros_cuvslam/src/visual_slam_node.cpp
@@ -7,7 +7,7 @@
 # No upstream launch/YAML is layered beneath this file.
 /**/visual_slam:
   ros__parameters:
-    use_sim_time: true  # ATD: bag clock
+    use_sim_time: true  # Bag clock; live localization overrides false.
     num_cameras: 2
     num_input_masks: 0
     multicam_mode: 1
@@ -46,7 +46,7 @@
     slam_throttling_time_ms: 500
     map_frame: map
     odom_frame: odom
-    base_frame: camera_link  # ATD: D455 bag has camera static TF, vehicle mount not assumed
+    base_frame: camera_link  # Replaced by the recorded map frame setting; vehicle localization requires base_link.
     camera_optical_frames: [camera_infra1_optical_frame, camera_infra2_optical_frame]
     imu_frame: camera_gyro_optical_frame  # Only used with tracking_mode=1
     image_buffer_size: 10
@@ -58,7 +58,7 @@
     publish_odom_to_base_tf: true
     invert_map_to_odom_tf: false
     invert_odom_to_base_tf: false
-    enable_slam_visualization: true  # ATD: collect final map landmarks
+    enable_slam_visualization: true  # Capture collects map landmarks; runtime localization overrides false.
     enable_observations_view: false
     enable_landmarks_view: true  # ATD: HDMap background
     path_max_size: 50000  # ATD: retain a longer final SLAM path

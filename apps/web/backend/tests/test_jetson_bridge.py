@@ -45,7 +45,8 @@ class JetsonAdapterTests(unittest.TestCase):
                              ('/propo/profile', 'GET'), ('/propo/profile', 'PUT'),
                              ('/propo/configure', 'POST'), ('/propo/reload', 'POST'),
                              ('/vehicle/status', 'GET'), ('/vehicle/profile', 'GET'), ('/vehicle/profile', 'PUT'),
-                             ('/recording/status', 'GET')):
+                             ('/recording/status', 'GET'), ('/esc/status', 'GET'),
+                             ('/esc/prepare', 'POST'), ('/esc/cancel', 'POST')):
             with self.subTest(path=path, method=method), patch('urllib.request.build_opener') as opener:
                 opener.return_value.open.return_value.__enter__.return_value.read.return_value = b'{}'
                 payload = {'port': 8790, 'path': path, 'method': method, 'nonce': 'a' * 32, 'body': {}}
@@ -59,7 +60,8 @@ class JetsonAdapterTests(unittest.TestCase):
                              ('/propo/status', 'PUT'), ('/propo/reload', 'GET'),
                              ('/vehicle/apply', 'POST'), ('/vehicle/restart', 'POST'), ('/vehicle/status', 'PUT'),
                              ('/recording/status', 'POST'), ('/recording/status', 'PUT'),
-                             ('/recording/start', 'POST'), ('/recording/stop', 'POST')):
+                             ('/recording/start', 'POST'), ('/recording/stop', 'POST'),
+                             ('/esc/start', 'POST'), ('/esc/command', 'POST')):
             with self.subTest(path=path, method=method), patch('urllib.request.build_opener') as opener:
                 payload = {'port': 8790, 'path': path, 'method': method, 'nonce': 'a' * 32}
                 with patch('sys.stdin', io.StringIO(json.dumps(payload))), self.assertRaisesRegex(ValueError, 'Unsupported'):

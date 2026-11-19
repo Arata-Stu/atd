@@ -6,7 +6,9 @@ atd_bringup_profiles() {
         $'input\tjetson\tatd_web_bridge\tinput.launch.py\tJoy・Pico入力、記録待機、観測・設定bridge\tplain' \
         $'bridge\tjetson\tatd_web_bridge\tbridge.launch.py\t観測・設定bridgeのみ（入力は別途起動）\tplain' \
         $'d455\tjetson\tatd_bringup\td455.launch.py\tD455・車両TF（bridgeなし）\tcamera' \
-        $'manual\tjetson\tatd_bringup\tmanual.launch.py\tD455・車両TF・入力・地図用記録待機\tcamera'
+        $'manual\tjetson\tatd_bringup\tmanual.launch.py\tD455・車両TF・入力・地図用記録待機\tcamera' \
+        $'localization\tjetson\tatd_bringup\tlocalization.launch.py\tプロポ手動走行・保存地図による自己位置推定\tmap' \
+        $'esc-trial\tjetson\tatd_bringup\tesc_trial_session\tESC 試験・手順受付と Jetson 端末での実行\ttrial'
 }
 
 atd_bringup_lookup() {

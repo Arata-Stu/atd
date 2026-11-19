@@ -15,7 +15,12 @@ import uuid
 from .store import atomic_json, read_json, identifier
 
 ACTIVE = {'starting', 'running', 'queued'}
-ACTIONS = {'generate', 'map_build', 'vgl', 'capture', 'pull', 'push', 'calibration'}
+ACTIONS = {'generate', 'map_build', 'vgl', 'capture', 'pull', 'push', 'calibration', 'localization_validation'}
+
+
+ROS_SETUP = ('set -e; source /opt/ros/lyrical/setup.bash; '
+             'if [ -n "${ISAAC_ROS_WS:-}" ] && [ -f "$ISAAC_ROS_WS/install/setup.bash" ]; then '
+             'source "$ISAAC_ROS_WS/install/setup.bash"; fi; ')
 
 
 class Cancelled(Exception):
@@ -168,7 +173,7 @@ class Task:
                 web_bin = Path(web_venv) / 'bin'
                 env['PATH'] = os.pathsep.join(entry for entry in os.get_exec_path(env) if Path(entry) != web_bin)
                 env.pop('PYTHONPATH', None)
-            argv = ['bash', '-c', 'set -e; source /opt/ros/lyrical/setup.bash; if [ -n "${ISAAC_ROS_WS:-}" ] && [ -f "$ISAAC_ROS_WS/install/setup.bash" ]; then source "$ISAAC_ROS_WS/install/setup.bash"; fi; exec "$@"', 'atd-ros-worker', *argv]
+            argv = ['bash', '-c', ROS_SETUP + 'exec "$@"', 'atd-ros-worker', *argv]
         process = subprocess.Popen(list(map(str, argv)), stdin=subprocess.DEVNULL, start_new_session=True, env=env)
         self.state.update(process_pid=process.pid, process_identity=identity(process.pid))
         self.persist()

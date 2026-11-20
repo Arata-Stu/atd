@@ -13,6 +13,22 @@ Notebook の Docker 内で `atd-vgl list` に表示される export は、Web UI
 
 そのモデルを地図に使うには、rosbag から作成した cuVSLAM 地図を開き、「VGL地図を作成」→「使用するVGLモデル」で該当の export を選ぶ。「VGL地図の準備を開始」を押すと、この Notebook の GPU 用 engine と選択した地図の VGL 特徴を生成する。[Notebook の地図作成手順](../apps/web/README.md#map)
 
+### engine 生成後に `bundle 検証失敗` が出た場合
+
+一部の NVIDIA builder は、出力先に加えて入力の ONNX と同じ場所にも TensorRT engine を保存する。ATD は Notebook・Jetson の両方でビルドごとにモデルを作業用ディレクトリへコピーし、この書き込みから元の export を保護する。
+
+修正前のビルドで `missing=[]`、`changed=[]`、`extra=[…engine, …engine]` が報告された場合は、余分な2ファイルを退避すれば同じ export を再利用できる。次は Notebook の Docker 内で `d455_640x480` を復旧する例。ファイル名はエラーの `extra` に表示されたものを使う。
+
+```bash
+models=/data/results/models/vgl/aliked_lightglue/exported/d455_640x480/models/aliked_lightglue
+backup=$(mktemp -d /data/results/runs/vgl-engine-recovery-XXXXXX) &&
+  mv -v -- "$models/aliked_fp16_10_16_1_11_sm_8_9.engine" \
+           "$models/lightglue_aliked_fp16_10_16_1_11_sm_8_9.engine" "$backup/" &&
+  atd-vgl verify --asset-id aliked_lightglue --export-id d455_640x480
+```
+
+`verify` が `[OK]` を返したら、修正済みコードを使う Notebook の「地図とライン」で「一覧を更新」し、「VGL地図の準備を開始」を再実行する。元の rosbag と cuVSLAM 地図をそのまま使える。
+
 ## 実行前の準備
 
 Notebook と Jetson のそれぞれで setup の workspace・保存先を設定し、今回の処理を含む Docker イメージを build する。

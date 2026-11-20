@@ -12,7 +12,7 @@ from atd_api.main import create_app
 from atd_api.offline import DEFAULT_INPUTS
 from atd_api.store import Store, atomic_json, read_json
 from atd_processing.vgl_transaction import fingerprint
-from tools.vgl.bundle import make_manifest
+from tools.vgl.bundle import make_manifest, validate_bundle
 
 
 def write(path, value=b'fixture'):
@@ -155,11 +155,17 @@ def test_preflight_requires_runtime_onnx_and_checks_its_export_identity(prepared
     assert any('ONNX' in issue and 'export' in issue for issue in result['issues'])
 
 
-@pytest.mark.parametrize('complete', [False, True])
-def test_vgl_publication_and_capture_readiness_share_runtime_requirements(prepared, monkeypatch, complete):
+@pytest.mark.parametrize('outcome', ['complete', 'incomplete_map', 'matcher_failure'])
+def test_vgl_publication_and_capture_readiness_share_runtime_requirements(prepared, monkeypatch, outcome):
     from atd_processing import vgl_prepare
     folder = prepared.folder('course')
     original_map = fingerprint(folder / 'nvidia/cuvslam_map')
+    model_dir = 'models/vgl/example/exported/source'
+    export = prepared.result_root / model_dir
+    original_export = validate_bundle(export)
+    original_engine = prepared.result_root / 'models/vgl/example/engines/notebook/run'
+    previous_build = fingerprint(original_engine)
+    builder_inputs = []
     (folder / 'vgl.json').unlink()
     shutil.rmtree(folder / 'nvidia/cuvgl_map')
     shutil.rmtree(folder / 'vgl_runtime_config')
@@ -176,27 +182,48 @@ def test_vgl_publication_and_capture_readiness_share_runtime_requirements(prepar
         command = list(map(str, command))
         if Path(command[0]).name.startswith('export_'):
             output = Path(command[command.index('--output_model_dir') + 1])
+            models = Path(command[command.index('--model_dir') + 1])
+            builder_inputs.append(models)
             name = 'aliked_424x240.engine' if Path(command[0]).name == 'export_extractor_engine' else 'lightglue_aliked_2048.engine'
-            write(output / 'aliked_lightglue' / name)
+            # The real exporter writes the engine to both its input model directory and the requested output.
+            cached = write(models / 'aliked_lightglue' / name, name.encode())
+            write(output / 'aliked_lightglue' / name, cached.read_bytes())
+            input_onnx = models / 'aliked_lightglue/aliked.onnx'
+            assert input_onnx.read_bytes() == (export / 'models/aliked_lightglue/aliked.onnx').read_bytes()
+            assert not input_onnx.samefile(export / 'models/aliked_lightglue/aliked.onnx')
+            if outcome == 'matcher_failure' and Path(command[0]).name == 'export_lightglue_engine':
+                raise RuntimeError('SDK matcher failure')
         else:
             output = Path(next(arg.split('=', 1)[1] for arg in command if arg.startswith('--map_folder=')))
             write(output / 'debug.log')  # 非空directoryだけでは完成と扱わない。
-            if complete:
+            if outcome == 'complete':
                 write(output / 'keyframes/frames_meta.json', b'{}')
                 write(output / 'bow_index.pb')
                 write(output / 'vocabulary/vocabulary.pb')
     monkeypatch.setattr(vgl_prepare, 'run', run)
-    arguments = (prepared.result_root, 'course', 'models/vgl/example/exported/source')
-    if complete:
+    arguments = (prepared.result_root, 'course', model_dir)
+    if outcome == 'complete':
         vgl_prepare.prepare(*arguments)
         result = capture.preflight(prepared, 'course')
         assert result['ready'], result
+        generated = prepared.result_root / result['model_dir']
+        assert len(list(generated.rglob('*.engine'))) == 2
+        assert list(generated.rglob('*.onnx')) == [generated / 'aliked_lightglue/aliked.onnx']
     else:
-        with pytest.raises(ValueError, match='VGL'):
+        error, message = (RuntimeError, 'SDK matcher failure') if outcome == 'matcher_failure' else (ValueError, 'VGL')
+        with pytest.raises(error, match=message):
             vgl_prepare.prepare(*arguments)
         assert not (folder / 'vgl.json').exists()
         assert not (folder / 'nvidia/cuvgl_map').exists()
         assert not (folder / 'vgl_runtime_config').exists()
+        if outcome == 'matcher_failure':
+            failed, = (prepared.result_root / 'models/vgl/example/engines/notebook-fixture').iterdir()
+            assert (failed / 'build-failed.json').is_file()
+            assert not list(failed.rglob('*.onnx'))
+    assert len(builder_inputs) == 2
+    assert all(not path.exists() for path in builder_inputs)
+    assert validate_bundle(export) == original_export
+    assert fingerprint(original_engine) == previous_build
     assert fingerprint(folder / 'nvidia/cuvslam_map') == original_map
 
 

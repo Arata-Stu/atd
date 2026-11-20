@@ -16,7 +16,7 @@ import uuid
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 from tools.vgl.bundle import validate_bundle, sha256, write_json, model_root, utc_now
-from tools.vgl.build_engine import inspect_engine, package_paths
+from tools.vgl.build_engine import engine_builder_commands, inspect_engine, package_paths
 if __package__:
     from .vgl_transaction import check_preparable, recover, publish, fingerprint
     from .vgl_assets import validate_runtime_layout
@@ -73,10 +73,9 @@ def prepare(results, map_id, model_relative):
                   target_id=target.name, build_id=build_id, status='building', hardware=hardware,
                   bundle_sha256=sha256(bundle / 'manifest.json'), created_at=utc_now())
     try:
-        run([binaries / 'export_extractor_engine', '--configure_file', bundle / 'configs/isaac/keypoint_creation_config.pb.txt',
-             '--model_dir', bundle / 'models', '--output_model_dir', engine_stage])
-        run([binaries / 'export_lightglue_engine', '--worker_config_file', bundle / 'configs/isaac/matching_task_worker_config.pb.txt',
-             '--model_dir', bundle / 'models', '--output_model_dir', engine_stage])
+        with engine_builder_commands(binaries, bundle, manifest, engine_stage) as commands:
+            for command in commands:
+                run(command)
         extractor = list((engine_stage / 'aliked_lightglue').glob('aliked_*.engine'))
         matcher = list((engine_stage / 'aliked_lightglue').glob('lightglue_aliked_*.engine'))
         if len(extractor) != 1 or len(matcher) != 1:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import ctypes
 import importlib
 import json
@@ -12,6 +13,7 @@ import re
 import shutil
 import subprocess
 import signal
+import tempfile
 import uuid
 
 if __package__:
@@ -157,6 +159,27 @@ def _engines(output: Path) -> dict[str, Path]:
     return result
 
 
+@contextmanager
+def engine_builder_commands(binaries: Path, bundle: Path, manifest: dict, output: Path):
+    # SDK は --output_model_dir のほかに --model_dir の ONNX の隣にも engine を書き込む。
+    with tempfile.TemporaryDirectory(prefix='.builder-inputs-', dir=output) as directory:
+        inputs = Path(directory)
+        for name, info in manifest['files'].items():
+            destination = inputs / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(bundle / name, destination)
+            if sha256(destination) != info['sha256']:
+                raise ValueError('builder 入力のコピーが export manifest と一致しません: ' + name)
+        model_args = ['--model_dir', str(inputs / 'models'), '--output_model_dir', str(output)]
+        config = inputs / 'configs/isaac'
+        yield [
+            [str(binaries / 'export_extractor_engine'), '--configure_file',
+             str(config / 'keypoint_creation_config.pb.txt'), *model_args],
+            [str(binaries / 'export_lightglue_engine'), '--worker_config_file',
+             str(config / 'matching_task_worker_config.pb.txt'), *model_args],
+        ]
+
+
 def run_builder(command: list[str]) -> None:
     # GPU builder の stdout/stderr も Python 側の job.log と端末へ残す。
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -222,9 +245,9 @@ def build(results: Path, asset_id: str, export_id: str, target_id: str, build_id
         print('検証済み engine を再利用: ' + str(output), flush=True)
         return output
     prefix, _ = package_paths()
-    binaries = {name: prefix / 'bin/visual_mapping' / name
-                for name in ('export_extractor_engine', 'export_lightglue_engine')}
-    for binary in binaries.values():
+    binaries = prefix / 'bin/visual_mapping'
+    for name in ('export_extractor_engine', 'export_lightglue_engine'):
+        binary = binaries / name
         if not binary.is_file() or not os.access(binary, os.X_OK):
             raise ValueError('公式 builder を実行できません: ' + str(binary))
     target.mkdir(parents=True, exist_ok=True)
@@ -234,24 +257,17 @@ def build(results: Path, asset_id: str, export_id: str, target_id: str, build_id
               'target_id': target_id, 'build_id': build_id, 'created_at': utc_now(),
               'bundle_sha256': sha256(bundle / 'manifest.json'), 'hardware': hardware,
               'log_dir': str(log_dir), 'status': 'building'}
-    commands = [
-        [str(binaries['export_extractor_engine']), '--configure_file',
-         str(bundle / 'configs/isaac/keypoint_creation_config.pb.txt'), '--model_dir', str(bundle / 'models'),
-         '--output_model_dir', str(staging)],
-        [str(binaries['export_lightglue_engine']), '--worker_config_file',
-         str(bundle / 'configs/isaac/matching_task_worker_config.pb.txt'), '--model_dir', str(bundle / 'models'),
-         '--output_model_dir', str(staging)],
-    ]
-    write_json(log_dir / 'build-plan.json', {**report, 'commands': commands})
     try:
-        for command in commands:
-            print('実行: ' + repr(command), flush=True)
-            run_builder(command)
-            if command is commands[0]:
-                extractors = list((staging / 'aliked_lightglue').glob('aliked_*.engine'))
-                if len(extractors) != 1:
-                    raise ValueError('ALIKED engine が生成されていません')
-                inspect_engine(extractors[0], [1, 3, manifest['model']['height'], manifest['model']['width']])
+        with engine_builder_commands(binaries, bundle, manifest, staging) as commands:
+            write_json(log_dir / 'build-plan.json', {**report, 'commands': commands})
+            for command in commands:
+                print('実行: ' + repr(command), flush=True)
+                run_builder(command)
+                if command is commands[0]:
+                    extractors = list((staging / 'aliked_lightglue').glob('aliked_*.engine'))
+                    if len(extractors) != 1:
+                        raise ValueError('ALIKED engine が生成されていません')
+                    inspect_engine(extractors[0], [1, 3, manifest['model']['height'], manifest['model']['width']])
         paths = _engines(staging)
         model_output = staging / 'aliked_lightglue/aliked.onnx'
         shutil.copyfile(bundle / 'models/aliked_lightglue/aliked.onnx', model_output)

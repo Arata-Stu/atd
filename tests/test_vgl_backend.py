@@ -380,14 +380,26 @@ raise SystemExit(cli.main(sys.argv[1:]))
 
         def run(command):
             output = Path(command[command.index('--output_model_dir') + 1])
+            models = Path(command[command.index('--model_dir') + 1])
+            source = bundle.export_path(self.results, 'asset1', 'export1')
+            model = models / 'aliked_lightglue/aliked.onnx'
+            config = Path(command[2])
+            self.assertEqual(model.read_bytes(), (source / 'models/aliked_lightglue/aliked.onnx').read_bytes())
+            self.assertFalse(model.samefile(source / 'models/aliked_lightglue/aliked.onnx'))
+            self.assertEqual(config.read_bytes(), (source / 'configs/isaac' / config.name).read_bytes())
             target = output / 'aliked_lightglue'
             target.mkdir(parents=True, exist_ok=True)
             name = Path(command[0]).name
             print('fixture builder: ' + name)
             if name == 'export_extractor_engine':
-                (target / 'aliked_fixture.engine').write_bytes(b'extractor engine fixture')
-            elif not incomplete:
-                (target / 'lightglue_aliked_fixture.engine').write_bytes(b'matcher engine fixture')
+                engine = 'aliked_fixture.engine'
+            else:
+                engine = 'lightglue_aliked_fixture.engine'
+            # The SDK writes a cache next to its input ONNX before exporting the engine.
+            cached = models / 'aliked_lightglue' / engine
+            cached.write_bytes(engine.encode())
+            if not incomplete or name == 'export_extractor_engine':
+                shutil.copyfile(cached, target / engine)
 
         called = stack.enter_context(patch.object(build_engine, 'run_builder', side_effect=run))
         return stack, called
@@ -403,6 +415,7 @@ raise SystemExit(cli.main(sys.argv[1:]))
 
     def test_build_uses_official_commands_and_reuses_only_verified_matching_cache(self):
         source, output, logs, called = self.build_fixture()
+        bundle.validate_bundle(source)
         self.assertEqual(output, self.results / 'models/vgl/asset1/engines/jetson/build1')
         commands = [call.args[0] for call in called.call_args_list]
         self.assertEqual(len(commands), 2)
@@ -410,10 +423,14 @@ raise SystemExit(cli.main(sys.argv[1:]))
                 ('export_extractor_engine', 'export_lightglue_engine'),
                 ('--configure_file', '--worker_config_file'),
                 ('keypoint_creation_config.pb.txt', 'matching_task_worker_config.pb.txt')):
-            self.assertEqual(command[:5], [str(self.prefix / 'bin/visual_mapping' / name), flag,
-                str(source / 'configs/isaac' / config), '--model_dir', str(source / 'models')])
+            self.assertEqual(command[:2], [str(self.prefix / 'bin/visual_mapping' / name), flag])
+            self.assertEqual(Path(command[2]).name, config)
+            self.assertEqual(command[3], '--model_dir')
+            self.assertFalse(Path(command[4]).exists())
             self.assertEqual(command[5], '--output_model_dir')
         self.assertEqual(commands[0][-1], commands[1][-1])
+        self.assertEqual(len(list(output.rglob('*.engine'))), 2)
+        self.assertEqual(list(output.rglob('*.onnx')), [output / 'aliked_lightglue/aliked.onnx'])
         report = json.loads((output / 'build.json').read_text())
         self.assertEqual(report['status'], 'complete')
         self.assertEqual(report['bundle_sha256'], bundle.sha256(source / 'manifest.json'))
@@ -450,7 +467,8 @@ raise SystemExit(cli.main(sys.argv[1:]))
         self.assertFalse((self.results / 'models/vgl/asset1/engines').exists())
 
     def test_incomplete_engine_output_is_not_promoted_and_failure_logs_keep_artifacts(self):
-        self.make_bundle()
+        source = self.make_bundle()
+        original = bundle.validate_bundle(source)
         stack, called = self.builder_stack(incomplete=True)
         with stack:
             status, stdout, stderr = self.run_cli(self.cli_args(
@@ -463,6 +481,11 @@ raise SystemExit(cli.main(sys.argv[1:]))
         self.assertEqual(json.loads((logs / 'result.json').read_text())['status'], 'failed')
         self.assertTrue((logs / 'build-plan.json').is_file())
         self.assertTrue((logs / 'failed-output/aliked_lightglue/aliked_fixture.engine').is_file())
+        self.assertEqual(bundle.validate_bundle(source), original)
+        self.assertFalse(list((logs / 'failed-output').rglob('*.onnx')))
+        for call in called.call_args_list:
+            command = call.args[0]
+            self.assertFalse(Path(command[command.index('--model_dir') + 1]).exists())
         self.assertIn('fixture builder: export_lightglue_engine', (logs / 'job.log').read_text())
 
     def test_changed_or_symlinked_engine_and_model_are_rejected_during_verify(self):

@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""Measure exact-stamp ROS stereo delivery or encode a pair of videos."""
+import argparse
+import json
+import math
+import subprocess
+import sys
+import time
+from collections import OrderedDict
+from functools import partial
+from pathlib import Path
+
+WIDTH, HEIGHT = 640, 480
+TARGET_HZ = 90
+VIDEO_HZ = 30
+TOLERANCE = 0.01
+NANO = 1_000_000_000
+TOPICS = {
+    "left": "/camera/camera/infra1/image_rect_raw",
+    "right": "/camera/camera/infra2/image_rect_raw",
+}
+INFO_TOPICS = {side: topic.replace("image_rect_raw", "camera_info") for side, topic in TOPICS.items()}
+FRAMES = {"left": "camera_infra1_optical_frame", "right": "camera_infra2_optical_frame"}
+BASELINE_M = 0.095
+
+
+class StereoPairs:
+    """Both sides must carry exactly the same simulation timestamp."""
+
+    def __init__(self):
+        self.pending = {side: OrderedDict() for side in TOPICS}
+        self.seen = {side: OrderedDict() for side in TOPICS}
+        self.received = dict.fromkeys(TOPICS, 0)
+        self.duplicates = dict.fromkeys(TOPICS, 0)
+        self.expired = dict.fromkeys(TOPICS, 0)
+        self.out_of_order_pairs = 0
+        self.stamps = []
+        self.arrivals = []
+
+    def feed(self, side, stamp, arrival, frame=None):
+        self.received[side] += 1
+        seen = self.seen[side]
+        if stamp in seen:
+            self.duplicates[side] += 1
+            return None
+        seen[stamp] = None
+        if len(seen) > 512:
+            seen.popitem(last=False)
+        other = "right" if side == "left" else "left"
+        if stamp not in self.pending[other]:
+            self.pending[side][stamp] = frame
+            # Limit retention of unmatched full-size video frames.
+            if len(self.pending[side]) > 16:
+                self.pending[side].popitem(last=False)
+                self.expired[side] += 1
+            return None
+        partner = self.pending[other].pop(stamp)
+        if self.stamps and stamp <= self.stamps[-1]:
+            self.out_of_order_pairs += 1
+            return None
+        self.stamps.append(stamp)
+        self.arrivals.append(arrival)
+        return (frame, partner) if side == "left" else (partner, frame)
+
+    def summary(self, wall_seconds):
+        count = len(self.stamps)
+        intervals = [(b - a) / NANO for a, b in zip(self.stamps, self.stamps[1:])]
+        arrival_intervals = [b - a for a, b in zip(self.arrivals, self.arrivals[1:])]
+        span = (self.stamps[-1] - self.stamps[0]) / NANO if count else 0.0
+        missing = sum(max(0, round(dt * TARGET_HZ) - 1) for dt in intervals)
+        return {
+            "received_images": self.received,
+            "duplicate_images": self.duplicates,
+            "unpaired_images": {s: self.expired[s] + len(self.pending[s]) for s in TOPICS},
+            "out_of_order_pairs": self.out_of_order_pairs,
+            "unique_ordered_pairs": count,
+            "first_pair_sim_ns": self.stamps[0] if count else None,
+            "last_pair_sim_ns": self.stamps[-1] if count else None,
+            "pair_span_sim_s": span,
+            "measurement_wall_s": wall_seconds,
+            "paired_wall_hz": count / wall_seconds if wall_seconds > 0 else None,
+            "paired_sim_hz": (count - 1) / span if span > 0 else None,
+            "missing_sim_slots_between_pairs_estimate": missing,
+            "largest_sim_gap_ms": max(intervals) * 1000 if intervals else None,
+            "largest_arrival_gap_ms": max(arrival_intervals) * 1000 if intervals else None,
+        }
+
+
+def check_image(image):
+    if ((image.width, image.height, image.encoding) != (WIDTH, HEIGHT, "mono8")
+            or image.step < WIDTH or len(image.data) != image.step * HEIGHT):
+        raise ValueError(f"Expected 640x480 mono8; received {image.width}x{image.height} "
+                         f"{image.encoding}, step={image.step}, bytes={len(image.data)}")
+    stamp = image.header.stamp
+    if stamp.sec < 0 or not (0 <= stamp.nanosec < NANO):
+        raise ValueError("Invalid ROS image timestamp")
+    return stamp.sec * NANO + stamp.nanosec
+
+
+def packed_pixels(image):
+    data = memoryview(image.data).cast("B")
+    if image.step == WIDTH:
+        return data
+    return b"".join(data[row * image.step:row * image.step + WIDTH] for row in range(HEIGHT))
+
+
+class Calibration:
+    """Verify synchronized per-eye metadata on the first complete four-message sample."""
+
+    def __init__(self):
+        self.samples = OrderedDict()
+        self.result = None
+
+    def add(self, key, stamp, message=None):
+        if self.result is not None:
+            return
+        sample = self.samples.setdefault(stamp, {})
+        sample[key] = message
+        if len(self.samples) > 32:
+            self.samples.popitem(last=False)
+        if set(sample) != {"pair", "left", "right"}:
+            return
+        result = {}
+        for side in TOPICS:
+            info = sample[side]
+            if (info.width, info.height, info.header.frame_id) != (WIDTH, HEIGHT, FRAMES[side]):
+                raise ValueError(f"{side} CameraInfo geometry or optical frame mismatch")
+            k, p = list(info.k), list(info.p)
+            if (len(k) != 9 or len(p) != 12 or not all(math.isfinite(v) for v in (*k, *p))
+                    or min(k[0], k[4], p[0], p[5]) <= 0
+                    or not (0 < p[2] < WIDTH and 0 < p[6] < HEIGHT)):
+                raise ValueError(f"Invalid {side} camera intrinsics")
+            result[side] = {"frame_id": info.header.frame_id, "width": info.width,
+                            "height": info.height, "k": k, "p": p}
+        lp, rp = result["left"]["p"], result["right"]["p"]
+        baseline = lp[3] / lp[0] - rp[3] / rp[0]
+        if (not math.isclose(lp[0], rp[0], rel_tol=0.001)
+                or not math.isclose(lp[5], rp[5], rel_tol=0.001)
+                or not math.isclose(lp[3] / lp[0], 0, abs_tol=0.001)
+                or not math.isclose(baseline, BASELINE_M, abs_tol=0.001)):
+            raise ValueError(f"Inconsistent stereo projection; P implies {baseline:.6f} m baseline")
+        self.result = {"stamp_ns": stamp, "baseline_from_projection_m": baseline, **result}
+        self.samples.clear()
+
+
+class StereoVideo:
+    """Sample real stereo pairs at 30 fps on the simulation time axis."""
+
+    def __init__(self, output, duration):
+        self.output = output
+        self.frame_count = math.ceil(duration * VIDEO_HZ)
+        self.written = 0
+        self.repeated_frames = 0
+        self.last_encoded_stamp = None
+        self.origin = None
+        self.last_stamp = None
+        self.last_frames = None
+        self.files = [output / (side + ".partial.mp4") for side in TOPICS]
+        # Two stacked gray images in a single pipe keep encoder outputs in lockstep.
+        command = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
+            "-f", "rawvideo", "-pixel_format", "gray", "-video_size", f"{WIDTH}x{HEIGHT * 2}",
+            "-framerate", str(VIDEO_HZ), "-i", "pipe:0", "-filter_complex_threads", "1",
+            "-filter_complex",
+            f"[0:v]split=2[a][b];[a]crop={WIDTH}:{HEIGHT}:0:0[left];"
+            f"[b]crop={WIDTH}:{HEIGHT}:0:{HEIGHT}[right]",
+        ]
+        for side, path in zip(TOPICS, self.files):
+            command += ["-map", f"[{side}]", "-c:v", "libx264", "-preset", "veryfast",
+                        "-crf", "18", "-threads", "2", "-pix_fmt", "yuv420p",
+                        "-movflags", "+faststart", str(path)]
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE)
+
+    def add(self, stamp, frames):
+        if self.origin is None:
+            self.origin = stamp
+        # Resample by capture time. Sparse inputs hold the previous real pair.
+        while self.written < self.frame_count:
+            target = self.origin + round(self.written * NANO / VIDEO_HZ)
+            if target > stamp:
+                break
+            use_current = target == stamp or self.last_frames is None
+            selected_stamp = stamp if use_current else self.last_stamp
+            selected_frames = frames if use_current else self.last_frames
+            for pixels in selected_frames:
+                self.process.stdin.write(pixels)
+            if selected_stamp == self.last_encoded_stamp:
+                self.repeated_frames += 1
+            self.last_encoded_stamp = selected_stamp
+            self.written += 1
+        self.last_stamp, self.last_frames = stamp, frames
+
+    def close(self, success):
+        try:
+            if success:
+                self.process.stdin.close()
+                if self.process.wait(timeout=30) != 0 or self.written != self.frame_count:
+                    raise RuntimeError("FFmpeg did not finish both stereo videos")
+                for temp, side in zip(self.files, TOPICS):
+                    temp.rename(self.output / f"{side}.mp4")
+        finally:
+            if self.process.poll() is None:
+                self.process.kill()
+                self.process.wait()
+            if not self.process.stdin.closed:
+                try:
+                    self.process.stdin.close()
+                except BrokenPipeError:
+                    pass
+            for temp in self.files:
+                temp.unlink(missing_ok=True)
+
+
+def benchmark_passes(metrics):
+    sim_hz = metrics["paired_sim_hz"]
+    wall_hz = metrics["paired_wall_hz"]
+    return (sim_hz is not None and wall_hz is not None
+            and wall_hz >= TARGET_HZ * (1 - TOLERANCE)
+            and abs(sim_hz / TARGET_HZ - 1) <= TOLERANCE
+            and metrics["missing_sim_slots_between_pairs_estimate"] == 0
+            and metrics["out_of_order_pairs"] == 0)
+
+
+def capture(args, report):
+    import rclpy
+    from rclpy.qos import qos_profile_sensor_data
+    from sensor_msgs.msg import CameraInfo, Image
+
+    rclpy.init()
+    node = rclpy.create_node("atd_monza_stereo_" + args.mode)
+    pairs = StereoPairs()
+    start = None
+    first_pair_at = None
+    video = None
+    deadline = None
+    success = False
+    measure = args.mode == "benchmark"
+    ready = args.output / f"{args.mode}.ready"
+    ready_at = None
+    calibration = Calibration()
+    info_subscriptions = []
+
+    def receive(side, image):
+        nonlocal first_pair_at
+        arrival = time.monotonic()
+        if ready_at is None or (measure and deadline is not None and arrival >= deadline):
+            return
+        stamp = check_image(image)
+        if image.header.frame_id != FRAMES[side]:
+            raise ValueError(f"{side} image optical frame mismatch: {image.header.frame_id!r}")
+        result = pairs.feed(side, stamp, arrival, None if measure else packed_pixels(image))
+        if result is not None:
+            if first_pair_at is None:
+                first_pair_at = arrival
+            calibration.add("pair", stamp)
+            if video is not None:
+                video.add(stamp, result)
+
+    def receive_info(side, message):
+        stamp = message.header.stamp
+        if ready_at is not None:
+            calibration.add(side, stamp.sec * NANO + stamp.nanosec, message)
+
+    try:
+        if not measure:
+            video = StereoVideo(args.output, args.duration)
+        subscriptions = {}
+        for side, topic in TOPICS.items():
+            subscriptions[topic] = node.create_subscription(
+                Image, topic, partial(receive, side), qos_profile_sensor_data)
+            info = node.create_subscription(CameraInfo, INFO_TOPICS[side],
+                                            partial(receive_info, side), qos_profile_sensor_data)
+            subscriptions[INFO_TOPICS[side]] = info
+            info_subscriptions.append(info)
+        discovery_at = time.monotonic()
+        while rclpy.ok():
+            missing = [topic for topic, sub in subscriptions.items() if sub.get_publisher_count() == 0]
+            if not missing:
+                break
+            if time.monotonic() - discovery_at >= args.startup_timeout:
+                raise TimeoutError("No matched ROS publisher for " + ", ".join(missing))
+            rclpy.spin_once(node, timeout_sec=0.05)
+        if not rclpy.ok():
+            raise RuntimeError("ROS shut down during publisher discovery")
+        ready.touch(exist_ok=False)
+        ready_at = time.monotonic()
+        report.update(ready=True, publisher_discovery_wall_s=ready_at - discovery_at)
+        while rclpy.ok():
+            now = time.monotonic()
+            if info_subscriptions and calibration.result is not None:
+                for sub in info_subscriptions:
+                    node.destroy_subscription(sub)
+                info_subscriptions.clear()
+            if calibration.result is None:
+                if now - ready_at >= args.startup_timeout:
+                    raise TimeoutError("No synchronized ROS image and CameraInfo stereo sample before startup timeout")
+            elif measure:
+                if start is None and now >= first_pair_at + args.warmup:
+                    # Discovery and warm-up samples do not count towards either rate.
+                    pairs = StereoPairs()
+                    start = now
+                    deadline = start + args.duration
+                if deadline is not None and now >= deadline:
+                    success = True
+                    break
+            else:
+                if (pairs.stamps[-1] - pairs.stamps[0]) >= round(args.duration * NANO):
+                    success = True
+                    break
+                if now - first_pair_at > args.video_timeout:
+                    raise TimeoutError("Video did not cover the requested simulation interval")
+            rclpy.spin_once(node, timeout_sec=0.015)
+        if not success:
+            raise RuntimeError("ROS shut down before capture completed")
+    finally:
+        now = time.monotonic()
+        if measure:
+            elapsed = args.duration if success else (max(now - start, 0.0) if start else 0.0)
+        else:
+            elapsed = max(now - first_pair_at, 0.0) if first_pair_at is not None else 0.0
+        report.update(pairs.summary(elapsed))
+        if first_pair_at is not None and ready_at is not None:
+            report["first_pair_wait_wall_s"] = first_pair_at - ready_at
+        report["stereo_calibration"] = calibration.result
+        try:
+            if video is not None:
+                report.update(video_fps=VIDEO_HZ, video_frames=video.written,
+                              held_video_frames=video.repeated_frames)
+                video.close(success)
+        finally:
+            node.destroy_node()
+            rclpy.try_shutdown()
+
+    if measure:
+        report["pass_90hz"] = benchmark_passes(report)
+        report["status"] = "pass" if report["pass_90hz"] else "below_target"
+        return 0 if report["pass_90hz"] else 2
+    report.update(status="complete", videos=["left.mp4", "right.mp4"])
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--mode", required=True, choices=("video", "benchmark"))
+    parser.add_argument("--duration", type=float, required=True)
+    parser.add_argument("--warmup", type=float, default=1.0, help="benchmark wall seconds after first pair")
+    parser.add_argument("--startup-timeout", type=float, default=60.0, help="wall seconds to first pair")
+    parser.add_argument("--video-timeout", type=float, help="wall seconds after first pair")
+    args = parser.parse_args()
+    if args.video_timeout is None:
+        args.video_timeout = max(60, args.duration * 10)
+    for key in ("duration", "startup_timeout", "video_timeout", "warmup"):
+        value = getattr(args, key)
+        if not math.isfinite(value) or (value < 0 if key == "warmup" else value <= 0):
+            parser.error(f"Invalid {key}: {value}")
+    args.output.mkdir(parents=True, exist_ok=True)
+    target = args.output / f"{args.mode}.json"
+    if target.exists() or (args.output / f"{args.mode}.ready").exists():
+        parser.error(f"Use a fresh output directory; existing {args.mode} results in {args.output}")
+    if args.mode == "video" and any((args.output / f"{s}{ext}").exists() for s in TOPICS
+                                    for ext in (".mp4", ".partial.mp4")):
+        parser.error("Existing stereo video files; use a fresh output directory")
+    report = {"mode": args.mode, "topics": TOPICS, "geometry": [WIDTH, HEIGHT],
+              "encoding": "mono8", "target_hz": TARGET_HZ, "rate_tolerance_fraction": TOLERANCE,
+              "requested_duration_s": args.duration, "duration_clock": "wall" if args.mode == "benchmark" else "simulation",
+              "ready": False, "warmup_wall_s": args.warmup if args.mode == "benchmark" else 0}
+    try:
+        result = capture(args, report)
+    except (Exception, KeyboardInterrupt) as exc:
+        report.update(status="error", error=f"{type(exc).__name__}: {exc}")
+        result = 1
+    pending = target.with_suffix(".json.tmp")
+    pending.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    pending.replace(target)
+    print(json.dumps(report, ensure_ascii=False), flush=True)
+    return result
+
+
+if __name__ == "__main__":
+    sys.exit(main())

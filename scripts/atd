@@ -41,6 +41,9 @@ if [[ "$host" = jetson ]]; then
     add_command performance jetson_max_performance.sh '最大クロック・ファンの確認と適用' host-control
 elif [[ "$location" = ホスト || "$(uname -m)" = x86_64 ]]; then
     add_command web webui.sh 'Notebook の Web UI を起動・準備'
+    if [[ "$location" = ホスト && "$(uname -s)/$(uname -m)" = Linux/x86_64 ]]; then
+        add_command gazebo gazebo.sh 'Monza のステレオ動画・90 Hz 計測'
+    fi
 fi
 add_command python tools/python.sh 'Python 環境を選ぶ'
 if [[ "$location" = ホスト ]]; then
@@ -136,6 +139,9 @@ run_from_menu() {
                      5 '5 GHz で起動・切替' off 'アクセスポイントを停止') ;;
         web)
             options=(serve 'Web UI を起動' prepare '初回・更新時のオンライン準備' check '準備状態を確認') ;;
+        gazebo)
+            options=(run '動画を保存して受信速度を測定' video '左右動画を保存'
+                     benchmark '90 Hz 配信を測定' prepare '専用イメージを準備・容量を測定') ;;
         display)
             options=(status '現在の設定を表示' cui '次回起動を CUI に設定' gui '次回起動を GUI に設定') ;;
         performance)

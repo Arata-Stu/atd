@@ -36,6 +36,7 @@ Jetson ではホスト・Docker のどちらからも `bluetooth`、`hotspot`、
 | `scripts/jetson_max_performance.sh` | Jetson の MAXN 系モードで最大クロック・ファンを適用、確認する |
 | `scripts/bringup.sh` | Jetson の実装済み起動 profile を選択・実行 |
 | `scripts/webui.sh` | Notebook の Web UI を起動 |
+| `scripts/gazebo.sh` | Linux Notebook 専用。Monza の左右車載動画、ROS 2 の90 Hz 配信、専用イメージの容量を測定。[手順](docs/gazebo_monza.md) |
 
 ```bash
 ./scripts/setup.sh

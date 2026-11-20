@@ -30,7 +30,8 @@ class AtdMenuTests(unittest.TestCase):
         for tool in ('bash', 'cat', 'dirname', 'readlink', 'sed'):
             (self.bin / tool).symlink_to(shutil.which(tool))
         uname = self.bin / 'uname'
-        uname.write_text('#!/bin/sh\nif [ "$MENU_TEST_HOST" = jetson ]; then echo aarch64; else echo x86_64; fi\n')
+        uname.write_text('#!/bin/sh\nif [ "$1" = -s ]; then echo "${MENU_TEST_OS:-Linux}"; '
+                         'elif [ "$MENU_TEST_HOST" = jetson ]; then echo aarch64; else echo x86_64; fi\n')
         uname.chmod(0o755)
         self.calls = self.root / 'calls'
         self.ssh_args = self.root / 'ssh-args'
@@ -52,7 +53,7 @@ class AtdMenuTests(unittest.TestCase):
         remote.write_text('#!/bin/sh\nprintf "%s\\0" "$@" > "$MENU_TEST_HOST_CALLS"\n'
                           'exit "${MENU_TEST_REMOTE_RC:-0}"\n')
         remote.chmod(0o755)
-        for filename in ('build', 'dev', 'setup', 'webui', 'bluetooth', 'hotspot',
+        for filename in ('build', 'dev', 'setup', 'webui', 'gazebo', 'bluetooth', 'hotspot',
                          'bringup', 'vgl', 'jetson_display_mode', 'jetson_max_performance'):
             wrapper = self.scripts / (filename + '.sh')
             wrapper.write_text('#!/bin/bash\nprintf "%s\\0" "${0##*/}" "$@" >> "$MENU_TEST_CALLS"\n'
@@ -136,6 +137,7 @@ exit 130
                     menu = self.listed(host, container)
                     self.assertIn('build', menu)
                     self.assertEqual('web' in menu, host == 'pc')
+                    self.assertEqual('gazebo' in menu, host == 'pc' and not container)
                     jetson_commands = ['bluetooth', 'hotspot', 'display', 'performance']
                     if host == 'jetson':
                         for command in jetson_commands:

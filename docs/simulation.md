@@ -4,6 +4,8 @@ ATD Studio の「シミュレーター」で、同じサンプルコースを固
 
 ## 起動と比較
 
+Monza の直線から最初のシケインを D455 視点で見るには、Linux Notebook ホストで別の Gazebo 環境を起動する。[左右動画と配信計測](gazebo_monza.md)
+
 Notebook の Docker 内で実行する。初回と Web UI の更新後に、オンラインで `atd-web prepare` を一度実行する。準備後はオフラインで起動できる。
 
 ```bash

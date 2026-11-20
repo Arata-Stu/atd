@@ -1,6 +1,15 @@
 """ROS-independent acceptance rules for saved-map snapshot acquisition."""
 
 
+def require_tf_publisher(info, expected_gid):
+    publisher = info.get('publisher_gid')
+    if publisher is None or not any(publisher['data']):
+        raise ValueError('/tf メッセージの publisher GID を取得できません')
+    actual = publisher['data'].hex()
+    if actual != expected_gid:
+        raise ValueError(f'/tf に cuVSLAM 以外の発行元があります（GID: {actual}, 期待値: {expected_gid}）')
+
+
 class LocalizationGate:
     def __init__(self):
         self.stamp = -1

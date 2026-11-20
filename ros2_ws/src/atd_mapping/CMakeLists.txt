@@ -9,7 +9,7 @@ install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  foreach(test_name capture_state frames bag_inputs capture_config)
+  foreach(test_name capture_state frames bag_inputs capture_config capture_readiness)
     ament_add_pytest_test(${test_name} test/test_${test_name}.py
       APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   endforeach()

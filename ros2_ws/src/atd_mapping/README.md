@@ -22,7 +22,13 @@ VGL hint を cuVSLAM の initial_pose へ接続し、`localized_in_exist_map=Yes
 
 diag・SLAM path・map→odom の stamp が入力末尾許容範囲に到達し、更新が settle_s の間落ち着くことを要求する。可視化 cloud は更新駆動なので末尾stampとの一致を要求せず、**最後のlocalize成功区間の最新非空 cloud** を用いる。`cloud_tail_age_s` / `cloud_within_tail_tolerance` を残し、古い場合はログとUIで表示する。全地図の landmark 網羅性は保証しない。
 
-点群・軌跡が既に map frame なら変換しない。odom 等なら最終timestampの map←source TF を一度だけ適用する。TF不足・非有限値は identity 変換で補わない。取得中に publisher GID が変わった場合や複数配信者が現れた場合も拒否する。
+点群・軌跡が既に map frame なら変換しない。odom 等なら最終timestampの map←source TF を一度だけ適用する。TF不足・非有限値は identity 変換で補わない。`/tf` は cuVSLAM の `/visual_slam` が配信元で、その publisher GID を記録する。VGL は TF 配信を無効にしても `/tf` の publisher を登録するため、この登録を許容する。想定外の配信者や取得中の配信元交代はエラーになる。[NVIDIA VGL の実装](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_mapping_and_localization/blob/release-5.0/isaac_ros_visual_global_localization/src/visual_global_localization_node.cpp#L322-L355)
+
+### 点群取得の起動待ちで止まったとき
+
+両 component の `Loaded node` が出た後、サービス、左右画像・CameraInfo と姿勢 hint の購読、出力 publisher が揃うと bag 再生を開始する。起動待ちでタイムアウトした場合は、ジョブログで未成立の接続を確認する。その段階の `SIGINT` は capture が子プロセスを終了したときにも表示される。VGL 読み込み時の `0 map-points` は VGL 地図の件数で、cuVSLAM の表示用点群の点数は再生中に自己位置合わせが成功してから決まる。
+
+旧版で起動待ちがタイムアウトした場合は、修正を反映した Notebook の Docker 内で `atd-build --packages-up-to atd_mapping` を実行する。Web UI で同じ保存地図を選び、「保存地図から点群を取得」→「点群の取得を開始」で再試行できる。元の bag、保存地図、Notebook 用 engine は再利用する。
 
 ## job JSON
 

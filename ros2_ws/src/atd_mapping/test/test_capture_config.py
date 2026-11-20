@@ -73,12 +73,12 @@ class CaptureConfigTests(unittest.TestCase):
 
     def test_duplicate_or_replaced_publishers_are_not_success(self):
         class Node:
-            publishers = [SimpleNamespace(endpoint_gid=[1,2,3])]
+            publishers = [SimpleNamespace(node_name='example', node_namespace='/', endpoint_gid=[1,2,3])]
             def get_publishers_info_by_topic(self, topic):
                 return self.publishers
         node = Node()
         first = publisher_signature(node, ['/cloud'])
-        node.publishers = [SimpleNamespace(endpoint_gid=[4,5,6])]
+        node.publishers = [SimpleNamespace(node_name='example', node_namespace='/', endpoint_gid=[4,5,6])]
         self.assertNotEqual(publisher_signature(node, ['/cloud']), first)
         node.publishers = node.publishers * 2
         with self.assertRaises(ValueError):

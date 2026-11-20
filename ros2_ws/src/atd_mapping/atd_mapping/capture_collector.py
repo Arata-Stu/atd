@@ -6,7 +6,7 @@ import time
 from diagnostic_msgs.msg import DiagnosticArray
 from rclpy.qos import qos_profile_sensor_data
 
-from .capture_state import LocalizationGate, validate_final_samples
+from .capture_state import LocalizationGate, require_tf_publisher, validate_final_samples
 from .collector import Collector
 from .frames import FinalFrames, stamp_ns
 
@@ -14,6 +14,7 @@ from .frames import FinalFrames, stamp_ns
 class CaptureCollector(Collector):
     def __init__(self, hint_topic=None):
         self.vgl_hint = None
+        self.tf_publisher_gid = None
         self.gate = LocalizationGate()
         self.last_update = time.monotonic()
         super().__init__()
@@ -46,7 +47,10 @@ class CaptureCollector(Collector):
                     "Saved-map localized: " + str(self.gate.localized)
                 )
 
-    def on_tf(self, msg):
+    def on_tf(self, msg, info):
+        if self.tf_publisher_gid is None:
+            return
+        require_tf_publisher(info, self.tf_publisher_gid)
         if not self.gate.localized:
             return
         for tf in msg.transforms:

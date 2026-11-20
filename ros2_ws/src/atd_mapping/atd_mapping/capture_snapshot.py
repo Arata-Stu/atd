@@ -50,17 +50,49 @@ def last_stereo_stamp(bag, workflow, shape):
     return min(last.values())
 
 
-def publisher_signature(node, topics):
-    signatures = {}
-    for topic in topics:
-        publishers = node.get_publishers_info_by_topic(topic)
+def publisher_gid(node, topic):
+    publishers = node.get_publishers_info_by_topic(topic)
+    names = [f'{p.node_namespace.rstrip("/")}/{p.node_name}' for p in publishers]
+    if topic == '/tf':
+        # VGL registers a broadcaster even when both of its TF outputs are disabled.
+        allowed = {'/visual_slam', '/visual_global_localization'}
+        if (names.count('/visual_slam') != 1 or names.count('/visual_global_localization') > 1
+                or set(names) - allowed):
+            raise ValueError(f'/tf の発行元が起動構成と一致しません（/visual_slam は1つ、'
+                             f'/visual_global_localization は最大1つ、検出: {names}）')
+        publisher = publishers[names.index('/visual_slam')]
+    else:
         if len(publishers) != 1:
-            raise ValueError('capture出力publisherを一意に確認できません: ' + topic)
-        gid = bytes(publishers[0].endpoint_gid)
-        if not gid or not any(gid):
-            raise ValueError('publisher GID を確認できません: ' + topic)
-        signatures[topic] = gid.hex()
-    return signatures
+            raise ValueError(f'{topic} の発行元を一意に確認できません（検出: {names}）')
+        publisher = publishers[0]
+    gid = bytes(publisher.endpoint_gid)
+    if not any(gid):
+        raise ValueError(f'{topic} の publisher GID を確認できません')
+    return gid.hex()
+
+
+def publisher_signature(node, topics):
+    return {topic: publisher_gid(node, topic) for topic in topics}
+
+
+def capture_readiness(node, client, workflow, hint_topic, outputs):
+    pending = []
+    if not client.service_is_ready():
+        pending.append('service /visual_slam/localize_in_map')
+    if 'visual_global_localization' not in node.get_node_names():
+        pending.append('node /visual_global_localization')
+    stereo = [workflow[key] for key in ('left_image', 'right_image', 'left_info', 'right_info')]
+    for topic in [hint_topic, *stereo]:
+        count = node.count_subscribers(topic)
+        if count < 2:
+            pending.append(f'{topic} の購読者 {count}/2')
+    sources = {}
+    for topic in outputs:
+        try:
+            sources[topic] = publisher_gid(node, topic)
+        except ValueError as exc:
+            pending.append(str(exc))
+    return sources, pending
 
 
 def run(job_file):
@@ -99,18 +131,22 @@ def run(job_file):
         outputs = ['/diagnostics', '/tf', '/visual_slam/vis/landmarks_cloud',
                    '/visual_slam/tracking/slam_path', resolved['hint_topic']]
         deadline = time.monotonic() + options['ready_timeout_s']
+        next_report = time.monotonic() + 5.
         while True:
-            if launch.poll() is not None or time.monotonic() > deadline:
-                raise ValueError('VSLAM/VGL起動または購読接続が完了しませんでした')
+            if launch.poll() is not None:
+                raise ValueError(f'bag再生前にVSLAM/VGL launchが終了しました（終了コード {launch.returncode}）')
             rclpy.spin_once(node, timeout_sec=.1)
-            ready = (client.service_is_ready()
-                and 'visual_global_localization' in node.get_node_names()
-                and node.count_subscribers(resolved['hint_topic']) >= 2
-                and all(node.count_subscribers(workflow[k]) >= 2 for k in ('left_image', 'right_image', 'left_info', 'right_info'))
-                and all(node.count_publishers(topic) == 1 for topic in outputs))
-            if ready:
-                sources = publisher_signature(node, outputs)
+            sources, pending = capture_readiness(node, client, workflow, resolved['hint_topic'], outputs)
+            if not pending:
+                node.tf_publisher_gid = sources['/tf']
                 break
+            now = time.monotonic()
+            if now >= deadline:
+                raise ValueError('bag再生前の接続待ちがタイムアウトしました: ' + '、'.join(pending))
+            if now >= next_report:
+                print('bag再生前の接続待ち: ' + '、'.join(pending), flush=True)
+                next_report = now + 15.
+        print(f'VSLAM/VGL の接続を確認しました。bag再生を開始します: {bag}', flush=True)
         player = subprocess.Popen(['ros2', 'bag', 'play', str(bag), '--clock', '--rate', str(options['replay_rate']),
             '--qos-profile-overrides-path', str(config / 'replay_qos.yaml'), '--topics', *inputs], start_new_session=True)
         deadline = time.monotonic() + duration / 1e9 / options['replay_rate'] * 2 + options['ready_timeout_s']

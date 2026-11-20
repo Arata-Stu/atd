@@ -48,7 +48,8 @@ def fake_launch():
         'launch.launch_description_sources': module('launch.launch_description_sources',
                                                     PythonLaunchDescriptionSource=Action),
         'launch.substitutions': module('launch.substitutions', AndSubstitution=Action, LaunchConfiguration=Configuration),
-        'launch_ros.actions': module('launch_ros.actions', Node=Action),
+        'launch_ros.actions': module('launch_ros.actions', Node=Action, ComposableNodeContainer=Action),
+        'launch_ros.descriptions': module('launch_ros.descriptions', ComposableNode=Action),
         'launch_ros.parameter_descriptions': module('launch_ros.parameter_descriptions', ParameterValue=Action),
     }
     with patch.dict(sys.modules, modules):
@@ -63,6 +64,47 @@ class CompositionTests(unittest.TestCase):
 
     def groups(self, manual):
         return [value for value in self.generate(manual) if hasattr(value, 'actions')]
+
+    def test_gazebo_profile_runs_only_stereo_vo_with_the_simulation_clock(self):
+        path = Path(__file__).resolve().parents[1] / 'launch/gazebo.launch.py'
+        with fake_launch():
+            clock, container = runpy.run_path(str(path))['generate_launch_description']().entities
+        self.assertEqual((clock.args[0], clock.default_value, clock.choices), ('use_sim_time', 'true', ['true']))
+        tracker, = container.composable_node_descriptions
+        self.assertEqual(container.package, 'rclcpp_components')
+        self.assertEqual(tracker.package, 'isaac_ros_cuvslam')
+        params, = tracker.parameters
+        sim_clock = params['use_sim_time']
+        self.assertIs(container.parameters[0]['use_sim_time'], sim_clock)
+        self.assertEqual((sim_clock.args[0].name, sim_clock.value_type), ('use_sim_time', bool))
+        self.assertEqual((params['num_cameras'], params['min_num_images'], params['tracking_mode']), (2, 2, 0))
+        self.assertEqual(params['image_qos'], 'SENSOR_DATA')
+        self.assertFalse(params['override_publishing_stamp'])
+        self.assertFalse(params['enable_localization_n_mapping'])
+        self.assertEqual(params['base_frame'], 'base_link')
+        self.assertEqual(params['camera_optical_frames'],
+                         ['camera_infra1_optical_frame', 'camera_infra2_optical_frame'])
+        remaps = dict(tracker.remappings)
+        for index in (0, 1):
+            prefix = f'/camera/camera/infra{index + 1}'
+            self.assertEqual(remaps[f'visual_slam/image_{index}'], prefix + '/image_rect_raw')
+            self.assertEqual(remaps[f'visual_slam/camera_info_{index}'], prefix + '/camera_info')
+
+    def test_gazebo_mapping_launch_uses_slam_and_shuts_down_with_the_supervisor(self):
+        path = Path(__file__).resolve().parents[1] / 'launch/gazebo_mapping.launch.py'
+        with fake_launch():
+            run_dir, map_dir, container, monitor = runpy.run_path(str(path))['generate_launch_description']().entities
+        self.assertEqual([arg.args[0] for arg in (run_dir, map_dir)], ['run_dir', 'map_dir'])
+        params, = container.composable_node_descriptions[0].parameters
+        self.assertTrue(params['enable_localization_n_mapping'])
+        self.assertTrue(params['publish_map_to_odom_tf'])
+        self.assertTrue(params['use_sim_time'])
+        self.assertFalse(params['override_publishing_stamp'])
+        self.assertEqual(monitor.executable, 'gazebo_lap_map')
+        self.assertEqual([x.name for x in monitor.arguments[1::2]], ['run_dir', 'map_dir'])
+        self.assertEqual(monitor.parameters, [{'use_sim_time': True}])
+        self.assertIsInstance(monitor.on_exit[0], Shutdown)
+        self.assertIsInstance(container.on_exit[0], Shutdown)
 
     def test_d455_has_only_camera_and_vehicle_scoped_groups(self):
         groups = self.groups(False)

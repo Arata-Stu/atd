@@ -41,8 +41,11 @@ if [[ "$host" = jetson ]]; then
     add_command performance jetson_max_performance.sh '最大クロック・ファンの確認と適用' host-control
 elif [[ "$location" = ホスト || "$(uname -m)" = x86_64 ]]; then
     add_command web webui.sh 'Notebook の Web UI を起動・準備'
-    if [[ "$location" = ホスト && "$(uname -s)/$(uname -m)" = Linux/x86_64 ]]; then
-        add_command gazebo gazebo.sh 'Monza のステレオ動画・90 Hz 計測'
+    if [[ "$(uname -s)/$(uname -m)" = Linux/x86_64 ]]; then
+        add_command bringup bringup.sh 'Gazebo の時計とステレオ画像で Visual Odometry を起動'
+        if [[ "$location" = ホスト ]]; then
+            add_command gazebo gazebo.sh 'F1 コースの周回・rosbag 記録・ステレオ動画・受信計測'
+        fi
     fi
 fi
 add_command python tools/python.sh 'Python 環境を選ぶ'
@@ -76,6 +79,11 @@ usage() {
     atd bluetooth status
     atd hotspot on --band 5
     atd web prepare
+    atd gazebo bag --circuit monza
+    atd gazebo video --route lap
+    atd gazebo video --circuit spa
+    atd gazebo serve
+    atd bringup gazebo
 各コマンドの使い方は atd COMMAND --help で確認できます。
 EOF
 }
@@ -140,7 +148,8 @@ run_from_menu() {
         web)
             options=(serve 'Web UI を起動' prepare '初回・更新時のオンライン準備' check '準備状態を確認') ;;
         gazebo)
-            options=(run '動画を保存して受信速度を測定' video '左右動画を保存'
+            options=(bag 'コースを選び、1周を rosbag に記録（後で地図を作成）' map 'コースを選び、走行中に cuVSLAM 地図を作成' video-lap 'コースを選び、1周の左右動画を保存' serve-lap 'コースを選び、周回してステレオ画像と /clock を連続配信'
+                     serve 'Monza 第1シケインのステレオ画像と /clock を連続配信' run 'Monza 第1シケインの動画を保存して受信速度を測定' video 'Monza 第1シケインの左右動画を保存'
                      benchmark '90 Hz 配信を測定' diagnose 'Gazebo と ROS の画像受信を比較'
                      prepare '専用イメージを準備・容量を測定') ;;
         display)
@@ -156,6 +165,14 @@ run_from_menu() {
     case "$key/$action" in
         build/all|performance/apply|cache/prune) "$@" ;;
         build/*) "$@" --packages-up-to "$action" ;;
+        gazebo/bag|gazebo/map|gazebo/video-lap|gazebo/serve-lap)
+            local catalog circuit
+            catalog="$("$@" list)" || return
+            options=()
+            while IFS= read -r circuit; do options+=("$circuit" 'GP 1周'); done <<< "$catalog"
+            circuit="$(choose "$title / コース" "${options[@]}" back '前のメニューへ')" || return 0
+            [[ "$circuit" != back ]] || return 0
+            "$@" "${action%-lap}" --route lap --circuit "$circuit" ;;
         hotspot/2.4|hotspot/5) "$@" on --band "$action" ;;
         performance/check) "$@" --check ;;
         cache/inspect) "$@" --dry-run ;;

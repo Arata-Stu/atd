@@ -1,6 +1,6 @@
-# Jetson の bringup
+# Jetson と Notebook の bringup
 
-`scripts/bringup.sh` で ROS 起動 profile を選び、Jetson の起動済み ATD Docker 内で実行する。先に `scripts/dev.sh` でコンテナを起動し、必要な package を build する。
+`scripts/bringup.sh` で ROS 起動 profile を選び、対象ホストの起動済み ATD Docker 内で実行する。車載 profile は Jetson、Gazebo 用のステレオ VO は Notebook を使う。先に `scripts/dev.sh` でコンテナを起動し、必要な package を build する。
 
 ```bash
 # Jetson ホスト、プロジェクト直下
@@ -20,8 +20,9 @@
 | `esc-trial` | ESC 試験用 bridge と端末での手順実行 | `atd_bringup esc_trial_session` |
 | `input` | Joy・Pico入力、役割処理、入力記録待機、bridge | `atd_web_bridge input.launch.py` |
 | `bridge` | 観測・設定bridgeのみ | `atd_web_bridge bridge.launch.py` |
+| `gazebo` | Notebook で Gazebo の左右画像・CameraInfo・TF を使い、`/clock` に同期して cuVSLAM のステレオ VO を実行 | `atd_bringup gazebo.launch.py` |
 
-記録 manager は待機しており、Joy・プロポの割当操作で記録を開始・停止する。プロポの基本走行は Pico 内で完結する。全 profile は Jetson ローカル専用。Notebook は Web UI と解析を担当する。
+実車の記録 manager は待機しており、Joy・プロポの割当操作で記録を開始・停止する。プロポの基本走行は Pico 内で完結する。Notebook のシミュレーションはホストで `atd gazebo serve --wait-for-stereo`、別端末で `atd bringup gazebo` を実行する。[シミュレーションの起動と時刻の確認](gazebo_monza.md#gazebo-の時刻で-cuvslam-を起動する)
 
 ## DualSense で手動走行する
 

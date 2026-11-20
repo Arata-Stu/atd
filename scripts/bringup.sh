@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-使い方: scripts/bringup.sh [--dry-run] [--configure] [input|bridge|d455|joy-drive|manual|localization|autonomous|esc-trial] [name:=value ...]
+使い方: scripts/bringup.sh [--dry-run] [--configure] [input|bridge|d455|joy-drive|manual|localization|autonomous|esc-trial|gazebo] [name:=value ...]
 
 引数なし: fzf で起動構成を選択（未導入時は番号選択）
   input      Jetson の Joy・Pico入力、入力記録待機、観測・設定bridge
@@ -15,6 +15,7 @@ usage() {
   localization  地図と参照ラインを選び、手動走行中の自己位置・前方軌道・操舵計算・速度 FF＋PID を監視
   autonomous    地図と速度付きの走行ラインを選び、CH3 で低速・前進限定の自動走行に切替
   esc-trial  ESC 試験用 bridge と Jetson の実行端末（port:=/dev/serial/by-id/...-if00、stop_source:=visual|localization）
+  gazebo     Notebook で Gazebo の /clock と左右画像を使ったステレオ Visual Odometry（use_sim_time:=true）
   --configure D455設定TUIを明示して開く（対話端末専用）
   --list     現在の起動構成を表示
   --dry-run  起動せず予定を表示。構成省略時は input。Notebookでも利用可能
@@ -36,6 +37,7 @@ usage() {
     scripts/bringup.sh autonomous
     scripts/bringup.sh autonomous map_id:=course_a line:=centerline max_speed_mps:=0.4
     scripts/bringup.sh input recording:=false
+    scripts/bringup.sh gazebo
 
 d455/manual は対話端末かつlaunch引数なしなら設定TUIへ進みます。
 launch引数あり・非TTYでは保存設定/指定値で直接起動し、--configureで明示編集できます。
@@ -55,7 +57,9 @@ calibration は車両モデル用の左右IR・CameraInfo・静的TF・加速度
 manualの既定はmapping（左右IR必須）、joy-drive/inputはinputs（カメラ不要）。
 
 起動済み Docker を使用します。先に scripts/dev.sh で起動してください。
-現在の構成は Jetson 上で実行します。Notebook の Web UI は Docker 内の atd-web を使います。
+実車構成は Jetson、gazebo 構成は Linux x86_64 の Notebook で実行します。
+gazebo には atd_pc_dev と、同じ Notebook 上の「atd gazebo serve」が必要です。
+シミュレーション専用 ROS domain の既定値は 74。ATD_GAZEBO_ROS_DOMAIN_ID で両側に同じ値を指定できます。
 終了は Ctrl-C。
 EOF
 }
@@ -84,21 +88,28 @@ while (($#)); do
 done
 source "$task_root/scripts/lib/bringup.sh"
 if $task_list; then atd_bringup_list; exit 0; fi
+source "$task_root/scripts/lib/detect_host.sh"
+task_current_host="$(detect_atd_host)"
 if [[ -z "$task_profile" ]]; then
     if $task_dry_run; then
         task_profile=input
     else
         [[ -t 0 && -t 1 ]] || fail '対話端末で起動するか、--list に表示される起動構成を指定してください'
-        task_profile="$(atd_bringup_choose)" || exit 0
+        task_profile="$(atd_bringup_choose "$task_current_host")" || exit 0
         [[ "$task_profile" != quit ]] || exit 0
     fi
 fi
 task_target="$(atd_bringup_lookup "$task_profile")" || fail "未登録の起動構成: ${task_profile}（--list を参照）"
 IFS=$'\t' read -r task_host task_package task_launch task_setup <<< "$task_target"
-source "$task_root/scripts/lib/detect_host.sh"
-if ! $task_dry_run && [[ "$(detect_atd_host)" != "$task_host" ]]; then
-    fail "${task_profile} は ${task_host} 上で起動してください。Notebook の UI は Docker 内の atd-web を使います"
+if ! $task_dry_run && [[ "$task_current_host" != "$task_host" ]]; then
+    fail "${task_profile} は ${task_host} 上で起動してください"
 fi
+for task_arg in ${task_launch_arguments[@]+"${task_launch_arguments[@]}"}; do
+    case "$task_arg" in
+        use_sim_time:=[Tt][Rr][Uu][Ee]|use_sim_time:=1)
+            [[ "$task_setup" == simulation ]] || fail 'use_sim_time:=true は Notebook の gazebo 構成で使用してください' ;;
+    esac
+done
 task_use_setup=false
 if $task_configure; then
     [[ "$task_setup" == camera ]] || fail '--configure は d455 / manual で使います'
@@ -116,7 +127,25 @@ if $task_dry_run && [[ "$task_setup" == camera ]]; then
 fi
 task_command=(bash "$task_root/scripts/tools/python.sh" --host "$task_host")
 if $task_dry_run; then task_command+=(--dry-run); fi
-if [[ "$task_setup" == trial ]]; then
+if [[ "$task_setup" == simulation ]]; then
+    if ! $task_dry_run && [[ "$(uname -s)/$(uname -m)" != Linux/x86_64 ]]; then
+        fail 'gazebo は Linux x86_64 の Notebook で起動してください'
+    fi
+    task_domain="${ATD_GAZEBO_ROS_DOMAIN_ID:-74}"
+    [[ "$task_domain" =~ ^(0|[1-9][0-9]{0,2})$ ]] && (( task_domain <= 232 )) || fail 'ROS domain ID は 0〜232 の整数で指定してください'
+    task_clock_set=false
+    for task_arg in ${task_launch_arguments[@]+"${task_launch_arguments[@]}"}; do
+        case "$task_arg" in
+            use_sim_time:=true) $task_clock_set && fail 'use_sim_time が重複しています'; task_clock_set=true ;;
+            use_sim_time:=*) fail 'gazebo 構成は /clock を使います（use_sim_time:=true）' ;;
+            *:=*) fail "gazebo 構成で未対応の launch 引数: $task_arg" ;;
+        esac
+    done
+    task_command+=(ros run -- env "ROS_DOMAIN_ID=$task_domain"
+        FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
+        ros2 launch "$task_package" "$task_launch")
+    if ! $task_clock_set; then task_command+=(use_sim_time:=true); fi
+elif [[ "$task_setup" == trial ]]; then
     if ! $task_dry_run && [[ ! -t 0 || ! -t 1 ]]; then fail 'ESC 試験は Jetson の対話端末で起動してください'; fi
     task_command+=(ros run -- ros2 run "$task_package" "$task_launch")
 elif [[ "$task_setup" == map ]]; then

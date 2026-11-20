@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Gazebo の実周回と、対応する cuVSLAM 追跡・地図保存を確認する。"""
+import argparse
+import json
+from pathlib import Path
+import sys
+from time import monotonic
+
+from atd_bringup.lap_mapping import SECOND_NS, Tracking, map_databases
+from isaac_ros_visual_slam_interfaces.msg import VisualSlamStatus
+from isaac_ros_visual_slam_interfaces.srv import FilePath
+from nav_msgs.msg import Odometry
+import rclpy
+from rclpy.node import Node
+from rclpy.utilities import remove_ros_args
+
+ODOMETRY_TOPIC = '/visual_slam/tracking/odometry'
+STATUS_TOPIC = '/visual_slam/status'
+
+
+def stamp_ns(header):
+    return header.stamp.sec * SECOND_NS + header.stamp.nanosec
+
+
+def write_json(path, data):
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+    temporary.replace(path)
+
+
+def run(node, run_dir, map_dir):
+    if not map_dir.is_absolute() or map_dir.is_symlink():
+        raise ValueError('地図の保存先には実ディレクトリの絶対パスを指定してください')
+    map_dir.mkdir(exist_ok=True, parents=True)
+    if any(map_dir.iterdir()):
+        raise ValueError(f'地図の保存先は空である必要があります: {map_dir}')
+
+    tracking = Tracking()
+    def odometry(msg):
+        if msg.header.frame_id != 'odom' or msg.child_frame_id != 'base_link':
+            raise ValueError('VO のフレームが odom → base_link と一致しません')
+        p = msg.pose.pose.position
+        tracking.add_odometry(stamp_ns(msg.header), (p.x, p.y, p.z))
+
+    node.create_subscription(Odometry, ODOMETRY_TOPIC, odometry, 100)
+    node.create_subscription(VisualSlamStatus, STATUS_TOPIC,
+                             lambda msg: tracking.add_status(stamp_ns(msg.header), msg.vo_state), 100)
+    service = node.create_client(FilePath, '/visual_slam/save_map')
+
+    def check_publishers():
+        for topic in (ODOMETRY_TOPIC, STATUS_TOPIC):
+            if node.count_publishers(topic) > 1:
+                raise RuntimeError(f'{topic} の発行元が複数あります。同じ ROS ドメインで起動中の '
+                                   'atd bringup gazebo や別の cuVSLAM を終了してください')
+
+    next_graph_check = 0.
+
+    def spin():
+        nonlocal next_graph_check
+        if (run_dir / 'mapping.cancel').is_file() or not rclpy.ok():
+            raise RuntimeError('地図作成が中断されました')
+        now = monotonic()
+        if now >= next_graph_check:
+            check_publishers()
+            next_graph_check = now + 1.
+        rclpy.spin_once(node, timeout_sec=.1)
+
+    deadline = monotonic() + 180
+    while not (service.service_is_ready() and tracking.ready(node.get_clock().now().nanoseconds)):
+        spin()
+        if monotonic() > deadline:
+            raise TimeoutError('開始位置で有効な cuVSLAM 追跡・VO・地図保存サービスを確認できませんでした')
+    check_publishers()
+    write_json(run_dir / 'mapping.ready', {'tracking_sim_ns': tracking.status_times[-1]})
+    node.get_logger().info('cuVSLAM の初期追跡を確認。カメラ台の1周を待ちます。')
+
+    finish_file = run_dir / 'lap.complete.json'
+    clock = node.get_clock().now().nanoseconds
+    progress = monotonic()
+    while not finish_file.is_file():
+        spin()
+        current = node.get_clock().now().nanoseconds
+        if current > clock:
+            progress, clock = monotonic(), current
+        if monotonic() - progress > 120:
+            raise TimeoutError('周回中に /clock の進行が途切れました')
+    lap = json.loads(finish_file.read_text())
+    start, finish = lap['start_sim_ns'], lap['finish_sim_ns']
+    if type(start) is not int or type(finish) is not int or not 0 < start < finish:
+        raise ValueError('Gazebo の完走時刻が不正です')
+    deadline = monotonic() + 60
+    while not tracking.reached(finish):
+        spin()
+        if monotonic() > deadline:
+            raise TimeoutError('ゴール時刻まで cuVSLAM の追跡・VO が届きませんでした')
+    report = tracking.assess(start, finish)
+
+    check_publishers()
+    request = FilePath.Request()
+    request.file_path = str(map_dir)
+    saving = service.call_async(request)
+    deadline = monotonic() + 180
+    while not saving.done():
+        spin()
+        if monotonic() > deadline:
+            raise TimeoutError('cuVSLAM の地図保存が時間内に終了しませんでした')
+    if not saving.result().success:
+        raise RuntimeError('cuVSLAM の save_map サービスが保存失敗を返しました')
+    check_publishers()
+    if (run_dir / 'mapping.cancel').is_file():
+        raise RuntimeError('地図作成が中断されました')
+    return {'status': 'complete', 'tracking': report, 'databases': map_databases(map_dir)}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--run-dir', required=True, type=Path)
+    parser.add_argument('--map-dir', required=True, type=Path)
+    args = parser.parse_args(remove_ros_args(args=sys.argv)[1:])
+    with rclpy.init(), Node('gazebo_lap_map') as node:
+        try:
+            result = run(node, args.run_dir, args.map_dir)
+            write_json(args.run_dir / 'mapping.saved.json', result)
+            return 0
+        except Exception as exc:
+            write_json(args.run_dir / 'mapping.failed.json', {'status': 'error', 'error': str(exc)})
+            print(f'Gazebo 地図作成に失敗しました: {exc}', file=sys.stderr)
+            return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

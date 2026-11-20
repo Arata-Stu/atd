@@ -200,6 +200,29 @@ def test_export_same_revision_and_missing_ros_is_error(client, monkeypatch):
     assert not (client.app.state.store.maps_root / 'mapping').exists()
 
 
+def test_gazebo_bag_becomes_available_for_offline_mapping_after_publication(client, monkeypatch):
+    records = client.app.state.store.record_root
+    bag_id = 'gazebo-monza-20261120T020000Z-abcdef'
+    staged = records.parent / ('.' + bag_id) / 'bag'
+    staged.mkdir(parents=True)
+    (staged / 'metadata.yaml').write_text('rosbag2_bagfile_information: {}')
+    assert client.get('/api/records').json()['items'] == []
+
+    monkeypatch.setattr('atd_api.offline.shutil.which', lambda _name: '/opt/ros/lyrical/bin/ros2')
+    monkeypatch.setattr(client.app.state.jobs, 'start',
+                        lambda kind, payload, resources, title: dict(kind=kind, payload=payload))
+    build = dict(id='monza_01', bag=bag_id)
+    assert client.post('/api/maps/build', json=build).status_code == 400
+    staged.rename(records / bag_id)
+    assert [entry['id'] for entry in client.get('/api/records').json()['items']] == [bag_id]
+    job = client.post('/api/maps/build', json=build)
+    assert job.status_code == 200, job.text
+    assert job.json() == dict(kind='map_build', payload=dict(
+        **build, left_image='/camera/camera/infra1/image_rect_raw', right_image='/camera/camera/infra2/image_rect_raw',
+        left_info='/camera/camera/infra1/camera_info', right_info='/camera/camera/infra2/camera_info',
+        base_frame='base_link', left_frame='camera_infra1_optical_frame', right_frame='camera_infra2_optical_frame'))
+
+
 @pytest.mark.parametrize('odom', [b'0.0 0 0 0 0 0 0 1\n', b'', None], ids=['trajectory', 'empty', 'missing'])
 def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch, odom):
     from atd_api.offline import map_build

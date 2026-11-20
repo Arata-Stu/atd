@@ -56,7 +56,9 @@ class AtdMenuTests(unittest.TestCase):
         for filename in ('build', 'dev', 'setup', 'webui', 'gazebo', 'bluetooth', 'hotspot',
                          'bringup', 'vgl', 'jetson_display_mode', 'jetson_max_performance'):
             wrapper = self.scripts / (filename + '.sh')
-            wrapper.write_text('#!/bin/bash\nprintf "%s\\0" "${0##*/}" "$@" >> "$MENU_TEST_CALLS"\n'
+            list_stub = 'if [[ "$1" = list ]]; then printf "monza\\nspa\\n"; exit; fi\n' if filename == 'gazebo' else ''
+            wrapper.write_text('#!/bin/bash\n' + list_stub +
+                               'printf "%s\\0" "${0##*/}" "$@" >> "$MENU_TEST_CALLS"\n'
                                'exit "${MENU_TEST_RC:-0}"\n')
             wrapper.chmod(0o755)
 
@@ -136,6 +138,7 @@ exit 130
                 with self.subTest(host=host, container=container):
                     menu = self.listed(host, container)
                     self.assertIn('build', menu)
+                    self.assertIn('bringup', menu)
                     self.assertEqual('web' in menu, host == 'pc')
                     self.assertEqual('gazebo' in menu, host == 'pc' and not container)
                     jetson_commands = ['bluetooth', 'hotspot', 'display', 'performance']
@@ -154,6 +157,20 @@ exit 130
                         self.assertEqual(command in menu, not container)
         self.assertFalse(self.calls.exists())
         self.assertFalse(self.ssh_args.exists())
+
+    def test_notebook_can_launch_simulation_and_ros_bringup(self):
+        self.menu(picks=['gazebo', 'serve', 'quit'])
+        self.assert_call('gazebo.sh', 'serve')
+        for entry, args in [('bag', ['bag', '--route', 'lap']), ('map', ['map', '--route', 'lap']),
+                            ('video-lap', ['video', '--route', 'lap']),
+                            ('serve-lap', ['serve', '--route', 'lap'])]:
+            self.menu(picks=['gazebo', entry, 'spa', 'quit'])
+            self.assert_call('gazebo.sh', *args, '--circuit', 'spa')
+        for container in ('0', '1'):
+            result = self.invoke('bringup', 'gazebo', MENU_TEST_CONTAINER=container)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_call('bringup.sh', 'gazebo')
+        self.assertNotIn('bringup\t', self.invoke('--list', MENU_TEST_OS='Darwin').stdout)
 
     def test_jetson_docker_delegates_selected_band_to_host(self):
         self.menu(picks=['hotspot', '5', 'quit'], MENU_TEST_HOST='jetson', MENU_TEST_CONTAINER='1')

@@ -41,10 +41,10 @@ class ProbeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, patch.dict(sys.modules, modules):
             output = Path(temp)
             (output / "benchmark.json").write_text('{"status": "error"}')
-            gz_probe.measure(output)
+            gz_probe.measure(output, "spa")
             self.assertTrue((output / "gz_probe.ready").is_file())
             report = json.loads((output / "gz_probe.json").read_text())
-            self.assertEqual(set(topics), {*gz_probe.IMAGE_TOPICS.values(), gz_probe.WORLD_TOPIC})
+            self.assertEqual(set(topics), {"/spa/left/image", "/spa/right/image", "/world/spa/stats"})
             self.assertEqual(report["window"], "probe_lifetime_without_ros_window")
             self.assertEqual(report["matching_stamps"], 0)
             self.assertIsNone(report["paired_sim_hz"])

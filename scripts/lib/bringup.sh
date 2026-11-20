@@ -10,7 +10,8 @@ atd_bringup_profiles() {
         $'localization\tjetson\tatd_bringup\tlocalization.launch.py\t手動走行・自己位置と前方軌道・操舵と速度制御の監視\tmap' \
         $'esc-trial\tjetson\tatd_bringup\tesc_trial_session\tESC 試験・手順受付と Jetson 端末での実行\ttrial' \
         $'joy-drive\tjetson\tatd_bringup\tjoy_drive.launch.py\tCH3切替のDualSense走行・入力監視と記録待機（カメラなし）\tplain' \
-        $'autonomous\tjetson\tatd_bringup\tautonomous.launch.py\tCH3で切り替える低速・前進限定の自動走行（地図・ライン選択）\tmap'
+        $'autonomous\tjetson\tatd_bringup\tautonomous.launch.py\tCH3で切り替える低速・前進限定の自動走行（地図・ライン選択）\tmap' \
+        $'gazebo\tpc\tatd_bringup\tgazebo.launch.py\tGazebo のステレオ画像と /clock で Visual SLAM を起動\tsimulation'
 }
 
 atd_bringup_lookup() {
@@ -32,9 +33,10 @@ atd_bringup_list() {
 }
 
 atd_bringup_choose() {
-    local task_choices='' task_choice task_number task_index=0
+    local task_current_host="$1" task_choices='' task_choice task_number task_index=0
     local task_name task_host task_package task_launch task_label task_setup
     while IFS=$'\t' read -r task_name task_host task_package task_launch task_label task_setup; do
+        [[ "$task_host" == "$task_current_host" ]] || continue
         task_choices+="${task_name}"$'\t'"${task_label} (${task_host})"$'\n'
     done < <(atd_bringup_profiles)
     task_choices+=$'quit\t終了'

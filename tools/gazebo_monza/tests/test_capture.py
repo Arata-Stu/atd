@@ -91,7 +91,7 @@ class PairTests(unittest.TestCase):
 
 class CaptureLoopTests(unittest.TestCase):
     def run_receiver(self, directory, frame_count, matched=True, right_baseline=0.095,
-                     deliver_info=True):
+                     deliver_info=True, lap_video=False):
         clock = SimpleNamespace(now=3.0, next_frame=0)
         callbacks = {}
         raw = bytes(640 * 480)
@@ -99,6 +99,12 @@ class CaptureLoopTests(unittest.TestCase):
         def spin_once(timeout_sec):
             if matched and clock.next_frame < frame_count:
                 stamp = stereo_stamp(clock.next_frame)
+                if lap_video:
+                    stamp += 4 * capture.NANO
+                    scene_dir = directory / "scene"
+                    origin_file = scene_dir / "lap_start.json"
+                    if (scene_dir / "lap_capture.ready").is_file() and not origin_file.is_file():
+                        origin_file.write_text(json.dumps({"sim_time_s": stamp / capture.NANO}))
                 clock.now += 1.0 / 90
                 for side, topic in capture.TOPICS.items():
                     header = SimpleNamespace(frame_id=capture.FRAMES[side], stamp=SimpleNamespace(
@@ -127,7 +133,8 @@ class CaptureLoopTests(unittest.TestCase):
         fake_modules = {"rclpy": ros, "rclpy.qos": SimpleNamespace(qos_profile_sensor_data=object()),
                         "rclpy.executors": SimpleNamespace(SingleThreadedExecutor=lambda: executor),
                         "sensor_msgs": SimpleNamespace(), "sensor_msgs.msg": SimpleNamespace(Image=object, CameraInfo=object)}
-        args = SimpleNamespace(output=directory, mode="benchmark", duration=1.0, warmup=0.2,
+        args = SimpleNamespace(output=directory, mode="video" if lap_video else "benchmark",
+                               route="lap" if lap_video else "chicane", duration=.2 if lap_video else 1.0, warmup=0.2,
                                startup_timeout=0.5, video_timeout=100.0)
         report = {}
         counters = [{"InErrors": i, "RcvbufErrors": i, "SndbufErrors": 0} for i in (5, 7)]
@@ -137,6 +144,21 @@ class CaptureLoopTests(unittest.TestCase):
         executor.add_node.assert_called_once_with(node)
         executor.shutdown.assert_called_once_with()
         return status, report
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg required")
+    def test_lap_video_waits_for_stereo_before_arming_and_captures_finish(self):
+        with tempfile.TemporaryDirectory() as dirname:
+            out = Path(dirname)
+            (out / "scene").mkdir()
+            status, metrics = self.run_receiver(out, 100, lap_video=True)
+            self.assertEqual(status, 0)
+            origin = metrics["lap_start_sim_ns"]
+            self.assertGreater(origin, 4 * capture.NANO)
+            self.assertLessEqual(metrics["first_encoded_pair_sim_ns"], origin)
+            self.assertGreaterEqual(metrics["last_encoded_pair_sim_ns"],
+                                    origin + round(.2 * capture.NANO) + stereo_stamp(2))
+            self.assertEqual(metrics["video_frames"], 7)
+            self.assertTrue((out / "left.mp4").is_file())
 
     def test_fixed_window_after_warmup_and_silent_startup(self):
         with tempfile.TemporaryDirectory() as root:
@@ -175,6 +197,26 @@ class CaptureLoopTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg required")
 class StereoVideoTests(unittest.TestCase):
+    def test_lap_window_uses_the_starting_pose_and_fresh_finish_frame(self):
+        black = (bytes(capture.WIDTH * capture.HEIGHT),) * 2
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            video = capture.StereoVideo(output, .2, include_finish=True)
+            # The stream came online long after sim time zero. The rig is parked
+            # at this first observed pose until the agreed 5 s release.
+            video.origin = 5 * capture.NANO
+            video.last_stamp, video.last_frames = video.origin - 1_000_000, black
+            for elapsed_ns in (7_000_000, 70_000_000, 199_000_000):
+                video.add(video.origin + elapsed_ns, black)
+            self.assertEqual(video.written, 6)
+            self.assertEqual(video.first_encoded_stamp, video.origin - 1_000_000)
+            video.add(video.origin + 208_000_000, black)
+            self.assertEqual(video.written, 6)
+            video.add(video.origin + 225_000_000, black)
+            self.assertEqual(video.written, 7)
+            self.assertEqual(video.last_encoded_stamp, video.origin + 225_000_000)
+            video.close(True)
+
     def test_sync_video_files_with_different_pixels(self):
         count = capture.WIDTH * capture.HEIGHT
         frames = (bytes(count), bytes([255]) * count)

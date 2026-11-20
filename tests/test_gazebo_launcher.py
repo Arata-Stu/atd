@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,109 @@ SPEC.loader.exec_module(storage)
 
 
 class GazeboHostTests(unittest.TestCase):
+    def test_bag_uses_configured_record_mount_and_runs_one_simulator(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh"), "bag", "--dry-run"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "storage.env"
+            configured = root / "pc records"
+            config.write_text(f"ATD_PC_RECORD_DIR={shlex.quote(str(configured))}\n")
+            env = {**os.environ, "ATD_STORAGE_CONFIG": str(config), "ATD_RESULT_DIR": str(root / "runs")}
+            env.pop("ATD_RECORD_DIR", None)
+            for circuit, record_path in (("monza", configured), ("spa", root / "override")):
+                if circuit == "spa":
+                    env["ATD_RECORD_DIR"] = str(record_path)
+                output = subprocess.check_output([*command, "--circuit", circuit, "--duration", "240"],
+                                                 env=env, text=True)
+                commands = [shlex.split(line) for line in output.splitlines() if line.startswith("docker ")]
+                self.assertEqual(len(commands), 1)
+                args = commands[0]
+                self.assertIn(f"type=bind,src={record_path},dst=/data/record", args)
+                self.assertIn("--shm-size=128m", args)
+                self.assertFalse(any(arg.startswith("--ipc=") for arg in args))
+                for flag, expected in (("--mode", "bag"), ("--route", "lap"), ("--duration", "240"),
+                                       ("--bag-output", f"/data/record/rosbags/gazebo-{circuit}-<run-id>-bag-shm")):
+                    self.assertEqual(args[args.index(flag) + 1], expected)
+                self.assertNotIn("gazebo_mapping.launch.py", output)
+                self.assertEqual(list(root.iterdir()), [config])
+            for extra, record in ((["--route", "chicane"], str(configured)), ([], "relative"),
+                                  ([], str(root / "has,comma"))):
+                result = subprocess.run([*command, *extra], env={**env, "ATD_RECORD_DIR": record}, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_map_connects_two_containers_to_one_lap_and_results_mount(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh"), "map", "--dry-run"]
+        with tempfile.TemporaryDirectory() as tmp:
+            for circuit, dds in (("monza", "shm"), ("spa", "udp")):
+                out = subprocess.check_output([*command, "--circuit", circuit, "--dds", dds],
+                                              text=True, env={**os.environ, "ATD_RESULT_DIR": tmp,
+                                                              "ATD_GAZEBO_ROS_DOMAIN_ID": "74"})
+                self.assertIn(f"--mode map --output /output --circuit {circuit} --route lap", out)
+                self.assertIn("gazebo_mapping.launch.py", out)
+                self.assertIn("/map-staging/nvidia/cuvslam_map", out)
+                processes = [line for line in out.splitlines() if line.startswith("docker ")]
+                self.assertEqual(len(processes), 2)
+                self.assertTrue(all("ROS_DOMAIN_ID=74" in line for line in processes))
+                self.assertEqual("--ipc=host" in out, dds == "shm")
+                self.assertNotIn("--mode video", out)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+        self.assertNotEqual(subprocess.run([*command, "--route", "chicane"], capture_output=True).returncode, 0)
+
+    def test_all_circuits_can_be_selected_from_the_host(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh")]
+        expected = sorted(p.name for p in (ROOT / "samples/f1tenth/maps").iterdir() if p.is_dir())
+        listed = subprocess.check_output([*command, "list"], text=True).splitlines()
+        self.assertEqual(listed, expected)
+        self.assertEqual(len(listed), 20)
+        for circuit in listed:
+            out = subprocess.check_output([*command, "video", "--dry-run", "--circuit", circuit], text=True)
+            self.assertIn(f"--circuit {circuit}", out)
+            self.assertIn("/gazebo_monza/" if circuit == "monza" else f"/gazebo/{circuit}/", out)
+        for args in (["video", "--circuit", "../spa"], ["serve", "--route", "chicane", "--circuit", "spa"],
+                     ["prepare", "--circuit", "silverstone"]):
+            self.assertNotEqual(subprocess.run([*command, *args, "--dry-run"], capture_output=True).returncode, 0)
+
+    def test_lap_choice_reaches_simulation_and_rejects_unknown_routes(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh")]
+        result = subprocess.run([*command, "video", "--route", "lap", "--dry-run"],
+                                capture_output=True, check=True, text=True)
+        self.assertIn("--route lap", result.stdout)
+        for action, args in (("video", []), ("video", ["unknown"]), ("prepare", ["lap"])):
+            result = subprocess.run([*command, action, "--dry-run", "--route", *args], capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_server_uses_same_ipc_as_isaac_ros(self):
+        shell = """
+            set -eu
+            source "$1"
+            docker() {
+                case "$2" in
+                    ls) printf '%s' "$IPC_FIXTURE_ID" ;;
+                    inspect) printf '%s' "$IPC_FIXTURE_MODE" ;;
+                    *) return 99 ;;
+                esac
+            }
+            sim_ipc_args=()
+            atd_gazebo_ipc_args false
+            printf '%s' "${sim_ipc_args[@]}"
+        """
+        for container_id, mode, expected in [
+            ("", "", "--ipc=host"), ("abc", "host host", "--ipc=host"),
+            ("abc", "host shareable", "--ipc=container:abc"),
+            ("abc", "host private", None), ("abc", "bridge shareable", None),
+        ]:
+            with self.subTest(container_id=container_id, mode=mode):
+                result = subprocess.run(
+                    ["bash", "-c", shell, "test", str(ROOT / "scripts/lib/gazebo_ipc.sh")],
+                    env={**os.environ, "IPC_FIXTURE_ID": container_id, "IPC_FIXTURE_MODE": mode},
+                    capture_output=True, text=True)
+                if expected is None:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("atd_pc_dev", result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, expected)
+
     def test_run_previews_isolated_modes_and_storage_without_creating_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(
@@ -41,6 +145,17 @@ class GazeboHostTests(unittest.TestCase):
         self.assertNotIn("--shm-size", result.stdout)
         for value in ([], ["invalid"]):
             self.assertNotEqual(subprocess.run([*command, *value], capture_output=True).returncode, 0)
+
+    def test_continuous_stream_has_no_duration_or_benchmark(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh"), "serve", "--dds", "udp", "--dry-run"]
+        result = subprocess.run([*command, "--wait-for-stereo"], check=True, capture_output=True, text=True)
+        self.assertIn("--mode serve", result.stdout)
+        self.assertIn("--wait-for-stereo", result.stdout)
+        self.assertNotIn("--mode benchmark", result.stdout)
+        self.assertNotIn("--duration", result.stdout)
+        self.assertNotEqual(subprocess.run([*command, "--duration", "5"], capture_output=True).returncode, 0)
+        self.assertNotEqual(subprocess.run([*command[:2], "benchmark", "--wait-for-stereo", "--dry-run"],
+                                           capture_output=True).returncode, 0)
 
     def test_storage_records_peak_and_failure_without_adding_shared_layers(self):
         with tempfile.TemporaryDirectory() as tmp:

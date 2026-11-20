@@ -8,10 +8,6 @@ import time
 
 from capture import NANO
 
-IMAGE_TOPICS = {side: f"/monza/{side}/image" for side in ("left", "right")}
-WORLD_TOPIC = "/world/monza/stats"
-
-
 def summarize(images, world, start, end):
     """Images are counted on callback arrival. Match all exact stamps in the window."""
     elapsed = end - start
@@ -41,13 +37,15 @@ def summarize(images, world, start, end):
     }
 
 
-def measure(output):
+def measure(output, circuit):
     from gz.msgs.image_pb2 import Image
     from gz.msgs.world_stats_pb2 import WorldStatistics
     from gz.transport import Node
 
     # Keep only (monotonic callback time, simulation stamp), never the pixel buffer.
-    images = {side: [] for side in IMAGE_TOPICS}
+    image_topics = {side: f"/{circuit}/{side}/image" for side in ("left", "right")}
+    world_topic = f"/world/{circuit}/stats"
+    images = {side: [] for side in image_topics}
     world = []
     lock = Lock()
     node = Node()
@@ -62,11 +60,11 @@ def measure(output):
         with lock:
             world.append((time.monotonic(), stamp.sec * NANO + stamp.nsec))
 
-    for side, topic in IMAGE_TOPICS.items():
+    for side, topic in image_topics.items():
         if not node.subscribe(Image, topic, partial(on_image, side)):
             raise RuntimeError(f"Gazebo 画像の購読に失敗しました: {topic}")
-    if not node.subscribe(WorldStatistics, WORLD_TOPIC, on_world):
-        raise RuntimeError(f"Gazebo world 統計の購読に失敗しました: {WORLD_TOPIC}")
+    if not node.subscribe(WorldStatistics, world_topic, on_world):
+        raise RuntimeError(f"Gazebo world 統計の購読に失敗しました: {world_topic}")
 
     listening_at = time.monotonic()
     (output / "gz_probe.ready").touch(exist_ok=False)
@@ -84,7 +82,7 @@ def measure(output):
         window = "probe_lifetime_without_ros_window"
     with lock:
         report = summarize(images, world, start, end)
-    report.update(window=window, image_topics=IMAGE_TOPICS, world_topic=WORLD_TOPIC,
+    report.update(window=window, image_topics=image_topics, world_topic=world_topic,
                   measurement_start_monotonic_s=start, measurement_end_monotonic_s=end)
     target = output / "gz_probe.json"
     temporary = target.with_suffix(".json.tmp")
@@ -95,4 +93,6 @@ def measure(output):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
-    measure(parser.parse_args().output)
+    parser.add_argument("--circuit", default="monza")
+    args = parser.parse_args()
+    measure(args.output, args.circuit)

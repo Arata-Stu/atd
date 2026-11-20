@@ -187,11 +187,14 @@ class Calibration:
 class StereoVideo:
     """Sample real stereo pairs at 30 fps on the simulation time axis."""
 
-    def __init__(self, output, duration):
+    def __init__(self, output, duration, *, include_finish=False):
         self.output = output
-        self.frame_count = math.ceil(duration * VIDEO_HZ)
+        self.duration_ns = round(duration * NANO)
+        self.include_finish = include_finish
+        self.frame_count = math.ceil(duration * VIDEO_HZ) + int(include_finish)
         self.written = 0
         self.repeated_frames = 0
+        self.first_encoded_stamp = None
         self.last_encoded_stamp = None
         self.origin = None
         self.last_stamp = None
@@ -217,16 +220,25 @@ class StereoVideo:
             self.origin = stamp
         # Resample by capture time. Sparse inputs hold the previous real pair.
         while self.written < self.frame_count:
-            target = self.origin + round(self.written * NANO / VIDEO_HZ)
+            finish = self.include_finish and self.written == self.frame_count - 1
+            # Pose commands can take one physics update to affect an exposure.
+            # The last video frame shows the parked goal after two camera ticks.
+            offset = round(self.written * NANO / VIDEO_HZ)
+            if finish:
+                offset = self.duration_ns + math.ceil(2 * NANO / TARGET_HZ)
+            target = self.origin + offset
             if target > stamp:
                 break
-            use_current = target == stamp or self.last_frames is None
+            # The one-shot rig holds its finish pose. Use a fresh pair from there.
+            use_current = finish or target == stamp or self.last_frames is None
             selected_stamp = stamp if use_current else self.last_stamp
             selected_frames = frames if use_current else self.last_frames
             for pixels in selected_frames:
                 self.process.stdin.write(pixels)
             if selected_stamp == self.last_encoded_stamp:
                 self.repeated_frames += 1
+            if self.first_encoded_stamp is None:
+                self.first_encoded_stamp = selected_stamp
             self.last_encoded_stamp = selected_stamp
             self.written += 1
         self.last_stamp, self.last_frames = stamp, frames
@@ -284,6 +296,10 @@ def capture(args, report):
     ready_at = None
     calibration = Calibration()
     info_subscriptions = []
+    lap_video = args.mode == "video" and args.route == "lap"
+    scene_dir = args.output / "scene"
+    pending_lap_start = scene_dir / "lap_start.json"
+    armed = False
 
     def receive(side, image):
         nonlocal first_pair_at
@@ -299,6 +315,16 @@ def capture(args, report):
                 first_pair_at = arrival
             calibration.add("pair", stamp)
             if video is not None:
+                if lap_video and video.origin is None:
+                    if not pending_lap_start.is_file():
+                        # Calibration and encoder are ready while the rig is parked.
+                        # Retain a real stereo pair at the starting pose.
+                        video.last_stamp, video.last_frames = stamp, result
+                        return
+                    start_s = json.loads(pending_lap_start.read_text())["sim_time_s"]
+                    if not math.isfinite(start_s) or start_s < 0:
+                        raise ValueError("Invalid lap start simulation time")
+                    video.origin = round(start_s * NANO)
                 video.add(stamp, result)
 
     def receive_info(side, message):
@@ -308,7 +334,7 @@ def capture(args, report):
 
     try:
         if not measure:
-            video = StereoVideo(args.output, args.duration)
+            video = StereoVideo(args.output, args.duration, include_finish=lap_video)
         subscriptions = {}
         for side, topic in TOPICS.items():
             subscriptions[topic] = node.create_subscription(
@@ -350,10 +376,19 @@ def capture(args, report):
                     success = True
                     break
             else:
-                if (pairs.stamps[-1] - pairs.stamps[0]) >= round(args.duration * NANO):
+                if lap_video and not armed:
+                    (scene_dir / "lap_capture.ready").touch(exist_ok=False)
+                    armed = True
+                if (video.origin is not None and video.written == video.frame_count
+                        and pairs.stamps[-1] - video.origin >= video.duration_ns):
                     success = True
                     break
-                if now - first_pair_at > args.video_timeout:
+                if lap_video and video.origin is None and now - first_pair_at > args.startup_timeout:
+                    raise TimeoutError("Calibrated stereo is ready; the camera rig did not release the lap")
+                # A long lap on a slow renderer can legitimately take more than
+                # ten real seconds per simulation second. Watch advancing pairs.
+                last_progress = pairs.arrivals[-1] if lap_video else first_pair_at
+                if now - last_progress > args.video_timeout:
                     raise TimeoutError("Video did not cover the requested simulation interval")
             executor.spin_once(timeout_sec=0.015)
         if not success:
@@ -382,6 +417,10 @@ def capture(args, report):
             if video is not None:
                 report.update(video_fps=VIDEO_HZ, video_frames=video.written,
                               held_video_frames=video.repeated_frames)
+                if lap_video:
+                    report.update(lap_start_sim_ns=video.origin,
+                                  first_encoded_pair_sim_ns=video.first_encoded_stamp,
+                                  last_encoded_pair_sim_ns=video.last_encoded_stamp)
                 video.close(success)
         finally:
             executor.shutdown()
@@ -400,13 +439,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--mode", required=True, choices=("video", "benchmark"))
+    parser.add_argument("--route", choices=("chicane", "lap"), default="chicane")
     parser.add_argument("--duration", type=float, required=True)
     parser.add_argument("--warmup", type=float, default=1.0, help="benchmark wall seconds after first pair")
     parser.add_argument("--startup-timeout", type=float, default=60.0, help="wall seconds to first pair")
-    parser.add_argument("--video-timeout", type=float, help="wall seconds after first pair")
+    parser.add_argument("--video-timeout", type=float,
+                        help="wall seconds without progress for a lap, or after first pair for a chicane")
     args = parser.parse_args()
     if args.video_timeout is None:
-        args.video_timeout = max(60, args.duration * 10)
+        args.video_timeout = 60. if args.route == "lap" else max(60, args.duration * 10)
     for key in ("duration", "startup_timeout", "video_timeout", "warmup"):
         value = getattr(args, key)
         if not math.isfinite(value) or (value < 0 if key == "warmup" else value <= 0):
@@ -418,7 +459,7 @@ def main():
     if args.mode == "video" and any((args.output / f"{s}{ext}").exists() for s in TOPICS
                                     for ext in (".mp4", ".partial.mp4")):
         parser.error("Existing stereo video files; use a fresh output directory")
-    report = {"mode": args.mode, "topics": TOPICS, "geometry": [WIDTH, HEIGHT],
+    report = {"mode": args.mode, "route": args.route, "topics": TOPICS, "geometry": [WIDTH, HEIGHT],
               "encoding": "mono8", "target_hz": TARGET_HZ, "rate_tolerance_fraction": TOLERANCE,
               "requested_duration_s": args.duration, "duration_clock": "wall" if args.mode == "benchmark" else "simulation",
               "ready": False, "warmup_wall_s": args.warmup if args.mode == "benchmark" else 0}

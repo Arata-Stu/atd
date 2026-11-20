@@ -38,7 +38,7 @@ class EntryTests(unittest.TestCase):
     def args(self):
         return self.output.read_bytes().decode().split('\0')[:-1]
 
-    def test_bringup_is_jetson_only_and_dry_run_delegates_without_launch(self):
+    def test_vehicle_profile_is_jetson_only_and_dry_run_delegates_without_launch(self):
         result = self.invoke('bringup.sh', 'input')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.output.exists())
@@ -46,6 +46,28 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.args(), ['--host', 'jetson', '--dry-run', 'ros', 'run', '--',
             'ros2', 'launch', 'atd_web_bridge', 'bridge.launch.py', 'config:=/path with spaces/config.yaml'])
+
+    def test_simulation_uses_pc_container_domain_and_explicit_clock(self):
+        for domain, extra in (('74', []), ('91', ['use_sim_time:=true'])):
+            with self.subTest(domain=domain):
+                env = {} if domain == '74' else {'ATD_GAZEBO_ROS_DOMAIN_ID': domain}
+                result = self.invoke('bringup.sh', '--dry-run', 'gazebo', *extra, **env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.args(), ['--host', 'pc', '--dry-run', 'ros', 'run', '--',
+                    'env', 'ROS_DOMAIN_ID=' + domain,
+                    'FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml',
+                    'ros2', 'launch', 'atd_bringup', 'gazebo.launch.py', 'use_sim_time:=true'])
+
+    def test_rejects_mixed_vehicle_simulation_or_bad_domain(self):
+        for args, env in (
+                (('gazebo',), {'ATD_TEST_HOST': 'jetson'}),
+                (('--dry-run', 'gazebo', 'use_sim_time:=false'), {}),
+                (('--dry-run', 'gazebo', 'joy_drive:=true'), {}),
+                (('--dry-run', 'gazebo'), {'ATD_GAZEBO_ROS_DOMAIN_ID': '233'}),
+                (('--dry-run', 'localization', 'map_id:=M', 'use_sim_time:=true'), {})):
+            with self.subTest(args=args, env=env):
+                self.assertNotEqual(self.invoke('bringup.sh', *args, **env).returncode, 0)
+                self.assertFalse(self.output.exists())
 
     def test_esc_trial_preserves_tty_entry_and_board_selection(self):
         result = self.invoke('bringup.sh', '--dry-run', 'esc-trial', 'port:=/dev/serial/by-id/board-if00')
@@ -111,7 +133,7 @@ class EntryTests(unittest.TestCase):
             with self.subTest(selection=selection):
                 # メニュー出力も実行コードとして解釈せず、登録済み構成だけを解決する。
                 result = subprocess.run(['/bin/bash', '-c',
-                    'source "$1"; selected="$(atd_bringup_choose)"; atd_bringup_lookup "$selected"',
+                    'source "$1"; selected="$(atd_bringup_choose jetson)"; atd_bringup_lookup "$selected"',
                     'picker-test', str(helper)], text=True, capture_output=True, timeout=10,
                     env={**self.env, 'PATH': str(fake_bin) + os.pathsep + os.defpath,
                          'ATD_TEST_PICK': selection})
@@ -162,11 +184,18 @@ class EntryTests(unittest.TestCase):
                                    ('6\n', 'esc-trial'), ('7\n', 'joy-drive'), ('8\n', 'autonomous'), ('9\n', 'quit'),
                                    ('\n', ''), ('90\n', '')):
             with self.subTest(response=response):
-                result = subprocess.run(['/bin/bash', '-c', 'source "$1"; atd_bringup_choose',
+                result = subprocess.run(['/bin/bash', '-c', 'source "$1"; atd_bringup_choose jetson',
                     'picker-test', str(helper)], input=response, text=True, capture_output=True,
                     timeout=10, env={**self.env, 'PATH': str(commands)})
                 self.assertEqual(result.stdout.strip(), expected)
                 self.assertEqual(result.returncode == 0, bool(expected))
+
+        result = subprocess.run(['/bin/bash', '-c', 'source "$1"; atd_bringup_choose pc',
+            'picker-test', str(helper)], input='1\n', text=True, capture_output=True,
+            timeout=10, env={**self.env, 'PATH': str(commands)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'gazebo')
+        self.assertNotIn('(jetson)', result.stderr)
 
     def test_camera_profiles_are_direct_in_noninteractive_execution(self):
         for profile in ('d455', 'manual'):

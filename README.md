@@ -34,9 +34,9 @@ Jetson ではホスト・Docker のどちらからも `bluetooth`、`hotspot`、
 | `scripts/hotspot.sh` | Jetson の Wi-Fi アクセスポイントを起動・停止し、帯域を選ぶ |
 | `scripts/jetson_display_mode.sh` | Jetson の CUI / GUI 起動を切り替える |
 | `scripts/jetson_max_performance.sh` | Jetson の MAXN 系モードで最大クロック・ファンを適用、確認する |
-| `scripts/bringup.sh` | Jetson の実装済み起動 profile を選択・実行 |
+| `scripts/bringup.sh` | Jetson の車載 profile・Notebook の Gazebo ステレオ VO を選択・実行 |
 | `scripts/webui.sh` | Notebook の Web UI を起動 |
-| `scripts/gazebo.sh` | Linux Notebook 専用。Monza の左右車載動画、ROS 2 の90 Hz 配信、専用イメージの容量を測定。[手順](docs/gazebo_monza.md) |
+| `scripts/gazebo.sh` | Linux Notebook 専用。[1周の rosbag 記録とオフライン cuVSLAM 地図作成](docs/gazebo_circuits.md#1周でcuvslam地図を作る)・[全20コース](docs/gazebo_circuits.md)の左右車載動画・90 Hz 受信計測・専用イメージの容量計測。[手順](docs/gazebo_monza.md) |
 
 ```bash
 ./scripts/setup.sh
@@ -50,7 +50,7 @@ Jetson ではホスト・Docker のどちらからも `bluetooth`、`hotspot`、
 ./scripts/bringup.sh bridge    # bridgeだけ。入力nodeが別途起動済みの場合
 ```
 
-`bringup.sh` は引数なしの対話端末では profile を fzf で選択し、未導入時は番号選択を使う。D455を含む `manual` / `d455` では、各ストリームのOFF・解像度・Hzを実機の対応モードから選択する。初期値はInfra1/2 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。`--list` は一覧、`--dry-run manual` は Notebook からも実行予定だけを確認できる。実際の起動は Jetson の既存 Docker 内で行い、車両出力や bag 記録は自動開始しない。`manual` / `input` は記録managerを待機させ、割り当てたJoy・プロポ操作で開始・停止する。[bringup の操作と拡張方針](docs/bringup.md)を参照する。
+`bringup.sh` は引数なしの対話端末では profile を fzf で選択し、未導入時は番号選択を使う。D455を含む `manual` / `d455` では、各ストリームのOFF・解像度・Hzを実機の対応モードから選択する。初期値はInfra1/2 640×480@90、RGB 640×480@30、加速度200Hz・ジャイロ400Hz、Depth OFF。`--list` は一覧、`--dry-run manual` は Notebook からも実行予定だけを確認できる。車載 profile は Jetson の既存 Docker 内で起動し、車両出力や bag 記録は自動開始しない。`manual` / `input` は記録managerを待機させ、割り当てたJoy・プロポ操作で開始・停止する。[bringup の操作と拡張方針](docs/bringup.md)を参照する。
 
 診断・Python 環境管理の入口は `scripts/tools/{docker,python}.sh` に置く。Web UI は初回とフロントエンド・依存の更新後に、オンラインの Notebook Docker 内で `atd-web prepare` を実行する。その後は `atd-web` でオフラインでも起動できる。Notebook ホストの Chrome で [Web UI](http://127.0.0.1:8766) を開く。起動済みコンテナを使って Notebook ホストから準備するには `./scripts/webui.sh prepare`、通常起動には `./scripts/webui.sh` を使う。
 
@@ -104,7 +104,7 @@ ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用�
 | [開発規約](AGENTS.md) | 命名、C++ / ament、component、Python、検証 |
 | [構成規約](docs/project_structure.md) | ソース、設定、文書、生成物の配置 |
 | [セットアップ](docs/setup/README.md) | ホスト準備、workspace・保存先、Docker・診断操作 |
-| [bringup](docs/bringup.md) | Jetson の起動 profile、対話選択・引数・今後の拡張 |
+| [bringup](docs/bringup.md) | Jetson の車載 profile と Notebook のシミュレーション用 profile |
 | [Python 環境](docs/python_environments.md) | uv、ROS 2 用・AI 学習用環境の操作と制約 |
 | [VGL モデル](docs/vgl_models.md) | Notebook の export、SCP 転送、Jetson engine build、検証・ログ |
 | [ビルド方針](docs/isaac_ros_build_strategy.md) | CLI / Docker / ROS の範囲、RealSense、DDS と技術的な根拠 |

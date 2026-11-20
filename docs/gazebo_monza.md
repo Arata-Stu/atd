@@ -1,6 +1,40 @@
 # Monza の D455 ステレオ試作
 
-1/10 RC 用に編集した Monza の Raceline を、スタートから最初の右・左シケインを抜けるまで 12.5 m たどる。Gazebo Jetty と OGRE 2 が同じ台に取り付けた左右のカメラを描画する。床にはアスファルト、壁にはコンクリートの撮影素材を実寸で貼り、低いコース境界、白いテープ、柱、シャッターと室内照明を配置する。既存の HDMap は走路の形状に使い、室内の配置は試作用に設定した。[Monza 地図](../samples/f1tenth/maps/monza/)・[写真素材と縮尺](../tools/gazebo_monza/materials/README.md)
+全20コースの一覧と出典は[F1サーキットの周回ガイド](gazebo_circuits.md)にあります。Notebook ホストで `atd gazebo list` を実行するとコースIDを確認できます。例として `atd gazebo video --circuit spa` はスパを1周して左右の車載動画を保存します。
+
+モンツァの GP コースを一周する `lap` と、第1シケインを試す `chicane` を選べる。動画の既定は第1シケイン。地図作成用の `bag` では GP コースを1周する。
+
+## 第1シケイン
+
+ホームストレートを北へ進み、Variante del Rettifilo の右・左のシケインを抜ける区間を、水平距離 **1/10** の Gazebo シーンにした。カメラ台はシケインの実距離120 m手前から進入し、自動車用の約80 mの切り返しを通り、出口からさらに40 m進む。RC 上の走行距離は約24 m。基準にしたのは OpenStreetMap（OSM）の自動車用走路とコースの両縁で、2D ベンチマークには引き続きコンパクトな F1TENTH 版を使う。[モンツァ公式のコース解説](https://www.monzanet.it/en/circuit/)・[座標の出典・版・縮尺](../tools/gazebo_monza/reference/README.md)
+
+![走行区間と周囲の観客席、林、ランオフを同じ縮尺で比較した平面図](images/monza-layout.png)
+
+| 要素 | 配置の根拠と再現範囲 |
+|---|---|
+| 走路 | OSM の自動車用走行経路と外周・内周の輪郭を投影した。白線は輪郭に沿わせ、赤白の縁石の範囲は内縁の曲がり方から推定した。測量済みの白線位置・縁石断面・路面勾配は反映していない。 |
+| ランオフ | 砂地は地図にある2区画を描画。シケインを直進する舗装と二輪用の舗装は地図の中心線に沿わせ、幅をそれぞれ RC 上で0.50 m、0.72 mと仮定した。その他の地面は芝を基本にした。 |
+| 観客席 | 地図にある6件の平面輪郭を使い、公式の場内図・設備表で確認できる 6A/B/C、8A/B、8 BIS の屋根なしの外観を採用した。高さ・段数・座席の色は推定。地図上の無名の建物と公式の席番号の対応は未確認。 |
+| 林 | 地図に記録された林の輪郭・抜けに沿わせた。各樹木の座標・樹種・高さ、舗装と芝の材質や季節・照明はシミュレーション用の設定。 |
+| 画面に含まれない設備 | コース脇の連続したガードレール・金網、仮設広告、スクリーンの正確な位置や高さは未確認。 |
+
+平面座標の出典は **© OpenStreetMap contributors**。第1シケインの `scene/scene.json` には `scenery: monza_prima_variante_osm`、地理原点、縮尺、地理データの SHA-256 を保存する。全周では `scenery: monza_gp_osm` と追加の景観データの SHA-256 も記録する。[OSM の帰属とライセンス](https://www.openstreetmap.org/copyright)・[主催者の観客席図・設備表](https://www.monzanet.it/wp-content/uploads/2026/03/GP_F1_2026_LISTINO_PREZZI_3_2-2.pdf)・[素材の出典](../tools/gazebo_monza/materials/README.md)
+
+![第1シケインを通るカメラ台から見た観客席と林](images/monza-chicane.jpg)
+
+実コースとの目視比較には、2024年の路面改修後に収録された2025年イタリア GP の車載映像を使える。メインストレート終盤から最初の右・左までが対応区間。F1 車載カメラと RC の D455 では視点高と画角が異なる。[Formula 1 公式オンボード映像](https://www.formula1.com/en/video/onboard-verstappens-record-breaking-2025-pirelli-pole-position-award-lap-at-monza.1842533699043908444)
+
+## GP コースを1周する
+
+準備済みの Ubuntu Notebook ホストで、スタートからゴールまでの左右動画を撮影する。
+
+```bash
+atd gazebo video --route lap
+```
+
+公開地図の GP コース両縁から生成した経路を、スタート／フィニッシュ地点から時計回りに一周する。水平縮尺 1/10 で **579.20 m**、既定は **240 シミュレーション秒**（平均約2.41 m/s）。録画用カメラ台は、開始位置で左右画像と CameraInfo の時刻がそろうのを待ち、一周するとゴールで止まる。録画時に `--duration 120` を加えると120シミュレーション秒で同じ距離を進む。全周版の観客席、森林、砂地、ピット建物の平面配置は OSM の地物を使う。縁石を造形したのは第1シケイン。全周の路面は平面で、建物の高さや個々の樹木は推定。走路に沿うカメラ軌道で地図作成・画像配信を試せる。[走行線の作成方法](../tools/gazebo_monza/reference/README.md)・[全周の背景の出典](../tools/gazebo_monza/reference/lap-scenery.md)
+
+`run.json` の `motion.lap_completed` は、物理更新後の実位置が経路に沿って進みゴールに戻ったかを示す。同じ `motion` 内の `video_endpoints_covered` は録画に使った左右ペアの時刻が発着を含むかを表す。左右動画は `stereo.mp4`、途中で前のフレームを再表示した回数・受信間隔は `video.json` に残る。スタートとゴールで同じ画像が撮れても、それだけで完走とは判定しない。
 
 ## Notebook で再生・測定する
 
@@ -19,11 +53,51 @@ NVIDIA GPU と NVIDIA Container Toolkit が使える Ubuntu の Notebook ホス�
 |---|---|
 | `prepare` | `storage.json`、ビルド前後の `docker system df -v` と `docker buildx du`、`build.log` |
 | `video` | `stereo.mp4`（左目／右目の横並び）、`left.mp4`、`right.mp4`、`video.json` |
+| `bag` | 1周分のステレオ MCAP。完了後、Notebook の `data/record/rosbags/` から Web UI で選択できる |
 | `benchmark` | `benchmark.json` に実時間で受信したペア数・Hz、シミュレーション時刻のHz、欠落・重複、最大到着間隔 |
 | `diagnose` | 既定20実秒間の ROS 受信を `benchmark.json`、同じ時間帯の Gazebo Transport での左右受信と world 時刻を `gz_probe.json` に記録 |
 | 両試行 | `run.json`、`scene/scene.json`、台の実際の位置 `scene/rig_motion.jsonl`、サーバー・ブリッジ・受信側のログ |
 
-`stereo.mp4` を Notebook のブラウザにドラッグすると、左右を同時に再生・シークできる。実時間の配信と独立に、動画は同じタイムスタンプを持つ左右画像をシミュレーション時刻で30 fpsにサンプリングする。動画の既定長は10秒。受信が滞り前のペアを保持した動画フレームの数は `video.json` の `held_video_frames` で確認できる。
+`stereo.mp4` を Notebook のブラウザにドラッグすると、左右を同時に再生・シークできる。実時間の配信と独立に、動画は同じタイムスタンプを持つ左右画像をシミュレーション時刻で30 fpsにサンプリングする。第1シケインの動画の既定長は10秒。受信が滞り前のペアを保持した動画フレームの数は `video.json` の `held_video_frames` で確認できる。
+
+## Gazebo の時刻で cuVSLAM を起動する
+
+**1周を記録して後から地図を作る場合**は、Notebook ホストで `atd gazebo bag --circuit monza` を実行し、完了後に Notebook の Web UI「地図とライン」で bag を選ぶ。走行中に地図を作りたい場合は `atd gazebo map --circuit monza` を使う。以下の `serve` と `bringup gazebo` は連続走行中のステレオ VO を観測する操作。[記録とオフライン地図作成の手順・保存容量](gazebo_circuits.md#1周でcuvslam地図を作る)
+
+Ubuntu Notebook で ATD 開発コンテナ（`atd dev`）を起動しておく。今回の変更を Notebook の checkout に反映した後、初回は次のコマンドで launch をインストールする。Gazebo の専用イメージは `atd gazebo prepare` 済みのものを使える。
+
+```bash
+atd build --packages-up-to atd_bringup
+```
+
+**端末1・Notebook ホスト**で Gazebo を起動する。左右の画像と CameraInfo に対応する購読がそろうまで世界を一時停止する。
+
+```bash
+atd gazebo serve --route lap --wait-for-stereo
+```
+
+**端末2・同じ Notebook のホストまたは ATD 開発コンテナ**でステレオ VO を起動する。地図や D455 実機の接続は不要。
+
+```bash
+atd bringup gazebo
+```
+
+全周ではゴールを越えると同じ向きで次周に入り、`/clock` は単調に進む。第1シケインを往復するには `--route chicane` を選ぶ。左右画像・CameraInfo の時刻は Gazebo の撮影時刻。cuVSLAM とその component container は `use_sim_time=true` で動作し、`/visual_slam/tracking/odometry` と `odom → base_link` の TF を出力する。例えば実時間1秒で `/clock` が0.47秒進むと、姿勢と速度の時間軸も0.47秒進む。実時間の90 Hz達成は起動条件に含まれない。今回は画像による相対姿勢推定を対象とし、車両 I/O は Jetson 側の従来の profile が担当する。[ROS 2 の時計](https://design.ros2.org/articles/clock_and_time.html)
+
+両端末は既定で ROS domain 74 を使用する。変更時は両方で同じ `ATD_GAZEBO_ROS_DOMAIN_ID` を設定する。連続配信では Gazebo と Isaac に同じ SHM＋loopback の Fast DDS プロファイルを適用し、Isaac ROS CLI 標準構成に合わせて host network と IPC を共有する。動画・計測は従来どおり専用コンテナの IPC で完結する。[Isaac ROS CLI の起動設定](https://github.com/NVIDIA-ISAAC-ROS/isaac-ros-cli/blob/main/scripts/run_dev/run_dev.py)・[Fast DDS の Docker 通信](https://fast-dds.docs.eprosima.com/en/3.x/docker/shm_docker.html)
+
+**別端末の Notebook ATD 開発コンテナ**で、シミュレーション時計の有効化・進行と VO の出力を確認できる。
+
+```bash
+export ROS_DOMAIN_ID="${ATD_GAZEBO_ROS_DOMAIN_ID:-74}"
+export FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
+ros2 param get /visual_slam use_sim_time
+ros2 topic echo /clock --once
+ros2 topic echo /visual_slam/status --once
+ros2 topic echo /visual_slam/tracking/odometry --field header.stamp --qos-reliability best_effort --once
+```
+
+終了は両端末で Ctrl+C。Gazebo を起動し直すと `/clock` はゼロから始まるので、VO も新しいセッションで起動する。`atd gazebo serve` 単独なら購読を待たずに配信する。
 
 ### 取付高・時間を変える
 
@@ -34,7 +108,7 @@ NVIDIA GPU と NVIDIA Container Toolkit が使える Ubuntu の Notebook ホス�
 
 `--camera-height` は床から光学中心までの m。初期値は **0.12 m**、後軸から前方に 0.18 m、水平と仮定している。軸中心高さの仮定値は 0.0325 m。車体設定の後輪軸基準の z と区別する。左右の基線は公称 0.095 m、水平画角は公称 87°、640 × 480 の `mono8` 理想ピンホールカメラ。実機の取付高と個体別キャリブレーションは未測定。モノクロ画像は可視光材質の描画で、D455 の投光パターン、露出制御、振動による像の変化までは再現していない。[実車の座標定義](vehicle_layout.md)・[D455 仕様](https://realsenseai.com/products/stereo-depth-camera-d455/)
 
-動画では指定時間で同じ区間を一度通る。ベンチマークでは既定の片道10秒でカメラ台が同じ姿勢列を往復し、描画中の負荷を維持する。移動は保存済み Raceline を用いた軌道再生で、映像と配信の検証用。タイヤや ESC、制御器による閉ループ走行の比較は既存の [2D シミュレーター](simulation.md) で行う。
+動画は指定したシミュレーション時間で経路を一度たどる。ベンチマークの `--duration` は実時間での計測窓で、走行は選んだ経路の既定速度で継続する。移動は地図上の走路中心付近をたどる軌道再生で、映像と配信の検証用。タイヤや ESC、制御器による閉ループ走行の比較は既存の [2D シミュレーター](simulation.md) で行う。
 
 ### 左右画像の受信が遅いとき
 
@@ -45,7 +119,7 @@ atd gazebo diagnose --dds udp
 atd gazebo diagnose --dds shm
 ```
 
-両方とも同じシーン・計測時間を使う。`udp` は従来の UDPv4 loopback、`shm` は同じコンテナ内のブリッジと受信プロセスに Fast DDS の共有メモリを使える設定で、通常の動画・計測にも適用する既定値。Gazebo コンテナ専用の `/dev/shm` 上限は128 MiB。別コンテナの ATD ビューアには既存の UDPv4 loopback 設定を使う。[Fast DDS の SHM transport](https://fast-dds.docs.eprosima.com/en/3.x/fastdds/transport/shared_memory/shared_memory.html)
+両方とも同じシーン・計測時間を使う。`udp` は UDPv4 loopback、`shm` は Fast DDS の共有メモリも使える設定で、動画・計測・連続配信の既定値。動画・計測では Gazebo コンテナ専用の `/dev/shm` 上限を128 MiBにする。`serve` では Isaac ROS と IPC を共有し、別コンテナの cuVSLAM にも共有メモリで画像を渡せる。[Fast DDS の SHM transport](https://fast-dds.docs.eprosima.com/en/3.x/fastdds/transport/shared_memory/shared_memory.html)
 
 | 診断に表示される結果 | 確認する箇所 |
 |---|---|
@@ -65,6 +139,46 @@ ROS は Notebook のループバックで Fast DDS を使う。標準ドメイ�
 
 ## 試作の確認結果
 
+全周版を macOS ARM64 のネイティブ Gazebo Jetty／OGRE 2 で走らせた。確認用に1周60シミュレーション秒を指定し、実際のカメラ台のスタートからゴールまでの121姿勢を経路と照合した。`lap_completed` と `video_endpoints_covered` はともに真。左右各640 × 480の画像から、発着を含む1,801フレームのステレオ動画を生成した。ここでの画像受信は Gazebo Transport。Notebook の ROS ブリッジ経由の録画と cuVSLAM の全周追跡は未検証。
+
+第1シケインの地理データ版は macOS ARM64 のネイティブ Gazebo Jetty 10.7／OGRE 2 で、光学中心高0.12 mから実際に描画した。約23.96 mの設定経路を終点まで進み、Gazebo Transport で同時刻の左右画像を914組取得した。上の図は3地点でのカラー参考画像と同時刻の左眼の白黒画像。カラーのカメラは検証の際に左眼と同じ姿勢に置いた。地理データ版での Notebook の ROS 2 受信速度・cuVSLAM 追跡精度は未計測。
+
+### 旧シーンでの測定値
+
+以下は観客席1棟と26本の木を仮配置した旧シーンの記録。旧屋外版は macOS ARM64 のネイティブ Gazebo Jetty／OGRE 2 でシケイン出口まで描画した。同じ12.5 mの走行線・視点・材質・照明で、観客席と樹木の有無だけを変えて撮影した。背景追加後のカメラ台の軌跡のサンプル間距離は計12.48 mで、Gazebo Transport で同時刻の左右画像を914組受信した。
+
+背景の比較には撮影時刻の一致した白黒画像をロスレスで保存し、0.4秒から9.6秒まで0.2秒おきの47地点で画面上半分を評価した。数値は各地点の点数の中央値。
+
+| 同じカメラから数えた背景の特徴点 | 芝・進入標識まで | 観客席・樹木を追加 |
+|---|---:|---:|
+| 左右で対応した点 | 0 | 184 |
+| その後0.2秒間追跡できた点 | 0 | 168 |
+
+OpenCV の ORB で左右の記述子を相互照合し、縦ずれ1 px以下・視差1〜64 pxの点を選んだ。追跡にはピラミッド型 Lucas–Kanade 法を使い、往復誤差1 px以下を各フレームで確認した。さらに既知のカメラ軌跡から計算した静止点の位置と0.2秒後の観測のずれが2 px以下の点を数えた。背景追加後は最も点が少ない区間でも112点が残った。[OpenCV の特徴点照合](https://docs.opencv.org/4.12.0/dc/dc3/tutorial_py_matcher.html)
+
+別途、全画面を使う CPU ステレオ VO で、左右を三角測量して次のフレームへの6自由度の移動を PnP RANSAC で推定した。新旧で撮影時刻が一致する299組（約30 Hz）を、真値や速度を推定器へ渡さずに処理した。初期姿勢だけを揃えて評価した結果は以下の通り。
+
+| | 芝・進入標識まで | 観客席・樹木を追加 |
+|---|---:|---:|
+| 連続して得られた姿勢（初期姿勢を含む） | 4 / 299 | 299 / 299 |
+| 結果 | 0.20秒で対応点が不足 | 終点に到達 |
+| 初期位置から終点までの左眼中心の移動距離（基準12.42 m） | — | 12.38 m |
+| 設定した走行軌跡に対する3D位置のRMSE / 終点誤差（299時刻） | — | 3.2 cm / 5.5 cm |
+| Gazebo が記録したカメラ台の姿勢から求めた3D位置のRMSE / 終点誤差（21時刻） | — | 3.2 cm / 4.3 cm |
+
+この検証に使ったのは Gazebo の画像と CPU 上の OpenCV。Notebook で NVIDIA cuVSLAM の実際の追跡状態と odometry を確認する手順は[上記のシミュレーション用 bringup](#gazebo-の時刻で-cuvslam-を起動する)に記載した。
+
+以下の性能値は屋外化前の室内シーンで取得した。
+
 2026-11-20、macOS ARM64 のネイティブ Gazebo Jetty 10.7／OGRE 2（Metal）で、取付高 0.12 m のシーンを描画した。Gazebo Transport 側でシミュレーション時刻が一致する 640 × 480 の左右画像を899組取得し、観測区間の画像タイムスタンプは約11.11 ms間隔、重複と未対応画像は左右とも0だった。左右の投影行列から求めた基線長は 0.095 m。両眼それぞれ10秒・30 fpsのMP4を確認した。
 
-同日の Notebook 初回計測（`20261120T013905Z-benchmark-3UuCzY`、従来の UDP 設定）は EGL が RTX 4060 Laptop GPU を使用。実時間60秒で ROS 受信は左54枚、右272枚、正順の同時刻ペア9組（0.15組/秒）、最大受信間隔17.90秒。初回計測には Gazebo 側の同時観測が含まれていない。共有メモリ設定の効果は Notebook の比較計測で確認する。
+同日の Notebook 初回計測（`20261120T013905Z-benchmark-3UuCzY`、従来の UDP 設定）は EGL が RTX 4060 Laptop GPU を使用。実時間60秒で ROS 受信は左54枚、右272枚、正順の同時刻ペア9組（0.15組/秒）、最大受信間隔17.90秒。
+
+同じ Notebook で `diagnose` を各20実秒実行した結果。
+
+| DDS | Gazebo 同時刻ペア | ROS 同時刻ペア | ROS 組/実秒 | シミュレーション秒/実秒 | ホスト全体の UDP 受信バッファ不足エラー増分 |
+|---|---:|---:|---:|---:|---:|
+| UDP | 864 | 4 | 0.20 | 0.480 | 3,173 |
+| SHM | 849 | 849 | 42.45 | 0.472 | 0 |
+
+SHM 試行では Gazebo と ROS で観測した左右の枚数も一致した（左849枚、右850枚）。実時間では42.45組/秒で、world の進行速度から換算すると約90組/シミュレーション秒。診断用の追加購読を外した SHM の実時間レートは通常の `benchmark` で測定する。

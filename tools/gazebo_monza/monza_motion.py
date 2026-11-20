@@ -2,7 +2,7 @@
 
 from bisect import bisect_right
 import json
-from math import atan2, cos, sin
+from math import atan2, cos, hypot, sin
 from pathlib import Path
 
 
@@ -15,15 +15,22 @@ def interpolate(samples, distances, distance):
             start[2] + weight * (end[2] - start[2]), start[3] + weight * delta_yaw)
 
 
-def travel_fraction(seconds, duration, repeat):
+def travel_fraction(seconds, duration, repeat, *, closed=False):
     progress = max(seconds, 0.0) / duration
     if repeat:
+        if closed:
+            return progress % 1.0
         # Reverse along the same poses on alternate passes (no teleport / yaw flip).
         return 1.0 - abs(progress % 2.0 - 1.0)
     return min(progress, 1.0)
 
 
 class MonzaMotion:
+    def __init__(self):
+        self.closed = False
+        self.finished = False
+        self.start_s = 0.0
+
     def configure(self, entity, sdf, ecm, event_mgr):
         from gz.sim import Link, Model
         from gz.math import Pose3d
@@ -37,6 +44,11 @@ class MonzaMotion:
         self.distances = [point[0] for point in self.samples]
         self.duration = scene["trajectory"]["travel_seconds"]
         self.repeat = scene["trajectory"]["repeat"]
+        self.closed = scene["trajectory"].get("route") == "lap"
+        self.start_s = None if scene["trajectory"].get("wait_for_capture") else 0.0
+        self.capture_ready = scene_file.with_name("lap_capture.ready")
+        self.lap_start = scene_file.with_name("lap_start.json")
+        self.capture_finish = scene_file.with_name("lap_finished.ready") if self.start_s is None else None
         self.trace = scene_file.with_name("rig_motion.jsonl")
         self.trace.write_text("")
         self.next_trace_s = 0.0
@@ -44,20 +56,45 @@ class MonzaMotion:
     def pre_update(self, info, ecm):
         if info.paused:
             return
-        fraction = travel_fraction(info.sim_time.total_seconds(), self.duration, self.repeat)
+        seconds = info.sim_time.total_seconds()
+        if self.start_s is None:
+            if not self.capture_ready.is_file():
+                return  # The SDF pose is the first sample; gravity is disabled on the rig.
+            self.start_s = seconds
+            started = self.lap_start.with_suffix(".tmp")
+            started.write_text(json.dumps({"sim_time_s": seconds}) + "\n")
+            started.replace(self.lap_start)
+            self.next_trace_s = seconds
+        fraction = travel_fraction(seconds - self.start_s, self.duration, self.repeat, closed=self.closed)
         x, y, yaw = interpolate(self.samples, self.distances, fraction * self.distances[-1])
         self.model.set_world_pose_cmd(ecm, self.pose_type(x, y, 0, 0, 0, yaw))
 
     def post_update(self, info, ecm):
         seconds = info.sim_time.total_seconds()
-        if info.paused or seconds < self.next_trace_s:
+        # Final sample is already flushed when the completion marker appears.
+        # Readers may validate the trace while the sensor streams continue.
+        if info.paused or self.start_s is None or self.finished:
+            return
+        at_finish = self.closed and not self.repeat and not self.finished and seconds >= self.start_s + self.duration
+        if seconds < self.next_trace_s and not at_finish:
             return
         # Inspect the actual post-physics link, independent of the requested pose.
         pose = self.link.world_pose(ecm)
         sample = {"sim_time_s": seconds, "x_m": pose.x(), "y_m": pose.y(), "yaw_rad": pose.yaw()}
         with self.trace.open("a") as stream:
             stream.write(json.dumps(sample) + "\n")
-        self.next_trace_s += min(.5, self.duration / 8)
+        if at_finish:
+            # A world-pose command can take another physics step to reach the link.
+            _, x, y, _ = self.samples[-1]
+            self.finished = hypot(pose.x() - x, pose.y() - y) <= .05
+            if self.capture_finish is not None:
+                if self.finished:
+                    self.capture_finish.touch()
+                elif seconds > self.start_s + self.duration + 1:
+                    self.capture_finish.with_suffix(".failed").touch()
+        interval = min(.5, self.duration / (120 if self.closed else 8))
+        if seconds >= self.next_trace_s:
+            self.next_trace_s += interval
 
 
 def get_system():

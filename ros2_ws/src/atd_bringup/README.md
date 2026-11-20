@@ -5,6 +5,7 @@ Jetson 内でセンサ・入力・車両 I/O を起動する。`joy-drive` と `
 | launch | 内容 |
 | --- | --- |
 | `gazebo.launch.py` | Notebook の Gazebo が配信する `/clock` と左右画像で cuVSLAM ステレオ VO を起動する。[起動と確認](../../../docs/gazebo_monza.md#gazebo-の時刻で-cuvslam-を起動する) |
+| `bag_vslam.launch.py` | 記録済みステレオ入力から cuVSLAM で軌跡・ランドマークを生成する。Notebook では `atd replay` で RViz と bag 再生もまとめて起動できる。[使い方](../../../docs/gazebo_monza.md#記録済みのステレオ-bag-を-rviz--foxglove-で見る) |
 | `d455.launch.py` | `atd_sensors/d455.launch.py` + `atd_vehicle_description/vehicle.launch.py`。bridgeなし |
 | `localization.launch.py` | D455・車両 TF・入力一式に自己位置推定、planner、`atd_control` を加える。手動走行中の姿勢・前方軌道・計算舵角と、速度 FF＋PID、プロポ CH2、DualSense の正規化スロットルを監視する |
 | `joy_drive.launch.py` | カメラなしの入力一式と `joy_drive`。プロポ許可時の DualSense 手動走行 |

@@ -25,4 +25,4 @@
 
 3種とも初夏の自然光を左上から受けた単独の立木を、幹の根元近くから望遠で正面撮影した構図を指定した。明暗のある葉のまとまりと透過する背景を指定し、生成画像を切り出して縮小した。実際の Monza の木の位置や樹種を測量した素材ではない。
 
-旧屋内試作の `wall*` は Rob Tuytel のコンクリート素材、`floor_normal.png` と `floor_roughness.png` は上記の Asphalt Floor に由来する。[Poly Haven Concrete](https://polyhaven.com/a/concrete)
+Monza 全周の壁面とグリッド付近の補修跡は、同梱の `wall.jpg`（Rob Tuytel のコンクリート素材）を縮尺に合わせてタイル描画する。舗装補修部の粗い表面は近似。壁では水平方向と高さ方向に UV を割り当てる。`floor_normal.png` と `floor_roughness.png` は上記の Asphalt Floor に由来する。[Poly Haven Concrete](https://polyhaven.com/a/concrete)

@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import pty
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -53,7 +54,7 @@ class AtdMenuTests(unittest.TestCase):
         remote.write_text('#!/bin/sh\nprintf "%s\\0" "$@" > "$MENU_TEST_HOST_CALLS"\n'
                           'exit "${MENU_TEST_REMOTE_RC:-0}"\n')
         remote.chmod(0o755)
-        for filename in ('build', 'dev', 'setup', 'webui', 'gazebo', 'bluetooth', 'hotspot',
+        for filename in ('build', 'dev', 'setup', 'webui', 'gazebo', 'replay', 'bluetooth', 'hotspot',
                          'bringup', 'vgl', 'jetson_display_mode', 'jetson_max_performance'):
             wrapper = self.scripts / (filename + '.sh')
             list_stub = 'if [[ "$1" = list ]]; then printf "monza\\nspa\\n"; exit; fi\n' if filename == 'gazebo' else ''
@@ -141,6 +142,7 @@ exit 130
                     self.assertIn('bringup', menu)
                     self.assertEqual('web' in menu, host == 'pc')
                     self.assertEqual('gazebo' in menu, host == 'pc' and not container)
+                    self.assertEqual('replay' in menu, host == 'pc')
                     jetson_commands = ['bluetooth', 'hotspot', 'display', 'performance']
                     if host == 'jetson':
                         for command in jetson_commands:
@@ -171,6 +173,39 @@ exit 130
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assert_call('bringup.sh', 'gazebo')
         self.assertNotIn('bringup\t', self.invoke('--list', MENU_TEST_OS='Darwin').stdout)
+
+    def test_replay_menu_and_notebook_launcher(self):
+        self.menu(picks=['replay', 'quit'], MENU_TEST_CONTAINER='1')
+        self.assert_call('replay.sh')
+        self.assertNotIn('replay\t', self.invoke('--list', MENU_TEST_OS='Darwin').stdout)
+
+        shutil.copy2(PROJECT / 'scripts/replay.sh', self.scripts / 'replay.sh')
+        bag = '/data/record/rosbags/my session/lap 01'
+        options = [bag, '--rate', '0.5']
+        command = ['env', 'ROS_DOMAIN_ID=75',
+                   'FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml',
+                   'ros2', 'run', 'atd_bringup', 'replay_vslam', *options]
+        result = self.invoke('replay', '--dry-run', *options, ROS_DOMAIN_ID='74')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = shlex.split(result.stdout.split('command: ', 1)[1])
+        self.assertIn('atd_pc_dev', args)
+        self.assertEqual(args[args.index('/usr/local/bin/atd-shell') + 1:], command)
+
+        # コンテナ内の起動時に ATD shell で overlay を読み直すところまで確認する。
+        shell = self.root / 'docker/scripts/atd-shell.sh'
+        shell.parent.mkdir(parents=True)
+        shell.write_text('#!/bin/bash\nprintf "%s\\0" "$@" > "$MENU_TEST_CALLS"\nexit 17\n')
+        shell.chmod(0o755)
+        for domain in ('0', '232'):
+            command[1] = 'ROS_DOMAIN_ID=' + domain
+            result = self.invoke('replay', *options, MENU_TEST_CONTAINER='1', ATD_REPLAY_ROS_DOMAIN_ID=domain)
+            self.assertEqual(result.returncode, 17, result.stderr)
+            self.assert_call(*command)
+        for domain in ('233', '-1', '1+1'):
+            result = self.invoke('replay', '--dry-run', ATD_REPLAY_ROS_DOMAIN_ID=domain)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('ATD_REPLAY_ROS_DOMAIN_ID', result.stderr)
+        self.assertFalse(self.calls.exists())
 
     def test_jetson_docker_delegates_selected_band_to_host(self):
         self.menu(picks=['hotspot', '5', 'quit'], MENU_TEST_HOST='jetson', MENU_TEST_CONTAINER='1')

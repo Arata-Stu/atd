@@ -30,6 +30,14 @@ RUN --mount=type=bind,from=atd_web_node,source=/usr/local,target=/mnt/atd-node,r
         npm install --global --ignore-scripts pnpm@11.25.0; \
     fi
 
+# ステレオ bag の RViz 再生は Notebook で行う。
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    if [ "$(dpkg --print-architecture)" = amd64 ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            ros-lyrical-rviz2 ros-lyrical-rviz-default-plugins; \
+    fi
+
 # checkout をマウントせずに使う場合は、ビルド時のスクリプト・設定を使う。
 COPY Dockerfile.atd /opt/atd/Dockerfile.atd
 COPY scripts/ /opt/atd/scripts/

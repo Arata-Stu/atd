@@ -15,6 +15,10 @@
   <exec_depend>atd_planning</exec_depend>
   <exec_depend>atd_control</exec_depend>
   <exec_depend>atd_recording</exec_depend>
+  <exec_depend>atd_mapping</exec_depend><exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_interfaces</exec_depend>
+  <!-- GUI for the Notebook replay executable. The ATD image provisions it only on amd64. -->
+  <exec_depend>rviz2</exec_depend><exec_depend>rviz_default_plugins</exec_depend>
   <exec_depend>isaac_ros_cuvslam</exec_depend><exec_depend>rclcpp_components</exec_depend>
   <exec_depend>isaac_ros_visual_slam_interfaces</exec_depend>
   <exec_depend>rclpy</exec_depend><exec_depend>nav_msgs</exec_depend>

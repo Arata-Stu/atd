@@ -1,0 +1,64 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Enabled: true
+  Global Options:
+    Fixed Frame: map
+    Background Color: 35; 38; 41
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (1 m)
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 100
+      Alpha: 0.2
+    - Class: rviz_default_plugins/PointCloud2
+      Name: cuVSLAM landmarks
+      Enabled: true
+      Topic:
+        Value: /visual_slam/vis/landmarks_cloud
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 3
+      Color Transformer: FlatColor
+      Color: 118; 215; 170
+    - Class: rviz_default_plugins/Path
+      Name: SLAM trajectory
+      Enabled: true
+      Topic:
+        Value: /visual_slam/tracking/slam_path
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Line Style: Lines
+      Color: 255; 180; 65
+    - Class: rviz_default_plugins/Image
+      Name: Left IR
+      Enabled: true
+      Topic:
+        Value: /camera/camera/infra1/image_rect_raw
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+    - Class: rviz_default_plugins/Image
+      Name: Right IR
+      Enabled: true
+      Topic:
+        Value: /camera/camera/infra2/image_rect_raw
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Target Frame: <Fixed Frame>
+      Scale: 12
+      X: 0
+      Y: 0

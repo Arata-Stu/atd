@@ -1,0 +1,136 @@
+import sys
+from types import SimpleNamespace as NS
+import unittest
+from unittest.mock import Mock, patch
+
+from atd_bringup.replay_inputs import STEREO_WORKFLOW
+from atd_bringup.replay_readiness import _missing_endpoints, wait_and_resume
+
+
+def endpoint(name, kind, qos='compatible'):
+    namespace, _, leaf = name.rpartition('/')
+    return NS(node_namespace=namespace or '/', node_name=leaf, topic_type=kind, qos_profile=qos)
+
+
+class GateTests(unittest.TestCase):
+    def setUp(self):
+        self.pubs = {}
+        self.subs = {}
+        self.player = '/preview/bag'
+        self.rviz = '/rviz2'
+        for role, topic in STEREO_WORKFLOW.items():
+            if role == 'tf_static':
+                kind = 'tf2_msgs/msg/TFMessage'
+                reader = '/transform_listener_impl_2a'
+            else:
+                kind = 'sensor_msgs/msg/' + ('Image' if role.endswith('image') else 'CameraInfo')
+                reader = '/visual_slam'
+            self.pubs[topic] = [endpoint(self.player, kind)]
+            self.subs[topic] = [endpoint(reader, kind)]
+        self.pubs['/clock'] = [endpoint(self.player, 'rosgraph_msgs/msg/Clock')]
+        self.subs['/clock'] = [endpoint('/visual_slam', 'rosgraph_msgs/msg/Clock')]
+        self.subs['/visual_slam/tracking/slam_path'] = [endpoint(self.rviz, 'nav_msgs/msg/Path')]
+        self.subs['/visual_slam/vis/landmarks_cloud'] = [endpoint(self.rviz, 'sensor_msgs/msg/PointCloud2')]
+
+        self.node = Mock()
+        self.node.get_node_names_and_namespaces.return_value = [('bag', '/preview')]
+        self.node.get_service_names_and_types.return_value = []
+        self.node.get_publishers_info_by_topic.side_effect = self.pubs.__getitem__
+        self.node.get_subscriptions_info_by_topic.side_effect = self.subs.__getitem__
+        self.paused, self.resume = Mock(), Mock()
+        self.node.create_client.side_effect = [self.paused, self.resume]
+        self.paused.call_async.return_value.result.return_value = NS(paused=True)
+        self.resume.call_async.return_value.result.return_value = NS(return_code=0, error_string='')
+        srv = NS(IsPaused=NS(Request=object), Resume=NS(Request=object, Response=NS(RETURN_CODE_SUCCESS=0)))
+        qos = NS(QoSCompatibility=NS(ERROR='bad'),
+                 qos_check_compatible=lambda pub, sub: ('ok' if pub == sub else 'bad', ''))
+        self.ros = Mock()
+        modules = patch.dict(sys.modules, {
+            'rclpy': self.ros, 'rclpy.qos': qos, 'rosbag2_interfaces.srv': srv,
+        })
+        modules.start()
+        self.addCleanup(modules.stop)
+
+    def test_waits_for_configured_rviz_displays_before_resuming(self):
+        path = '/visual_slam/tracking/slam_path'
+        ready = self.subs[path]
+        self.subs[path] = [endpoint('/another/rviz2', 'nav_msgs/msg/Path')]
+
+        def enable_display(node, timeout_sec):
+            self.resume.call_async.assert_not_called()
+            self.subs[path] = ready
+
+        self.ros.spin_once.side_effect = enable_display
+        wait_and_resume(self.node, self.player)
+        self.ros.spin_once.assert_called_once()
+        self.paused.call_async.assert_called_once()
+        self.resume.call_async.assert_called_once()
+        self.assertEqual(self.node.destroy_client.call_count, 2)
+
+    def test_stale_other_nodes_and_wrong_qos_do_not_satisfy_gate(self):
+        left = STEREO_WORKFLOW['left_image']
+        self.pubs[left] = [endpoint(self.player, 'sensor_msgs/msg/CameraInfo')]
+        self.subs[left] = [endpoint('/another/visual_slam', 'sensor_msgs/msg/Image')]
+        right = STEREO_WORKFLOW['right_info']
+        self.subs[right][0].qos_profile = 'incompatible'
+        self.subs['/tf_static'] = [endpoint('/rviz2', 'tf2_msgs/msg/TFMessage')]
+        self.assertEqual(_missing_endpoints(self.node, self.player, self.rviz), [
+            f'{left} の /preview/bag publisher', f'{left} の /visual_slam subscriber',
+            f'{right} の QoS が /visual_slam と非互換', '/tf_static の TF listener subscriber',
+        ])
+        with self.assertRaisesRegex(TimeoutError, 'tf_static'):
+            wait_and_resume(self.node, self.player, timeout_s=0)
+        self.resume.call_async.assert_not_called()
+
+    def test_conflicting_clock_discovered_during_pause_query_never_resumes(self):
+        def another_clock():
+            self.pubs['/clock'].append(endpoint('/other/bag', 'rosgraph_msgs/msg/Clock'))
+            return NS(paused=True)
+
+        self.paused.call_async.return_value.result.side_effect = another_clock
+        with self.assertRaisesRegex(RuntimeError, '/clock.*競合.*other/bag'):
+            wait_and_resume(self.node, self.player)
+        self.resume.call_async.assert_not_called()
+
+    def test_two_players_with_the_same_name_never_receive_resume(self):
+        self.node.get_node_names_and_namespaces.return_value = [('bag', '/preview')] * 2
+        with self.assertRaisesRegex(RuntimeError, '/preview/bag.*複数'):
+            wait_and_resume(self.node, self.player)
+        self.resume.call_async.assert_not_called()
+
+    def test_tracker_static_broadcaster_can_coexist_but_another_bag_cannot(self):
+        static = self.pubs['/tf_static']
+        static.append(endpoint('/visual_slam', 'tf2_msgs/msg/TFMessage'))
+        self.assertFalse(_missing_endpoints(self.node, self.player, self.rviz))
+        static.append(endpoint('/other/bag', 'tf2_msgs/msg/TFMessage'))
+        self.node.get_service_names_and_types.return_value = [
+            ('/other/bag/is_paused', ['rosbag2_interfaces/srv/IsPaused'])]
+        with self.assertRaisesRegex(RuntimeError, '/tf_static.*競合.*other/bag'):
+            wait_and_resume(self.node, self.player)
+        self.resume.call_async.assert_not_called()
+
+    def test_requires_paused_state(self):
+        self.paused.call_async.return_value.result.return_value.paused = False
+        with self.assertRaisesRegex(RuntimeError, '一時停止'):
+            wait_and_resume(self.node, self.player)
+        self.resume.call_async.assert_not_called()
+
+    def test_child_failure_while_waiting_never_resumes(self):
+        self.resume.service_is_ready.return_value = False
+        with self.assertRaisesRegex(RuntimeError, 'RViz 終了'):
+            wait_and_resume(self.node, self.player, check_running=Mock(side_effect=RuntimeError('RViz 終了')))
+        self.resume.call_async.assert_not_called()
+
+    def test_short_bag_can_finish_before_resume_response_arrives(self):
+        self.resume.call_async.return_value.done.side_effect = [False, True]
+
+        def check():
+            self.resume.call_async.assert_not_called()
+
+        wait_and_resume(self.node, self.player, check_running=check)
+        self.ros.spin_once.assert_called_once()
+
+    def test_failed_service_response_is_not_reported_as_playback(self):
+        self.resume.call_async.return_value.result.return_value = NS(return_code=3, error_string='failed')
+        with self.assertRaisesRegex(RuntimeError, 'failed'):
+            wait_and_resume(self.node, self.player)

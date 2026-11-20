@@ -32,7 +32,13 @@
 atd gazebo video --route lap
 ```
 
-公開地図の GP コース両縁から生成した経路を、スタート／フィニッシュ地点から時計回りに一周する。水平縮尺 1/10 で **579.20 m**、既定は **240 シミュレーション秒**（平均約2.41 m/s）。録画用カメラ台は、開始位置で左右画像と CameraInfo の時刻がそろうのを待ち、一周するとゴールで止まる。録画時に `--duration 120` を加えると120シミュレーション秒で同じ距離を進む。全周版の観客席、森林、砂地、ピット建物の平面配置は OSM の地物を使う。縁石を造形したのは第1シケイン。全周の路面は平面で、建物の高さや個々の樹木は推定。走路に沿うカメラ軌道で地図作成・画像配信を試せる。[走行線の作成方法](../tools/gazebo_monza/reference/README.md)・[全周の背景の出典](../tools/gazebo_monza/reference/lap-scenery.md)
+公開地図の GP コース両縁から生成した経路を、スタート／フィニッシュ地点から時計回りに一周する。水平縮尺 1/10 で **579.20 m**、既定は **240 シミュレーション秒**（平均約2.41 m/s）。録画用カメラ台は、開始位置で左右画像と CameraInfo の時刻がそろうのを待ち、一周するとゴールで止まる。録画時に `--duration 120` を加えると120シミュレーション秒で同じ距離を進む。[走行線の作成方法](../tools/gazebo_monza/reference/README.md)
+
+ホームストレートにはピットの窓・庇、観客席の支柱、信号ガントリーとグリッドを配置した。後半直線は両側のレールと歩道橋、最終右コーナーは内側のフェンス・縁石と外側の砂地・壁が見える。左右カメラの描画上限を45 mから100 mに延長し、遠景の建物112棟と林を加えた。橋の位置は OSM の高架線に基づく。沿道設備の一部は写真と走路形状から補い、該当する区間を地理データに記録した。[地物別の出典と推定範囲](../tools/gazebo_monza/reference/lap-scenery.md)
+
+![同じ走行位置の変更前後を上段と下段で比較した車載視点](images/monza-lap-trackside.jpg)
+
+左 IR カメラ相当の視点（高さ 0.12 m、水平画角 87°）で生成した SDF メッシュを VTK で描画した。照明と材質の見え方は OGRE 2 と異なる。全周の静的メッシュは 53,939 → 114,088 三角形。Notebook での再生比較には、ホストで `atd gazebo bag --circuit monza` を実行し、`atd replay` の一覧から新しい記録を選ぶ。以前の bag には撮影時の景観が入っている。
 
 `run.json` の `motion.lap_completed` は、物理更新後の実位置が経路に沿って進みゴールに戻ったかを示す。同じ `motion` 内の `video_endpoints_covered` は録画に使った左右ペアの時刻が発着を含むかを表す。左右動画は `stereo.mp4`、途中で前のフレームを再表示した回数・受信間隔は `video.json` に残る。スタートとゴールで同じ画像が撮れても、それだけで完走とは判定しない。
 
@@ -62,7 +68,19 @@ NVIDIA GPU と NVIDIA Container Toolkit が使える Ubuntu の Notebook ホス�
 
 ## 記録済みのステレオ bag を RViz / Foxglove で見る
 
-Notebook の Isaac ROS 開発コンテナで、記録した Monza の左右 IR 画像から cuVSLAM の地図をメモリ上に作る。再生中にランドマークと軌跡を観察できる。初回は `atd-build --packages-up-to atd_bringup` で launch を配置する。Gazebo は起動せず、同じコンテナの3端末それぞれに次を設定する。
+Ubuntu Notebook のデスクトップで使う。初回はホストで `atd dev --build` を実行して RViz を含む開発コンテナを起動し、その中で `atd build --packages-up-to atd_bringup` を実行する。すでに開いているコンテナで `command -v rviz2 && ros2 pkg prefix rviz_default_plugins` が通れば、その中では ROS パッケージのビルドだけで試せる。以降はホストまたは起動済みの対応コンテナで次のコマンドを使う。
+
+```bash
+atd replay
+```
+
+一覧から bag を選ぶと、cuVSLAM と RViz が起動する。左右の画像・CameraInfo と車体から両カメラへの静的 TF を記録から確認し、購読の準備が整ったところで 0.5 倍速の再生を開始する。RViz は左右の IR 画像を Best Effort で購読し、`map` 座標でのランドマークと軌跡も表示する。bag の末尾でも画面は開いたままで、RViz を閉じるか端末で Ctrl+C を押すと一式が終了する。地図はメモリ上で生成される。
+
+`atd replay --rate 1` で等速になる。bag 名を指定する場合は `atd replay "親ディレクトリ/bag名" --rate 0.5` のように `/data/record/rosbags/` からの相対パスを渡す。コンテナ内の絶対パスも使える。再生用の domain は既定 75（`ATD_REPLAY_ROS_DOMAIN_ID` で変更可）。専用の Fast DDS 設定と bag の `/clock` を使う。
+
+### 手動で RViz または Foxglove を使う場合
+
+ビューアや再生の起動を個別に操作したい場合は、同じコンテナの3端末それぞれに次を設定する。
 
 ```bash
 export ROS_DOMAIN_ID=74
@@ -71,10 +89,10 @@ export FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds
 
 端末1は `ros2 launch atd_bringup bag_vslam.launch.py`。cuVSLAM を `component_container_mt` にロードする。ログに `Loaded node '/visual_slam'` が出たら準備完了。
 
-端末2は RViz の場合、次の公式設定を使う。Foxglove の場合は `ros2 launch foxglove_bridge foxglove_bridge_launch.xml address:=127.0.0.1 port:=8765 use_sim_time:=true` を起動し、Notebook のアプリで `ws://127.0.0.1:8765` に接続する。3D の基準フレームは `map`、点群は `/visual_slam/vis/landmarks_cloud`、軌跡は `/visual_slam/tracking/slam_path`。画像は `/camera/camera/infra1/image_rect_raw` を選ぶ。
+端末2は RViz の場合、次の ATD 設定を使う。Foxglove の場合は `ros2 launch foxglove_bridge foxglove_bridge_launch.xml address:=127.0.0.1 port:=8765 use_sim_time:=true` を起動し、Notebook のアプリで `ws://127.0.0.1:8765` に接続する。3D の基準フレームは `map`、点群は `/visual_slam/vis/landmarks_cloud`、軌跡は `/visual_slam/tracking/slam_path`。画像は `/camera/camera/infra1/image_rect_raw` を選ぶ。
 
 ```bash
-rviz2 -d "$(ros2 pkg prefix --share isaac_ros_cuvslam)/rviz/default.cfg.rviz" \
+rviz2 -d "$(ros2 pkg prefix --share atd_bringup)/config/bag_vslam.rviz" \
   --ros-args -p use_sim_time:=true
 ```
 

@@ -43,6 +43,7 @@ elif [[ "$location" = ホスト || "$(uname -m)" = x86_64 ]]; then
     add_command web webui.sh 'Notebook の Web UI を起動・準備'
     if [[ "$(uname -s)/$(uname -m)" = Linux/x86_64 ]]; then
         add_command bringup bringup.sh 'Gazebo の時計とステレオ画像で Visual Odometry を起動'
+        add_command replay replay.sh 'ステレオ rosbag を再生し cuVSLAM を RViz で表示'
         if [[ "$location" = ホスト ]]; then
             add_command gazebo gazebo.sh 'F1 コースの周回・rosbag 記録・ステレオ動画・受信計測'
         fi
@@ -84,6 +85,7 @@ usage() {
     atd gazebo video --circuit spa
     atd gazebo serve
     atd bringup gazebo
+    atd replay
 各コマンドの使い方は atd COMMAND --help で確認できます。
 EOF
 }

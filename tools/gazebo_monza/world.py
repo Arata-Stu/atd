@@ -4,13 +4,15 @@ import argparse
 from hashlib import sha256
 import json
 from itertools import chain
-from math import ceil, degrees, dist, hypot, isfinite, radians, tan
+from math import ceil, cos, degrees, dist, hypot, isfinite, radians, tan
 from pathlib import Path
 import shutil
 import xml.etree.ElementTree as ET
 
-from geography import cross_sections, kerb_spans, load_track, reference_metadata
+from geography import cross_sections, kerb_intervals, load_track, reference_metadata
 import circuits
+import monza_start_grid
+import monza_trackside
 import scenery
 
 HERE = Path(__file__).resolve().parent
@@ -22,6 +24,7 @@ KERB_BLOCK_M = .20
 # Full widths in RC metres. The OSM ways provide only the centre of these pavements.
 ALTERNATE_WIDTH_M = {"bypass_centerline": .50, "motorcycle_centerline": .72}
 CAMERA_FAR_M = 45
+MONZA_LAP_FAR_M = 100
 
 
 def default_travel_seconds(route, circuit="monza"):
@@ -67,11 +70,16 @@ def surface(link, output, name, polygons, rgb, texture_tile_m=None, *, face_up=T
             corners = list(reversed(corners))
             normal = tuple(-n for n in normal)
         magnitude = hypot(*normal)
+        # Project vertical walls in metres along their face and height.
+        # XY alone gives both top and bottom the same texture coordinate.
+        nx, ny, nz = normal
+        horizontal = hypot(nx, ny)
         lines.append("vn " + vector(*(n / magnitude if n else 0 for n in normal)))
         for corner, (x, y, z) in enumerate(corners):
             lines.append("v " + vector(x, y, z))
             if texture_tile_m:
-                lines.append("vt " + vector(x / texture_tile_m, y / texture_tile_m))
+                u, v = ((-ny*x + nx*y) / horizontal, z) if horizontal > abs(nz) else (x, y)
+                lines.append("vt " + vector(u / texture_tile_m, v / texture_tile_m))
             elif cutout:
                 u, v = ((0, 0), (1, 0), (1, 1), (0, 1))[corner]
                 lines.append(f"vt {u} {v}")
@@ -135,13 +143,15 @@ def alternate_pavement(points, width):
         yield [a, b, d, c]
 
 
-def track(world, output, source, lap, circuit, data, kerb_intervals):
+def track(world, output, source, lap, circuit, data, kerb_intervals, far):
     _, link = model(world, "circuit")
     # Keep the ground in view even on the most distant part of the full lap.
     if lap:
         xs, ys = zip(*(source["left"] + source["right"]))
-        west, east = min(xs)-CAMERA_FAR_M, max(xs)+CAMERA_FAR_M
-        south, north = min(ys)-CAMERA_FAR_M, max(ys)+CAMERA_FAR_M
+        # At an oblique heading, the corner of the front clipping plane extends farther than its centre.
+        margin = far / cos(HFOV/2) + FORWARD_M + BASELINE_M/2 if circuit == "monza" else far
+        west, east = min(xs)-margin, max(xs)+margin
+        south, north = min(ys)-margin, max(ys)+margin
     else:
         west, east, south, north = -65, 65, -65, 65
     grass = [(x, y, -.004) for x, y in ((west, south), (east, south), (east, north), (west, north))]
@@ -213,6 +223,21 @@ def track(world, output, source, lap, circuit, data, kerb_intervals):
     surface(link, output, "kerb_red", kerbs[0], (.60, .028, .022))
     surface(link, output, "kerb_white", kerbs[1], (.90, .89, .82))
 
+    if circuit == "monza" and lap:
+        for name, color, faces in monza_start_grid.details(source, data):
+            if name == "grid_asphalt_repairs":
+                surface(link, output, name, faces, color, .35, texture_name="wall.jpg")
+            elif name in ("pit_straight_apron", "pit_straight_lane"):
+                surface(link, output, name, faces, (1, 1, 1), .8, texture_name="floor.jpg")
+            else:
+                surface(link, output, name, faces, color, face_up=False)
+        _, trackside = model(world, "monza_trackside")
+        for name, color, faces in monza_trackside.geometry(source, data):
+            if name in ("monza_weathered_concrete", "monza_jointed_concrete", "monza_historic_wall"):
+                surface(trackside, output, name, faces, color, .55, face_up=False, texture_name="wall.jpg")
+            else:
+                surface(trackside, output, name, faces, color, face_up=False)
+
     if data.by_kind["grandstand"]:
         _, stands = model(world, "grandstand")
         for name, color, faces in scenery.grandstand(data=data):
@@ -236,7 +261,7 @@ def track(world, output, source, lap, circuit, data, kerb_intervals):
             surface(trees, output, name, faces, (1, 1, 1), face_up=False, cutout=True)
 
 
-def cameras(link, height, pitch, circuit):
+def cameras(link, height, pitch, circuit, far):
     for side, sign in (("left", 1), ("right", -1)):
         sensor = ET.SubElement(link, "sensor", type="camera", name=side)
         field(sensor, "pose", vector(FORWARD_M, sign*BASELINE_M/2, height, 0, pitch, 0))
@@ -253,7 +278,7 @@ def cameras(link, height, pitch, circuit):
         field(image, "format", "L_INT8")
         clip = ET.SubElement(camera, "clip")
         field(clip, "near", .025)
-        field(clip, "far", CAMERA_FAR_M)
+        field(clip, "far", far)
 
 
 def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
@@ -270,9 +295,10 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     output = Path(output).resolve()
     output.mkdir(exist_ok=True, parents=True)
     lap = route == "lap"
+    far = MONZA_LAP_FAR_M if lap and circuit == "monza" else CAMERA_FAR_M
     if circuit == "monza":
         source, points = load_track(route)
-        kerbs = {side: [span] for side, span in kerb_spans(source).items()}
+        kerbs = kerb_intervals(source, lap)
         data = scenery.monza_features(lap)
         geography = {
             **reference_metadata(route),
@@ -284,7 +310,13 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
         }
         if lap:
             geography.update(lap_scenery_file=f"reference/{scenery.SCENERY_LAP_FILE.name}",
-                             lap_scenery_sha256=sha256(scenery.SCENERY_LAP_FILE.read_bytes()).hexdigest())
+                             lap_scenery_sha256=sha256(scenery.SCENERY_LAP_FILE.read_bytes()).hexdigest(),
+                             background_file=f"reference/{scenery.MONZA_BACKGROUND.name}",
+                             background_sha256=sha256(scenery.MONZA_BACKGROUND.read_bytes()).hexdigest())
+            geography.update(trackside_file=f"reference/{monza_trackside.REFERENCE.name}",
+                             trackside_sha256=sha256(monza_trackside.REFERENCE.read_bytes()).hexdigest())
+            geography["modelled"].extend(["grid and pavement repairs", "pit and stand facades",
+                                         "barrier sections and bridge elevations"])
     else:
         source, points, project = circuits.load_lap(circuit)
         kerbs = circuits.estimated_kerbs(source, points)
@@ -300,6 +332,7 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                        "samples_s_x_y_yaw": points, "end_s_m": points[-1][0],
                        "travel_seconds": travel_seconds, "repeat": repeat},
         "camera": {"height_above_floor_m": height, "pitch_down_deg": pitch_deg,
+                   "far_clip_m": far,
                    "midpoint_forward_from_rear_axle_m": FORWARD_M, "baseline_m": BASELINE_M,
                    "horizontal_fov_deg": degrees(HFOV), "nominal_focal_px": focal,
                    "width": 640, "height": 480, "rate_hz": 90, "optical_frames": OPTICAL_FRAMES,
@@ -330,12 +363,12 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     field(light, "intensity", 1.25)
     field(light, "specular", "0.20 0.20 0.19 1")
     field(light, "direction", "0.42 -0.52 -0.74")
-    track(world, output, source, lap, circuit, data, kerbs)
+    track(world, output, source, lap, circuit, data, kerbs, far)
     rig, link = model(world, "d455_rig", fixed=False)
     _, x, y, yaw = points[0]
     field(rig, "pose", vector(x, y, 0, 0, 0, yaw))
     field(link, "gravity", "false")
-    cameras(link, height, radians(pitch_deg), circuit)
+    cameras(link, height, radians(pitch_deg), circuit, far)
     motion = ET.SubElement(rig, "plugin", filename="gz-sim-python-system-loader-system",
                            name="gz::sim::systems::PythonSystemLoader")
     field(motion, "module_name", "monza_motion")

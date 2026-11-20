@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+from atd_bringup.replay_vslam import main
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -11,6 +11,7 @@ from geography import project
 
 SCENERY_FILE = Path(__file__).resolve().parent / 'reference' / 'monza_scenery.geojson'
 SCENERY_LAP_FILE = SCENERY_FILE.with_name('monza_lap_scenery.geojson')
+MONZA_BACKGROUND = SCENERY_FILE.with_name('monza_background.geojson')
 
 
 class Features:
@@ -36,7 +37,7 @@ class Features:
 
 @lru_cache(maxsize=2)
 def monza_features(lap=False):
-    files = [SCENERY_FILE, SCENERY_LAP_FILE] if lap else [SCENERY_FILE]
+    files = [SCENERY_FILE, SCENERY_LAP_FILE, MONZA_BACKGROUND] if lap else [SCENERY_FILE]
     return Features(files, project)
 
 

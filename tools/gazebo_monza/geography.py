@@ -17,7 +17,10 @@ LAP_START_LON_LAT = (9.2811729, 45.6189632)
 # Inferred from the curvature of the inner edge of each turn. These vertex
 # indices on the pinned rings anchor the paint near the apex, not a kerb survey.
 # T1 nodes 14298513142 / 14298513151; T2 nodes 14298365021 / 14298365028.
-_KERB_VERTICES = {"right": (43, 52), "left": (49, 56)}
+_CHICANE_KERB_VERTICES = {"right": (43, 52), "left": (49, 56)}
+# Inside of the final right-hand bend, Curva Alboreto. Its extent on the
+# mapped right edge (way 1569604642 v1) is an estimate, as for Rettifilo.
+_ALBORETO_KERB_VERTICES = (571, 598)
 
 
 def local_projection(origin_lon, origin_lat):
@@ -76,11 +79,20 @@ def _stations(points):
 
 
 def kerb_spans(edges):
-    """RC arc length along the individual mapped edges for the two estimated kerbs."""
+    """RC arc length along the individual mapped edges for the chicane kerbs."""
     spans = {}
-    for side, (start, end) in _KERB_VERTICES.items():
+    for side, (start, end) in _CHICANE_KERB_VERTICES.items():
         stations = _stations(edges[side])
         spans[side] = (stations[start], stations[end])
+    return spans
+
+
+def kerb_intervals(edges, lap):
+    spans = {side: [interval] for side, interval in kerb_spans(edges).items()}
+    if lap:
+        stations = _stations(edges["right"])
+        start, end = _ALBORETO_KERB_VERTICES
+        spans["right"].append((stations[start], stations[end]))
     return spans
 
 

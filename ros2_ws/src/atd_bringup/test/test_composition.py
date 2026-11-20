@@ -90,6 +90,28 @@ class CompositionTests(unittest.TestCase):
             self.assertEqual(remaps[f'visual_slam/image_{index}'], prefix + '/image_rect_raw')
             self.assertEqual(remaps[f'visual_slam/camera_info_{index}'], prefix + '/camera_info')
 
+    def test_bag_vslam_loads_the_mapper_component_for_live_visualization(self):
+        path = Path(__file__).resolve().parents[1] / 'launch/bag_vslam.launch.py'
+        with fake_launch():
+            container, = runpy.run_path(str(path))['generate_launch_description']().entities
+        tracker, = container.composable_node_descriptions
+        self.assertEqual((container.package, container.executable), ('rclcpp_components', 'component_container_mt'))
+        self.assertEqual((tracker.package, tracker.plugin),
+                         ('isaac_ros_cuvslam', 'nvidia::isaac_ros::visual_slam::VisualSlamNode'))
+        self.assertEqual(tracker.extra_arguments, [{'use_intra_process_comms': True}])
+        params, = tracker.parameters
+        self.assertTrue(container.parameters[0]['use_sim_time'])
+        for flag in ('use_sim_time', 'enable_localization_n_mapping', 'enable_slam_visualization',
+                     'enable_landmarks_view', 'publish_map_to_odom_tf', 'publish_odom_to_base_tf'):
+            self.assertIs(params[flag], True)
+        self.assertEqual(params['path_max_size'], 50000)
+        self.assertEqual(params['base_frame'], 'base_link')
+        remaps = dict(tracker.remappings)
+        for i in (0, 1):
+            prefix = f'/camera/camera/infra{i + 1}'
+            self.assertEqual(remaps[f'visual_slam/image_{i}'], prefix + '/image_rect_raw')
+            self.assertEqual(remaps[f'visual_slam/camera_info_{i}'], prefix + '/camera_info')
+
     def test_gazebo_mapping_launch_uses_slam_and_shuts_down_with_the_supervisor(self):
         path = Path(__file__).resolve().parents[1] / 'launch/gazebo_mapping.launch.py'
         with fake_launch():

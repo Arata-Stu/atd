@@ -60,6 +60,35 @@ NVIDIA GPU と NVIDIA Container Toolkit が使える Ubuntu の Notebook ホス�
 
 `stereo.mp4` を Notebook のブラウザにドラッグすると、左右を同時に再生・シークできる。実時間の配信と独立に、動画は同じタイムスタンプを持つ左右画像をシミュレーション時刻で30 fpsにサンプリングする。第1シケインの動画の既定長は10秒。受信が滞り前のペアを保持した動画フレームの数は `video.json` の `held_video_frames` で確認できる。
 
+## 記録済みのステレオ bag を RViz / Foxglove で見る
+
+Notebook の Isaac ROS 開発コンテナで、記録した Monza の左右 IR 画像から cuVSLAM の地図をメモリ上に作る。再生中にランドマークと軌跡を観察できる。初回は `atd-build --packages-up-to atd_bringup` で launch を配置する。Gazebo は起動せず、同じコンテナの3端末それぞれに次を設定する。
+
+```bash
+export ROS_DOMAIN_ID=74
+export FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
+```
+
+端末1は `ros2 launch atd_bringup bag_vslam.launch.py`。cuVSLAM を `component_container_mt` にロードする。ログに `Loaded node '/visual_slam'` が出たら準備完了。
+
+端末2は RViz の場合、次の公式設定を使う。Foxglove の場合は `ros2 launch foxglove_bridge foxglove_bridge_launch.xml address:=127.0.0.1 port:=8765 use_sim_time:=true` を起動し、Notebook のアプリで `ws://127.0.0.1:8765` に接続する。3D の基準フレームは `map`、点群は `/visual_slam/vis/landmarks_cloud`、軌跡は `/visual_slam/tracking/slam_path`。画像は `/camera/camera/infra1/image_rect_raw` を選ぶ。
+
+```bash
+rviz2 -d "$(ros2 pkg prefix --share isaac_ros_cuvslam)/rviz/default.cfg.rviz" \
+  --ros-args -p use_sim_time:=true
+```
+
+端末3で bag を選んで再生する。0.5倍速で開始し、シミュレーション時刻とカメラの静的 TF は bag から供給する。
+
+```bash
+bag_meta=$(find /data/record/rosbags -name metadata.yaml -type f | sort | fzf --prompt='再生する bag > ')
+if [[ -n "$bag_meta" ]]; then
+  ros2 bag play "${bag_meta%/metadata.yaml}" --clock --rate 0.5 \
+    --qos-profile-overrides-path /workspaces/atd/ros2_ws/src/atd_mapping/config/replay_qos.yaml \
+    --topics /tf_static /camera/camera/infra1/{image_rect_raw,camera_info} /camera/camera/infra2/{image_rect_raw,camera_info}
+fi
+```
+
 ## Gazebo の時刻で cuVSLAM を起動する
 
 **1周を記録して後から地図を作る場合**は、Notebook ホストで `atd gazebo bag --circuit monza` を実行し、完了後に Notebook の Web UI「地図とライン」で bag を選ぶ。走行中に地図を作りたい場合は `atd gazebo map --circuit monza` を使う。以下の `serve` と `bringup gazebo` は連続走行中のステレオ VO を観測する操作。[記録とオフライン地図作成の手順・保存容量](gazebo_circuits.md#1周でcuvslam地図を作る)

@@ -4,11 +4,15 @@ from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 
 
-def stereo_container(sim_time, *, mapping=False):
+def stereo_container(sim_time, *, mapping=False, visualize_landmarks=False):
+    visualization = {}
+    if visualize_landmarks:
+        visualization.update(enable_slam_visualization=True, enable_landmarks_view=True, path_max_size=50000)
     tracker = ComposableNode(
         package='isaac_ros_cuvslam', plugin='nvidia::isaac_ros::visual_slam::VisualSlamNode',
         name='visual_slam',
         parameters=[{
+            **visualization,
             'use_sim_time': sim_time,
             'num_cameras': 2, 'min_num_images': 2, 'tracking_mode': 0,
             'rectified_images': True, 'image_qos': 'SENSOR_DATA',

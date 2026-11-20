@@ -164,10 +164,14 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
         surface(link, output, "mapped_" + kind if kind == "grass" else kind,
                 scenery.flat_triangles(data, kind, z), color)
     secondary_widths = ALTERNATE_WIDTH_M if circuit == "monza" else {"pit_lane": .65}
+    if circuit == "monza" and lap:
+        asphalt_texture, asphalt_span = "monza_asphalt.jpg", 3.2
+    else:
+        asphalt_texture, asphalt_span = "floor.jpg", .8
     for kind, width in secondary_widths.items():
         faces = [face for props, points in data.lines(kind)
                  for face in alternate_pavement(points, props.get("width_m", width * 10) * .1)]
-        surface(link, output, kind, faces, (1, 1, 1), .8, texture_name="floor.jpg")
+        surface(link, output, kind, faces, (1, 1, 1), asphalt_span, texture_name=asphalt_texture)
     left, right = source["left"], source["right"]
     if circuit == "monza":
         road = pavement(left, right)
@@ -175,7 +179,7 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
         # Each edge pair came from the same centreline station.
         road = [[(*a, 0), (*b, 0), (*c, 0), (*d, 0)]
                 for a, b, c, d in zip(left, right, right[1:] + right[:1], left[1:] + left[:1])]
-    surface(link, output, "floor", road, (1, 1, 1), .8)
+    surface(link, output, "floor", road, (1, 1, 1), asphalt_span, texture_name=asphalt_texture)
     paint = []
     kerbs = [[], []]
     for side, spans in kerb_intervals.items():
@@ -226,14 +230,17 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
     if circuit == "monza" and lap:
         for name, color, faces in monza_start_grid.details(source, data):
             if name == "grid_asphalt_repairs":
-                surface(link, output, name, faces, color, .35, texture_name="wall.jpg")
+                surface(link, output, name, faces, color, asphalt_span, texture_name=asphalt_texture)
             elif name in ("pit_straight_apron", "pit_straight_lane"):
-                surface(link, output, name, faces, (1, 1, 1), .8, texture_name="floor.jpg")
+                surface(link, output, name, faces, (1, 1, 1), asphalt_span, texture_name=asphalt_texture)
             else:
                 surface(link, output, name, faces, color, face_up=False)
         _, trackside = model(world, "monza_trackside")
         for name, color, faces in monza_trackside.geometry(source, data):
-            if name in ("monza_weathered_concrete", "monza_jointed_concrete", "monza_historic_wall"):
+            if name == "monza_catch_mesh":
+                surface(trackside, output, name, faces, color, .10, face_up=False,
+                        cutout=True, texture_name="monza_catch_mesh.png")
+            elif name in ("monza_weathered_concrete", "monza_jointed_concrete", "monza_historic_wall"):
                 surface(trackside, output, name, faces, color, .55, face_up=False, texture_name="wall.jpg")
             else:
                 surface(trackside, output, name, faces, color, face_up=False)
@@ -316,6 +323,8 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
             geography.update(trackside_file=f"reference/{monza_trackside.REFERENCE.name}",
                              trackside_sha256=sha256(monza_trackside.REFERENCE.read_bytes()).hexdigest())
             geography["modelled"].extend(["grid and pavement repairs", "pit and stand facades",
+                                         "asphalt tone at RC scale", "grandstand catch fencing",
+                                         "podium elevations and railings", "radio mast profiles",
                                          "barrier sections and bridge elevations"])
     else:
         source, points, project = circuits.load_lap(circuit)

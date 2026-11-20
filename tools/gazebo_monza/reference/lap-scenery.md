@@ -4,6 +4,9 @@
 
 | 地物 | 実データに対応する部分 | シミュレーター用に補った部分 |
 |---|---|---|
+| 観客席前の防護フェンス | ホームストレート左側のガードレール5区間に沿って配置し、参照写真で見える走路・金網・観客席の順を再現した。 | フェンスの支持線はレールから外側へ RC 0.13 m の推定位置。高さ 0.38 m、支柱間隔 0.42 m、上端の曲げと網目も近似。 |
+| 円形表彰台と連絡橋 | [OSM の表彰台外周](https://www.openstreetmap.org/way/219396377/history/3)と[ピット棟を結ぶ通路](https://www.openstreetmap.org/way/219396384/history/1)を投影した。[設計者の施設説明](https://www.archilovers.com/projects/40161/autodromo-nazionale-di-monza.html)に円形の表彰台とピット上を渡る連絡通路が記載されている。 | 張り出しの下面、床の高さ、手すりと支柱の断面は近似。周回約 547 RC m 地点を走ると右手に現れる。 |
+| 通信マスト | 携帯電話用マストとして記録された [OSM ノード 3710856693](https://www.openstreetmap.org/node/3710856693/history/1) と [5774539345](https://www.openstreetmap.org/node/5774539345/history/2) の位置を使った。 | 高さ 2.5 RC m、先細りの支柱、上部のアンテナ配置は共通モデルによる近似。 |
 | 観客席 | GP走路から実距離120 m以内の `building=grandstand` の外周。全41棟のうち35棟を追加。Centrale、Laterale Sinistra、Laterale Destra、Parabolica、Vedano の5棟は主催者資料の同名の屋根付き席に対応させた。 | 長辺のうち走路に近い側へ向く段床、支柱、筋交い。屋根の範囲と高さも推定。小区画の名称と個別の席番号には未同定のものがある。 |
 | ピット施設 | Palazzina Box と Hospitality Building の外周、ピットレーンの中心線、ピットウォールの位置と高さ。 | 高さ 1.25 RC m の建物にガレージ開口、窓枠、ガラス帯、庇を設けた。ピットレーン幅や壁の緑色は推定。[ガレージ棟](https://www.openstreetmap.org/way/34404652/history/7)・[ピットレーン](https://www.openstreetmap.org/way/38168747/history/12)・[ピットウォール](https://www.openstreetmap.org/way/243090150) |
 | グリッド | OSM のスタート信号位置と本線の向き、FIA 資料にあるスタートとコントロールラインの間隔309 m（RC 30.9 m）。 | 千鳥の22枠、停止位置ガイド、舗装補修の形と配置を写真に合わせて近似した。枠は周回開始点の手前にあり、1周の終わりに見える。[FIA Italian GP 競技資料 p.4](https://www.fia.com/system/files/decision-document/2026_italian_grand_prix_-_competition_visa.pdf) |

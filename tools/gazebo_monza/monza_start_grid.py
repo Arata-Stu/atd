@@ -9,6 +9,7 @@ from bisect import bisect_right
 from math import cos, dist, pi, sin
 
 from geography import LAP_START_LON_LAT, project
+from monza_trackside import _beam, _post
 from scenery import _box
 
 
@@ -25,6 +26,19 @@ PIT_LANE_LON_LAT = (
     (9.2814345, 45.6192983), (9.2814180, 45.6195366), (9.2814231, 45.6202502),
     (9.2814088, 45.6206107),
 )
+
+# © OpenStreetMap contributors, ODbL 1.0. Selected nodes of the circular
+# Podio (way 219396377 v3), CCW, starting at its elevated footway entrance.
+# Way 219396384 v1 ends on the mapped Palazzina Box facade.
+PODIUM_LON_LAT = (
+    (9.2810617, 45.6164881), (9.2810594, 45.6165074), (9.2810496, 45.6165215),
+    (9.2810348, 45.6165322), (9.2810104, 45.6165405), (9.2809841, 45.6165418),
+    (9.2809584, 45.6165359), (9.2809383, 45.6165241), (9.2809261, 45.6165083),
+    (9.2809227, 45.6164926), (9.2809315, 45.6164695), (9.2809466, 45.6164565),
+    (9.2809717, 45.6164467), (9.2810032, 45.616445), (9.2810353, 45.6164547),
+    (9.2810498, 45.6164653), (9.2810566, 45.6164739),
+)
+PODIUM_GARAGE_ENTRANCE = (9.2811574, 45.6164842)
 
 
 class PitStraight:
@@ -95,7 +109,7 @@ def _road_details(straight):
                                      (.34, .50), (-.42, .48), (-.50, .28))])
     yield 'grid_white_paint', (.80, .80, .76), white
     yield 'grid_yellow_guides', (.85, .62, .29), yellow
-    yield 'grid_asphalt_repairs', (.40, .39, .37), repairs
+    yield 'grid_asphalt_repairs', (.77, .77, .77), repairs
 
 
 def _pit_details(straight, data):
@@ -160,6 +174,52 @@ def _pit_details(straight, data):
     yield 'pit_straight_glazing', (.16, .25, .29), glass
     yield 'pit_straight_frames', (.63, .65, .64), metal
     yield 'pit_straight_eaves', (.30, .32, .34), shades
+
+
+def _podium(data):
+    """Permanent podium above the pit wall; elevations and rail details are approximate."""
+    ring = [data.project(*p) for p in PODIUM_LON_LAT]
+    entrance, garage = ring[0], data.project(*PODIUM_GARAGE_ENTRANCE)
+    cx, cy = [(min(v) + max(v)) / 2 for v in zip(*ring)]
+    # The underside flares from the central column up to the platform rim.
+    # Split each ring into outward-facing quads so it is visible from track level.
+    concrete = []
+    previous = None
+    for scale, z in ((.18, 0), (.18, .44), (.95, .55), (1, .56), (1, .61)):
+        section = [(cx + scale*(x-cx), cy + scale*(y-cy), z) for x, y in ring]
+        if previous:
+            for i in range(len(ring)):
+                j = (i+1) % len(ring)
+                concrete.append([previous[i], previous[j], section[j], section[i]])
+        previous = section
+    concrete.append(section)
+
+    length = dist(entrance, garage)
+    dx, dy = [(b-a)/length for a, b in zip(entrance, garage)]
+    # Allow the rectangular walkway to meet the round deck across its width.
+    inside = (entrance[0]-.025*dx, entrance[1]-.025*dy)
+    concrete.extend(_beam(inside, garage, .19, .557, .609))
+    rails = []
+    openings = []
+    for neighbor in (ring[1], ring[-1]):
+        vx, vy = neighbor[0]-entrance[0], neighbor[1]-entrance[1]
+        span = -dy*vx + dx*vy
+        side = .091 if span > 0 else -.091
+        a = (entrance[0] + vx*side/span, entrance[1] + vy*side/span)
+        b = (garage[0]-side*dy, garage[1]+side*dx)
+        openings.append(a)
+        rails.extend(_beam(a, b, .008, .711, .72))
+        for t in (0, .5, 1):
+            _post(rails, a[0]+t*(b[0]-a[0]), a[1]+t*(b[1]-a[1]),
+                  dx, dy, .009, .009, .609, .715)
+    # Leave the bridge entrance open in the perimeter handrail.
+    perimeter = [openings[0], *ring[1:], openings[1]]
+    for a, b in zip(perimeter, perimeter[1:]):
+        rails.extend(_beam(a, b, .009, .711, .72))
+    for x, y in ring[1:]:
+        _post(rails, x, y, dx, dy, .009, .009, .61, .715)
+    yield 'pit_podium_concrete', (.60, .59, .56), concrete
+    yield 'pit_podium_handrails', (.35, .38, .39), rails
 
 
 def _stand_details(data):
@@ -248,5 +308,6 @@ def details(edges, data):
     straight = PitStraight(edges)
     yield from _road_details(straight)
     yield from _pit_details(straight, data)
+    yield from _podium(data)
     yield from _stand_details(data)
     yield from _start_lights(straight)

@@ -1,13 +1,16 @@
 # Monza の屋外コース材質
 
-走路とコース外の芝にはそれぞれ 1024 × 1024 の JPEG を使う。画像は checkout に同梱し、シミュレーションはオフラインで実行できる。
+走路とコース外の芝には JPEG を使う。画像は checkout に同梱し、シミュレーションはオフラインで実行できる。
 
 | 画像 | 用途と加工 | シーンでの繰り返し幅 |
 |---|---|---|
-| `floor.jpg` | 乾いた黒い舗装。元写真の粒の輝度差を抑え、車載カメラの近くに細かな骨材が見えるようにした。 | 0.80 m |
+| `monza_asphalt.jpg` | Monza 全周の本線・ピット・分岐走路用の灰色舗装。2048 × 2048 の材質に細かな骨材と弱い色むらを焼き込んだ。 | 3.20 m |
+| `floor.jpg` | 第1シケイン単体・他コースの乾いた黒い舗装。元写真の粒の輝度差を抑えた。 | 0.80 m |
 | `grass.jpg` | 短く刈った芝。葉の明暗を残し、色調を黄緑に寄せた。 | 1.00 m |
 
 舗装には eye-candy.xyz による 1K の Diffuse 写真を使った。グレースケール化して 0.45 px のガウシアンぼかしをかけ、8 bit 輝度を `59 + 0.42 × (輝度 − 130)` に調整した。[Poly Haven Asphalt Floor](https://polyhaven.com/a/asphalt_floor)・[CC0 ライセンス](https://polyhaven.com/license)
+
+Monza 全周の材質はこの `floor.jpg` から作った。骨材の縮尺を維持し、写真の部分平均から求めた濃淡を広い範囲に重ね、8 bit 輝度の中央値をおよそ 117 にした。路面に固定されるので左右のカメラが同じ場所の模様を観測する。色むらの形・配置は近似で、舗装の測量値ではない。再生成する場合は NumPy と Pillow のある環境で `python3 tools/gazebo_monza/prepare_monza_asphalt.py` を実行する。
 
 芝には ambientCG の Grass 005（手続き生成とビットマップを組み合わせた素材）を使った。1K の Color マップの R・G・B にそれぞれ 23・26・4 を加え、8 bit の範囲に収めた。[ambientCG Grass 005](https://ambientcg.com/view?id=Grass005)・[CC0 ライセンス](https://docs.ambientcg.com/license/)
 
@@ -25,4 +28,4 @@
 
 3種とも初夏の自然光を左上から受けた単独の立木を、幹の根元近くから望遠で正面撮影した構図を指定した。明暗のある葉のまとまりと透過する背景を指定し、生成画像を切り出して縮小した。実際の Monza の木の位置や樹種を測量した素材ではない。
 
-Monza 全周の壁面とグリッド付近の補修跡は、同梱の `wall.jpg`（Rob Tuytel のコンクリート素材）を縮尺に合わせてタイル描画する。舗装補修部の粗い表面は近似。壁では水平方向と高さ方向に UV を割り当てる。`floor_normal.png` と `floor_roughness.png` は上記の Asphalt Floor に由来する。[Poly Haven Concrete](https://polyhaven.com/a/concrete)
+Monza 全周の壁面は、同梱の `wall.jpg`（Rob Tuytel のコンクリート素材）を縮尺に合わせてタイル描画する。壁では水平方向と高さ方向に UV を割り当てる。グリッド付近の補修跡には本線と同じ舗装材質を少し暗く着色して用いる。`floor_normal.png` と `floor_roughness.png` は上記の Asphalt Floor に由来する。[Poly Haven Concrete](https://polyhaven.com/a/concrete)

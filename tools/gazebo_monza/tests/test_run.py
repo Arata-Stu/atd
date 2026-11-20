@@ -24,6 +24,9 @@ class RunContractTests(unittest.TestCase):
                 sdf = ET.parse(out / "world.sdf").find("world")
                 self.assertEqual(sdf.attrib["name"], circuit)
                 self.assertEqual(scene["course"], circuit)
+                asphalt = Path(sdf.findtext(".//visual[@name='floor']//albedo_map"))
+                self.assertEqual(asphalt.name, "monza_asphalt.jpg" if circuit == "monza" else "floor.jpg")
+                self.assertTrue(asphalt.is_file())
                 routes = {t["gz_topic_name"]: t["ros_topic_name"] for t in run.bridge_topics(circuit)}
                 self.assertEqual(routes[f"/world/{circuit}/clock"], "/clock")
                 for sensor in sdf.findall(".//sensor"):

@@ -26,11 +26,22 @@ class LapSceneryTest(unittest.TestCase):
                     self.assertTrue((directory / 'building_walls.obj').is_file())
                     self.assertIn('background_sha256', metadata['geography'])
                     for name in ('grid_white_paint', 'start_gantry_housings', 'monza_bridge_roof',
-                                 'monza_guardrail', 'monza_pit_wall_green', 'monza_historic_wall'):
+                                 'monza_guardrail', 'monza_pit_wall_green', 'monza_historic_wall',
+                                 'pit_podium_concrete', 'pit_podium_handrails', 'monza_radio_masts'):
                         visual = sdf.find(f".//visual[@name='{name}']")
                         self.assertIsNotNone(visual, name)
                         self.assertTrue(Path(visual.findtext('geometry/mesh/uri')).is_file(), name)
                     self.assertIn('trackside_sha256', metadata['geography'])
+                    net = sdf.find(".//visual[@name='monza_catch_mesh']")
+                    self.assertEqual(net.findtext('material/double_sided'), 'true')
+                    tile = Path(net.findtext('material/pbr/metal/albedo_map'))
+                    self.assertEqual(tile.name, 'monza_catch_mesh.png')
+                    self.assertEqual(tile.read_bytes()[24:26], bytes((8, 6)))  # PNG RGBA8
+                    obj = Path(net.findtext('geometry/mesh/uri')).read_text().splitlines()
+                    uv = [tuple(map(float, row.split()[1:])) for row in obj if row.startswith('vt ')]
+                    # Upright panels repeat wire diamonds in both axes.
+                    self.assertGreater(abs(uv[1][0] - uv[0][0]), 1.)
+                    self.assertGreater(abs(uv[2][1] - uv[1][1]), 1.)
                 else:
                     self.assertNotIn('background_sha256', metadata['geography'])
                     self.assertIsNone(sdf.find(".//model[@name='monza_trackside']"))

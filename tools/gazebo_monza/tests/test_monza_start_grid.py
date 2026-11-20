@@ -59,8 +59,28 @@ class MonzaStartGridTest(unittest.TestCase):
                     lateral = sum((p-o)*v for p, o, v in zip((x, y), self.straight.origin,
                                                             self.straight.left))
                     self.assertGreater(lateral if name.startswith('pit_stands') else -lateral, 1.3)
-        self.assertLessEqual(len(self.batches), 16)
-        self.assertLess(sum(map(len, self.batches.values())), 2200)
+        self.assertLessEqual(len(self.batches), 18)
+        self.assertLess(sum(map(len, self.batches.values())), 2500)
+
+    def test_podium_is_raised_over_pit_wall_and_footbridge_reaches_garages(self):
+        concrete = self.batches['pit_podium_concrete']
+        top = max(concrete, key=len)
+        station = self.straight.station(centroid(top))
+        self.assertTrue(-28 < station < -27)
+        self.assertTrue(all(z > .55 for x, y, z in top))
+        area2 = sum(a[0]*b[1]-b[0]*a[1] for a, b in zip(top, top[1:] + top[:1]))
+        self.assertGreater(area2, 1.5)  # Up-facing, approx. 11 m diameter at full scale.
+        gp_road = [self.edges['left'], self.edges['right']]
+        for face in concrete + self.batches['pit_podium_handrails']:
+            self.assertTrue(all(not scenery._inside(x, y, gp_road) for x, y, z in face))
+        # The two bridge corners at the building end straddle the mapped doorway.
+        data = scenery.monza_features(True)
+        gx, gy = data.project(*monza_start_grid.PODIUM_GARAGE_ENTRANCE)
+        corners = {(x, y) for face in concrete for x, y, z in face
+                   if (x-gx)**2 + (y-gy)**2 < .10**2 and z > .55}
+        self.assertEqual(len(corners), 2)
+        self.assertAlmostEqual(sum(x for x, y in corners)/2, gx)
+        self.assertAlmostEqual(sum(y for x, y in corners)/2, gy)
 
     def test_start_lights_span_the_signal_station_and_face_the_grid(self):
         gp_road = [self.edges['left'], self.edges['right']]

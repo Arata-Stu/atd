@@ -121,6 +121,7 @@ class MonzaWorldTest(unittest.TestCase):
                     tree_roots.append(((ax + bx) / 2, (ay + by) / 2))
             visuals = {v.get("name"): v for v in sdf.findall(".//model[@name='circuit']/link/visual")}
             self.assertEqual(Path(visuals["grass"].findtext(".//albedo_map")).name, "grass.jpg")
+            self.assertEqual(Path(visuals["floor"].findtext(".//albedo_map")).name, "floor.jpg")
             faces = ground_faces(visuals["floor"])
             bypass = ground_faces(visuals["bypass_centerline"])
             decks = ground_faces(sdf.find(".//visual[@name='stand_decks']"))

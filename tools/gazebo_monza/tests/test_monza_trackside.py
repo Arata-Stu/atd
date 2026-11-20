@@ -61,6 +61,16 @@ class MonzaTracksideTest(unittest.TestCase):
                         sides.add(cos(yaw)*ry-sin(yaw)*rx > 0)
             self.assertEqual(sides, {False, True})
 
+    def test_radio_masts_are_rooted_on_mapped_sites_outside_the_road(self):
+        sites = self.items.by_kind['radio_mast']
+        self.assertEqual({s['properties']['osm_node'] for s in sites}, {3710856693, 5774539345})
+        bases = {(x, y) for face in self.meshes['monza_radio_masts'] for x, y, z in face if z == 0}
+        for site in sites:
+            cx, cy = geography.project(*site['geometry']['coordinates'])
+            self.assertTrue(any(hypot(x-cx, y-cy) < .05 for x, y in bases))
+        road = [self.edges['left'], self.edges['right']]
+        self.assertFalse(any(scenery._inside(x, y, road) for x, y in bases))
+
     def test_inside_fence_enters_both_infrared_views_at_parabolica(self):
         _, x, y, yaw = min(self.poses, key=lambda pose: abs(pose[0]-485))
         supports = self.meshes['monza_posts']
@@ -76,6 +86,29 @@ class MonzaTracksideTest(unittest.TestCase):
                         visible_from_right.append(forward)
                         break
             self.assertTrue(visible_from_right)
+
+    def test_grandstand_catch_panels_clear_the_seats_and_project_left_in_stereo(self):
+        faces = self.meshes['monza_catch_mesh']
+        road = [self.edges['left'], self.edges['right']]
+        stands = [rings for _, rings in self.scenery.polygons('grandstand')]
+        for a, b, c, d in faces:
+            self.assertTrue(all(not scenery._inside(x, y, road) for x, y, z in (a, b, c, d)))
+            for rings in stands:
+                self.assertFalse(scenery._inside(*a[:2], rings))
+                self.assertFalse(scenery._crosses_ring(a[:2], b[:2], rings[0]))
+
+        # Before the grid and at intermediate stations on the opening straight.
+        for station in (560., 0., 8., 20.):
+            _, x, y, yaw = min(self.poses, key=lambda p: abs(p[0]-station))
+            for eye in (-.0475, .0475):
+                in_view = False
+                for face in faces:
+                    for px, py, z in face:
+                        depth = cos(yaw)*(px-x) + sin(yaw)*(py-y) - .18
+                        left = cos(yaw)*(py-y) - sin(yaw)*(px-x) - eye
+                        if 1 < depth < 8 and .4 < left < depth*.94 and z >= .3:
+                            in_view = True
+                self.assertTrue(in_view, (station, eye))
 
     def test_home_wall_keeps_tagged_height_and_material_batches_are_bounded(self):
         pit = [props for props, _ in self.items.lines('wall') if props.get('osm_way') == 243090150]

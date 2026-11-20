@@ -17,11 +17,11 @@ import traceback
 import uuid
 
 if __package__:
-    from .bundle import (export_path, make_manifest, model_root, sha256, utc_now,
+    from .bundle import (export_path, list_exports, make_manifest, model_root, sha256, utc_now,
                          validate_bundle, validate_id, write_json, copy_inputs)
     from .build_engine import build, fixed_extractor_config, hardware_info, package_paths, verify_build
 else:
-    from bundle import (export_path, make_manifest, model_root, sha256, utc_now,
+    from bundle import (export_path, list_exports, make_manifest, model_root, sha256, utc_now,
                         validate_bundle, validate_id, write_json, copy_inputs)
     from build_engine import build, fixed_extractor_config, hardware_info, package_paths, verify_build
 
@@ -198,13 +198,11 @@ def run(args, log_dir: Path) -> int:
         else:
             print('[OK] export bundle の全ファイル hash・size を確認しました')
     elif args.action == 'list':
-        root = Path(args.result_dir) / 'models/vgl'
-        for manifest_file in sorted(root.glob('*/exported/*/manifest.json')):
-            try:
-                manifest = validate_bundle(manifest_file.parent)
+        for path, manifest, error in list_exports(args.result_dir):
+            if error is not None:
+                print(f'{path}\tFAIL: {error}')
+            else:
                 print(f'{manifest["asset_id"]}\t{manifest["export_id"]}\t{manifest["model"]["width"]}x{manifest["model"]["height"]}\tOK')
-            except (OSError, ValueError) as error:
-                print(f'{manifest_file.parent}\tFAIL: {error}')
     return 0
 
 

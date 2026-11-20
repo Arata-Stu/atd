@@ -147,3 +147,9 @@
 .transfer-preset span { font-size: 11px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .transfer-preset[aria-pressed="true"] { color: #24573b; background: #edf6ef; border-color: #83ad91; }
 .transfer-error { color: #9a362f; font-size: 12px; }
+
+.vgl-library-button { margin-top: 8px; }
+.vgl-export-list { list-style: none; margin: 0; padding: 0; }
+.vgl-export-list li { border-bottom: 1px solid var(--line); padding: 10px 0; overflow-wrap: anywhere; }
+.vgl-export-list strong { display: block; font-size: 13px; }
+.vgl-export-list code, .vgl-export-root { font-size: 11px; color: #56695e; overflow-wrap: anywhere; }

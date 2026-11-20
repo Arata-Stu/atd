@@ -9,6 +9,10 @@ VGL モデルは Notebook で準備・ONNX export し、export bundle 全体を 
 
 この入口にはモデル export・検証・転送・engine build の処理を実装している。対象機の Isaac ROS 5 SDK / GPU を使った export、実 SCP、Jetson の engine build と VGL localization の通し検証は未実施である。
 
+Notebook の Docker 内で `atd-vgl list` に表示される export は、Web UI の「地図とライン」→「VGLモデル一覧」でも確認できる。地図をまだ作っていない段階でモデル名・export ID・入力解像度を確認できる。export 直後に画面を開いたままの場合は「一覧を更新」を押す。
+
+そのモデルを地図に使うには、rosbag から作成した cuVSLAM 地図を開き、「VGL地図を作成」→「使用するVGLモデル」で該当の export を選ぶ。「VGL地図の準備を開始」を押すと、この Notebook の GPU 用 engine と選択した地図の VGL 特徴を生成する。[Notebook の地図作成手順](../apps/web/README.md#map)
+
 ## 実行前の準備
 
 Notebook と Jetson のそれぞれで setup の workspace・保存先を設定し、今回の処理を含む Docker イメージを build する。

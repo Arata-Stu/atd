@@ -104,6 +104,24 @@ def map_build(store, task, payload, *, validate_source=None):
         raise
 
 
+def _vgl_bundle():
+    repo = str(Path(__file__).resolve().parents[5])
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    from tools.vgl import bundle
+    return bundle
+
+
+def vgl_exports(store):
+    items = []
+    for path, manifest, error in _vgl_bundle().list_exports(store.result_root):
+        if error is None:
+            items.append(dict(asset_id=manifest['asset_id'], export_id=manifest['export_id'],
+                              width=manifest['model']['width'], height=manifest['model']['height'],
+                              model_dir=path.relative_to(store.result_root).as_posix()))
+    return dict(items=items, result_root=str(store.result_root))
+
+
 def vgl_payload(store, key, body):
     identifier(key)
     folder = confined(store.maps_root, key)
@@ -115,10 +133,7 @@ def vgl_payload(store, key, body):
     check_preparable(folder)
     if not shutil.which('ros2'):
         raise ValueError('ROS 2 / GPU のある Notebook 環境で実行してください')
-    repo = Path(__file__).resolve().parents[5]
-    sys.path.insert(0, str(repo))
-    from tools.vgl.bundle import validate_bundle
-    validate_bundle(models)
+    _vgl_bundle().validate_bundle(models)
     return dict(id=key, model_dir=body['model_dir'])
 
 

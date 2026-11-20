@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -66,7 +67,13 @@ def _relative_path(name: str) -> PurePosixPath:
     return path
 
 
-def inventory(root: Path) -> dict:
+@lru_cache(maxsize=512)
+def _listed_sha256(path: Path, identity: tuple) -> str:
+    """一覧の再読込では、同一ファイルの内容と属性が変わらなければハッシュを再利用する。"""
+    return sha256(path)
+
+
+def inventory(root: Path, *, reuse_digests=False) -> dict:
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
         raise ValueError('bundle は通常のディレクトリを指定してください: ' + str(root))
@@ -79,16 +86,22 @@ def inventory(root: Path) -> dict:
         for name in sorted(names):
             entry = Path(current) / name
             relative = entry.relative_to(root).as_posix()
-            if not stat.S_ISREG(entry.lstat().st_mode):
+            info = entry.lstat()
+            if not stat.S_ISREG(info.st_mode):
                 raise ValueError('bundle 内に通常ファイル以外があります: ' + relative)
             if relative == 'manifest.json':
                 continue
             _relative_path(relative)
-            files[relative] = {'sha256': sha256(entry), 'size': entry.stat().st_size}
+            if reuse_digests:
+                identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                digest = _listed_sha256(entry, identity)
+            else:
+                digest = sha256(entry)
+            files[relative] = {'sha256': digest, 'size': info.st_size}
     return files
 
 
-def validate_bundle(path: Path) -> dict:
+def validate_bundle(path: Path, *, reuse_digests=False) -> dict:
     path = Path(path)
     manifest_path = path / 'manifest.json'
     if manifest_path.is_symlink() or not manifest_path.is_file():
@@ -125,7 +138,7 @@ def validate_bundle(path: Path) -> dict:
                    or model[key] <= 0 for key in ('width', 'height', 'top_k'))
             or model['top_k'] != 2048):
         raise ValueError('対応しない model 契約です')
-    actual = inventory(path)
+    actual = inventory(path, reuse_digests=reuse_digests)
     if actual != files:
         missing, extra = sorted(files.keys() - actual.keys()), sorted(actual.keys() - files.keys())
         changed = sorted(name for name in files.keys() & actual.keys() if files[name] != actual[name])
@@ -160,6 +173,31 @@ def export_path(results: Path, asset_id: str, export_id: str) -> Path:
     if root.is_symlink():
         raise ValueError('exported 保存先に symlink は使えません')
     return root / validate_id(export_id)
+
+
+def list_exports(results: Path):
+    """CLI と Web で、公開された export を同じ検証基準・順序で列挙する。"""
+    models = Path(results) / 'models'
+    root = models / 'vgl'
+    if models.is_symlink() or root.is_symlink():
+        raise ValueError('モデル保存先に symlink は使えません')
+    if not root.exists():
+        return
+    for asset in sorted(root.iterdir()):
+        exported = asset / 'exported'
+        if asset.is_symlink() or exported.is_symlink() or not exported.is_dir():
+            continue
+        for path in sorted(exported.iterdir()):
+            if path.name.startswith('.') or path.is_symlink() or not (path / 'manifest.json').is_file():
+                continue
+            try:
+                manifest = validate_bundle(path, reuse_digests=True)
+                if (manifest['asset_id'], manifest['export_id']) != (asset.name, path.name):
+                    raise ValueError('保存先の ID と manifest が異なります')
+            except (OSError, ValueError) as error:
+                yield path, None, str(error)
+            else:
+                yield path, manifest, None
 
 
 def copy_inputs(source: Path, destination: Path) -> None:

@@ -21,6 +21,49 @@ def write(path, value=b'fixture'):
     return path
 
 
+def write_export(results, asset_id, export_id, width=424, height=240):
+    path = results / 'models/vgl' / asset_id / 'exported' / export_id
+    for name in ('models/aliked_lightglue/aliked.onnx', 'models/aliked_lightglue/lightglue.onnx',
+                 'configs/isaac/keypoint_creation_config.pb.txt', 'configs/isaac/matching_task_worker_config.pb.txt'):
+        write(path / name)
+    make_manifest(path, asset_id, export_id, dict(family='aliked_lightglue', mode='package', width=width,
+                  height=height, top_k=2048), {'fixture': True})
+    return path
+
+
+def test_vgl_export_catalog_reads_the_configured_results_before_map_creation(tmp_path, monkeypatch):
+    from tools.vgl import bundle
+
+    results = tmp_path / 'notebook-results'
+    monkeypatch.setenv('ATD_WEB_RESULT_ROOT', str(results))
+    client = TestClient(create_app(record_root=tmp_path / 'records'))
+    endpoint = '/api/vgl/exports'
+    assert client.get(endpoint).json() == dict(items=[], result_root=str(results))
+
+    export = write_export(results, 'aliked_lightglue', 'd455_640x480', 640, 480)
+    shutil.copytree(export, export.parent / '.partial-new-export')
+    shutil.copytree(export, export.parent / 'wrong-manifest-id')
+    write(export.parent / 'unfinished/models/aliked_lightglue/aliked.onnx')
+    external = write_export(tmp_path / 'external', 'elsewhere', 'bundle')
+    (results / 'models/vgl/elsewhere').symlink_to(external.parents[1], target_is_directory=True)
+    (export.parent / 'external-export').symlink_to(external, target_is_directory=True)
+
+    digest = Mock(wraps=bundle.sha256)
+    monkeypatch.setattr(bundle, 'sha256', digest)
+    expected = dict(asset_id='aliked_lightglue', export_id='d455_640x480', width=640, height=480,
+                    model_dir='models/vgl/aliked_lightglue/exported/d455_640x480')
+    assert client.get(endpoint).json() == dict(items=[expected], result_root=str(results))
+    assert digest.called
+    digest.reset_mock()
+    assert client.get(endpoint).json()['items'] == [expected]
+    digest.assert_not_called()
+
+    # A same-size edit after a successful listing must invalidate its cached digest.
+    (export / 'models/aliked_lightglue/aliked.onnx').write_bytes(b'changed')
+    assert client.get(endpoint).json()['items'] == []
+    assert digest.called
+
+
 @pytest.fixture
 def prepared(tmp_path, monkeypatch):
     store = Store(tmp_path / 'record/rosbags', tmp_path / 'results')
@@ -35,12 +78,7 @@ def prepared(tmp_path, monkeypatch):
     write(folder / 'nvidia/cuvgl_map/vocabulary/vocabulary.pb')
     for name in ('keypoint_creation_config.pb.txt', 'localizer_config.pb.txt', 'matching_config.pb.txt', 'query_map_config.pb.txt'):
         write(folder / 'vgl_runtime_config' / name)
-    bundle = store.result_root / 'models/vgl/example/exported/source'
-    for name in ('models/aliked_lightglue/aliked.onnx', 'models/aliked_lightglue/lightglue.onnx',
-                 'configs/isaac/keypoint_creation_config.pb.txt', 'configs/isaac/matching_task_worker_config.pb.txt'):
-        write(bundle / name)
-    make_manifest(bundle, 'example', 'source', dict(family='aliked_lightglue', mode='package', width=424,
-                  height=240, top_k=2048), {'fixture': True})
+    bundle = write_export(store.result_root, 'example', 'source')
     models = store.result_root / 'models/vgl/example/engines/notebook/run'
     extractor = write(models / 'aliked_lightglue/aliked_424x240.engine')
     matcher = write(models / 'aliked_lightglue/lightglue_aliked_2048.engine')

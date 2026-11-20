@@ -83,7 +83,7 @@ Map 画面で、次の順に進める。駐車機能は対象に含めない。
 Notebook ホストで `atd gazebo bag --circuit monza` を実行して作成した1周分の bag も、実車の記録と同じ「rosbag から地図を作成」から選べる。[Gazebo の記録手順と所要容量](../../docs/gazebo_circuits.md#1周でcuvslam地図を作る)
 
 1. **cuVSLAM 地図を作成**: `/data/record/rosbags/` の bag、地図 ID、左右画像・CameraInfo の topic、base / optical frame を指定する。NVIDIA の `isaac_mapping_ros/create_map_offline.py` を独立 worker で呼び、`maps/<id>/nvidia/` に公式の `cuvslam_map/`・`map_frames/` 等の構成を維持して保存する。
-2. **VGL 地図を準備**: Notebook の export bundle を指定し、この PC の GPU 用 engine を準備してから公式 `create_cuvgl_map.py` を実行する。model 資産側の engine と地図の `cuvgl_map/` は別に保持する。Notebook engine を Jetson 用として転送しない。
+2. **VGL 地図を準備する**。「VGL地図を作成」で Notebook に export 済みのモデルを選ぶ。入力解像度と export ID を確認して「VGL地図の準備を開始」を押すと、この PC の GPU 用 engine を生成し、公式 `create_cuvgl_map.py` で地図の `cuvgl_map/` を作成する。地図を選ぶ前でも「VGLモデル一覧」で export 済みのモデルを確認できる。[モデルの準備手順](../../docs/vgl_models.md)
 3. **保存地図から点群を取得**: 「保存地図から点群を取得」で、元 bag と VGL 準備時の Notebook 用モデルを自動選択する。必要なら詳細で選び直す。地図・保存画像・モデル・入力画像サイズ等の対応、ROS と `atd_mapping` の導入を開始前に検査し、不備は理由と前工程への案内を表示する。
 4. **HDMap を編集**: 取得後の点群を背景に、左右境界と Custom 点列を Canvas で編集・保存し、走行ラインを生成する。処理成功後は選択中の地図と背景・ラインを自動更新する。未保存編集や別地図への選択変更を、ジョブ完了で破棄しない。
 

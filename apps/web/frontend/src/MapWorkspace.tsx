@@ -4,6 +4,7 @@ import type { Bag, CaptureOptions, Cloud, EditTarget, GenerationSettings, Job, L
 import { MapCanvas } from './MapCanvas';
 import { Field, Icon, Modal, Tag } from './workspace_ui';
 import { CaptureModal, PreparationPanel } from './MapPreparation';
+import { VglExportsModal } from './VglExportsModal';
 import { LineSettingsPanel } from './LineSettingsPanel';
 import { ACTIVE_MAP_JOBS, captureCloudNotes, completionUpdate, DEFAULT_GENERATION_SETTINGS, editingIssue, generationIssue, nvidiaMap, restoredSettings } from './map_workflow';
 import type { TrackedMapJob } from './map_workflow';
@@ -21,8 +22,9 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
   const [visible, setVisible] = useState<Record<string, boolean>>({ centerline: true, raceline: true, custom: true, cloud: true });
   const [settings, setSettings] = useState<GenerationSettings>(DEFAULT_GENERATION_SETTINGS);
   const [kind, setKind] = useState<LineKind>(() => entry.get('line') === 'raceline' ? 'raceline' : entry.get('line') === 'custom' ? 'custom' : 'centerline');
-  const [newId, setNewId] = useState(''), [showCreate, setShowCreate] = useState(false), [showBuild, setShowBuild] = useState(false), [showVgl, setShowVgl] = useState(false), [showCapture, setShowCapture] = useState(false);
-  const [build, setBuild] = useState(BUILD_DEFAULTS), [modelDir, setModelDir] = useState('');
+  const [newId, setNewId] = useState(''), [showCreate, setShowCreate] = useState(false), [showBuild, setShowBuild] = useState(false), [showCapture, setShowCapture] = useState(false);
+  const [build, setBuild] = useState(BUILD_DEFAULTS);
+  const [vglDialog, setVglDialog] = useState<'library' | 'prepare' | null>(null);
   const [capture, setCapture] = useState<CaptureOptions | null>(null), [captureLoading, setCaptureLoading] = useState(false), [captureError, setCaptureError] = useState('');
   const [captureBag, setCaptureBag] = useState(''), [captureModel, setCaptureModel] = useState(''), [captureRefresh, setCaptureRefresh] = useState(0);
   const [deferred, setDeferred] = useState<string | null>(null), [localJobs, setLocalJobs] = useState<Record<string, string>>({});
@@ -180,6 +182,7 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
     <aside className="catalog-panel">
       <div className="panel-title"><span>マイライブラリ</span><button className="icon-button" aria-label="地図一覧を更新" disabled={busy} onClick={() => void run(refresh)}><Icon name="refresh" size={16}/></button></div>
       <button className="button primary full" disabled={busy} onClick={() => setShowBuild(true)}><Icon name="plus" size={17}/>rosbag から地図を作成</button>
+      <button className="button full vgl-library-button" onClick={() => setVglDialog('library')}><Icon name="folder" size={16}/>VGLモデル一覧</button>
       <div className="catalog-heading"><span>保存済みの地図</span><span>{maps.length}</span></div>
       <div className="map-list">{maps.map(map => <button key={map.id} className={'map-card ' + (doc?.id === map.id ? 'selected' : '')} disabled={busy} onClick={() => void load(map.id)}><span className="map-card-icon"><Icon name="map" size={21}/></span><span><strong>{map.title || map.id}</strong><small>{map.id}</small><small>{nvidiaMap(map) && map.source?.pointcloud_status !== 'ready' ? '点群の取得待ち' : `${map.left.length + map.right.length} 境界点`} · rev {map.revision}</small></span><Icon name="chevron" size={15}/></button>)}{!maps.length && <p className="panel-empty">保存された地図がありません。<br/>地図の作成、または空のHDMapから編集を始められます。</p>}</div>
       <button className="button quiet full" disabled={busy} onClick={() => setShowCreate(true)}><Icon name="plus" size={16}/>空のHDMapを作成</button>
@@ -199,7 +202,7 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
     <aside className="properties-panel">
       <div className="panel-title"><span>地図の設定</span><Icon name="settings" size={17}/></div>
       {doc ? <>
-        {nvidia && <PreparationPanel doc={doc} options={capture} loading={captureLoading} error={captureError} pointcloudReady={pointcloudReady} busy={locked} onVgl={() => setShowVgl(true)} onCapture={() => setShowCapture(true)} onRefresh={() => setCaptureRefresh(value => value + 1)}/>}
+        {nvidia && <PreparationPanel doc={doc} options={capture} loading={captureLoading} error={captureError} pointcloudReady={pointcloudReady} busy={locked} onVgl={() => setVglDialog('prepare')} onCapture={() => setShowCapture(true)} onRefresh={() => setCaptureRefresh(value => value + 1)}/>}
         <div className="property-section"><div className="section-top"><h3>HDMap</h3><Tag>rev {doc.revision}</Tag></div><Field label="地図の名前"><input value={doc.title} onChange={e => change({ ...doc, title: e.target.value })} disabled={!editable}/></Field><label className="check-row"><input type="checkbox" checked={doc.closed} onChange={e => change({ ...doc, closed: e.target.checked, lines: {} })} disabled={!editable}/>閉路として編集</label><div className="geometry-stats"><span>左境界<strong>{doc.left.length}</strong></span><span>右境界<strong>{doc.right.length}</strong></span><span>Custom<strong>{doc.custom.length}</strong></span></div>
           {cloud?.points.length ? <p className="small-note">点群 {cloud.points.length.toLocaleString()} 点{cloud.truncated ? '（表示用に間引き）' : ''}</p> : <p className="small-note">{nvidia ? '保存地図から点群を取得すると編集できます。' : '手動HDMap · 点群なしで編集できます。'}</p>}
           {nvidia && !!cloud?.points.length && <div className="cloud-scope-note"><p className="small-note">{cloudNotes.scope}</p>{cloudNotes.tail && <p className="small-note">{cloudNotes.tail}</p>}</div>}
@@ -210,7 +213,12 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
     </aside>
     {showCreate && <Modal title="空のHDMapを作成" subtitle="地図IDを指定して、境界の手動編集から始めます。" onClose={() => setShowCreate(false)}><form onSubmit={e => { e.preventDefault(); void run(async () => { if (dirty && !window.confirm('未保存の編集を破棄して新しいHDMapを開きますか？')) return; const created = await api<MapDocument>('maps', { id: newId, title: newId }); await refresh(); setShowCreate(false); await reload(created.id, true); }); }}><Field label="地図ID" hint="英数字、ハイフン、アンダースコア"><input required pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value={newId} onChange={e => setNewId(e.target.value)} placeholder="practice_course"/></Field><div className="modal-actions"><button className="button primary" disabled={busy}>作成する<Icon name="arrow" size={16}/></button></div></form></Modal>}
     {showBuild && <Modal title="rosbag から地図を作成" subtitle="最初にcuVSLAM地図を作成します。完了後、VGLと点群取得へ進めます。" onClose={() => setShowBuild(false)}><form onSubmit={e => { e.preventDefault(); void run(async () => { await queue('maps/build', build, build.id); setShowBuild(false); notify('cuVSLAM地図作成を開始しました。完了後に作成した地図を開きます'); }); }}><Field label="記録データ"><select required value={build.bag} onChange={e => setBuild({ ...build, bag: e.target.value })}><option value="">rosbagを選択</option>{bags.map(bag => <option key={bag.id} value={bag.id}>{bag.id} · {bytes(bag.bytes)}</option>)}</select></Field><Field label="新しい地図ID"><input required pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value={build.id} onChange={e => setBuild({ ...build, id: e.target.value })} placeholder="practice_course"/></Field><details><summary>画像トピック・frameの詳細</summary><div className="field-grid">{Object.entries(build).filter(([key]) => key !== 'id' && key !== 'bag').map(([key, value]) => <Field key={key} label={key}><input value={value} onChange={e => setBuild({ ...build, [key]: e.target.value })}/></Field>)}</div></details>{!bags.length && <p className="inline-note">bagがありません。「データ転送」からJetsonの記録を受信してください。</p>}<div className="modal-actions"><button className="button primary" disabled={busy || !bags.length}><Icon name="play" size={16}/>cuVSLAM地図作成を開始</button></div></form></Modal>}
-    {showVgl && doc && <Modal title="VGL地図を準備" subtitle={`${doc.title} の保存画像と、Notebook用のexport bundleを使います。`} onClose={() => setShowVgl(false)}><form onSubmit={e => { e.preventDefault(); void run(async () => { await queue(`maps/${encodeURIComponent(doc.id)}/vgl`, { model_dir: modelDir }, doc.id); setShowVgl(false); notify('VGL地図の準備を開始しました。完了後に点群を取得できます'); }); }}><Field label="VGL export bundle（結果保存先からの相対パス）"><input required value={modelDir} onChange={e => setModelDir(e.target.value)} placeholder="models/vgl/asset/exported/export_id"/></Field><p className="small-note">このPCのGPU用モデルを準備し、対応するVGL地図を作成します。地図とモデルは別に保持します。</p><div className="modal-actions"><button className="button primary" disabled={locked}><Icon name="play" size={16}/>VGL地図の準備を開始</button></div></form></Modal>}
-    {showCapture && doc && <CaptureModal doc={doc} options={capture} loading={captureLoading} error={captureError} bags={bags} bag={captureBag} modelDir={captureModel} busy={locked} onBag={setCaptureBag} onModelDir={setCaptureModel} onClose={() => setShowCapture(false)} onRefresh={() => setCaptureRefresh(value => value + 1)} onStart={startCapture} onVgl={() => { setShowCapture(false); setShowVgl(true); }} onTransfer={() => { setShowCapture(false); onTransfer(); }}/>}
+    {vglDialog === 'library' && <VglExportsModal onClose={() => setVglDialog(null)}/>}
+    {vglDialog === 'prepare' && doc && <VglExportsModal key={doc.id} onClose={() => setVglDialog(null)}
+      preparation={{ title: doc.title, busy: locked, start: modelDir => void run(async () => {
+        await queue(`maps/${encodeURIComponent(doc.id)}/vgl`, { model_dir: modelDir }, doc.id);
+        setVglDialog(null); notify('VGL地図の準備を開始しました。完了後に点群を取得できます');
+      }) }}/>}
+    {showCapture && doc && <CaptureModal doc={doc} options={capture} loading={captureLoading} error={captureError} bags={bags} bag={captureBag} modelDir={captureModel} busy={locked} onBag={setCaptureBag} onModelDir={setCaptureModel} onClose={() => setShowCapture(false)} onRefresh={() => setCaptureRefresh(value => value + 1)} onStart={startCapture} onVgl={() => { setShowCapture(false); setVglDialog('prepare'); }} onTransfer={() => { setShowCapture(false); onTransfer(); }}/>}
   </div>;
 }

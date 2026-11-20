@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from atd_processing.geometry import settings as generation_settings
 from .jobs import Jobs
-from .offline import DEFAULT_INPUTS, build_payload, vgl_payload
+from .offline import DEFAULT_INPUTS, build_payload, vgl_exports, vgl_payload
 from .store import Store, atomic_json, confined, read_json
 from . import transfers
 from . import capture as capture_service
@@ -161,6 +161,10 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     @app.get('/api/records')
     def records():
         return dict(items=store.records())
+
+    @app.get('/api/vgl/exports')
+    def vgl_export_options():
+        return vgl_exports(store)
 
     @app.get('/api/calibration/options')
     def calibration_options(bag: str | None = None):

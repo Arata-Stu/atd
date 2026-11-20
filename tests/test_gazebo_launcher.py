@@ -28,7 +28,19 @@ class GazeboHostTests(unittest.TestCase):
         self.assertIn("ROS_DOMAIN_ID=91", result.stdout)
         self.assertIn("--camera-height .14", result.stdout)
         self.assertIn("--pull=never", result.stdout)
+        self.assertIn("--shm-size=128m", result.stdout)
+        self.assertIn("FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml", result.stdout)
         self.assertNotIn("atd_pc_dev", result.stdout)
+
+    def test_diagnostics_can_reproduce_original_transport_without_shared_memory(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh"), "diagnose", "--duration", "15", "--dry-run", "--dds"]
+        result = subprocess.run([*command, "udp"], text=True, capture_output=True, check=True)
+        self.assertIn("--mode diagnose", result.stdout)
+        self.assertIn("--duration 15", result.stdout)
+        self.assertIn("docker/middleware_profiles/fastdds.xml", result.stdout)
+        self.assertNotIn("--shm-size", result.stdout)
+        for value in ([], ["invalid"]):
+            self.assertNotEqual(subprocess.run([*command, *value], capture_output=True).returncode, 0)
 
     def test_storage_records_peak_and_failure_without_adding_shared_layers(self):
         with tempfile.TemporaryDirectory() as tmp:

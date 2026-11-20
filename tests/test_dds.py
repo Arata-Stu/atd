@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "docker/scripts/configure-dds.sh"
 PROFILE = ROOT / "docker/middleware_profiles/fastdds.xml"
+GAZEBO_PROFILE = ROOT / "docker/gazebo_monza/fastdds.xml"
 NS = {"dds": "http://www.eprosima.com"}
 
 
@@ -52,16 +53,39 @@ class FastDdsProfileTests(unittest.TestCase):
             "SIMPLE",
         )
 
+    def test_gazebo_advertises_both_shm_and_loopback_to_observers(self):
+        root = ET.parse(GAZEBO_PROFILE).getroot()
+        descriptors = {node.findtext("dds:type", namespaces=NS): node
+                       for node in root.findall(".//dds:transport_descriptor", NS)}
+        self.assertEqual(set(descriptors), {"SHM", "UDPv4"})
+        self.assertGreater(int(descriptors["SHM"].findtext("dds:segment_size", namespaces=NS)), 2 * 640 * 480)
+        rtps = root.find(".//dds:participant[@is_default_profile='true']/dds:rtps", NS)
+        self.assertEqual(rtps.findtext("dds:useBuiltinTransports", namespaces=NS), "false")
+        self.assertEqual({node.text for node in rtps.findall("dds:userTransports/dds:transport_id", NS)},
+                         {node.findtext("dds:transport_id", namespaces=NS) for node in descriptors.values()})
+        self.assertEqual([node.text for node in descriptors["UDPv4"].findall("dds:interfaceWhiteList/dds:address", NS)],
+                         ["127.0.0.1"])
+        # Explicit UDP user locators suppress generation of a SHM locator.
+        self.assertIsNone(rtps.find("dds:defaultUnicastLocatorList", NS))
+        self.assertIsNone(rtps.find("dds:defaultMulticastLocatorList", NS))
+        builtin = rtps.find("dds:builtin", NS)
+        for name in ("metatrafficUnicastLocatorList", "initialPeersList"):
+            self.assertEqual([n.text for n in builtin.findall(f"dds:{name}/dds:locator/dds:udpv4/dds:address", NS)],
+                             ["127.0.0.1"])
+        self.assertIsNone(builtin.find("dds:metatrafficMulticastLocatorList", NS))
+
     @unittest.skipUnless(os.environ.get("ATD_FASTDDS_XSD"), "Set ATD_FASTDDS_XSD to an official Fast DDS 3.x schema")
     def test_official_fastdds_schema(self):
         validator = shutil.which("xmllint")
         if not validator:
             self.skipTest("xmllint is not installed")
-        result = subprocess.run(
-            [validator, "--noout", "--nonet", "--schema", os.environ["ATD_FASTDDS_XSD"], str(PROFILE)],
-            text=True, capture_output=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        for profile in (PROFILE, GAZEBO_PROFILE):
+            with self.subTest(profile=profile):
+                result = subprocess.run(
+                    [validator, "--noout", "--nonet", "--schema", os.environ["ATD_FASTDDS_XSD"], str(profile)],
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class ConfigureDdsTests(unittest.TestCase):

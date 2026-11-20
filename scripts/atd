@@ -141,7 +141,8 @@ run_from_menu() {
             options=(serve 'Web UI を起動' prepare '初回・更新時のオンライン準備' check '準備状態を確認') ;;
         gazebo)
             options=(run '動画を保存して受信速度を測定' video '左右動画を保存'
-                     benchmark '90 Hz 配信を測定' prepare '専用イメージを準備・容量を測定') ;;
+                     benchmark '90 Hz 配信を測定' diagnose 'Gazebo と ROS の画像受信を比較'
+                     prepare '専用イメージを準備・容量を測定') ;;
         display)
             options=(status '現在の設定を表示' cui '次回起動を CUI に設定' gui '次回起動を GUI に設定') ;;
         performance)

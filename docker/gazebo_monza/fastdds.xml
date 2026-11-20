@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Notebook の Gazebo 用。コンテナ内の画像に SHM を使い、外部の
+     ATD ビューアとは同じホストの IPv4 ループバックで通信する。 -->
+<dds xmlns="http://www.eprosima.com">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>gazebo_shm</transport_id>
+        <type>SHM</type>
+        <!-- 640 × 480 × mono8 の左右画像を複数組保持できる送信用セグメント。 -->
+        <segment_size>8388608</segment_size>
+      </transport_descriptor>
+      <transport_descriptor>
+        <transport_id>gazebo_loopback_udp</transport_id>
+        <type>UDPv4</type>
+        <maxInitialPeersRange>100</maxInitialPeersRange>
+        <interfaceWhiteList>
+          <address>127.0.0.1</address>
+        </interfaceWhiteList>
+      </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="gazebo_stereo" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>gazebo_shm</transport_id>
+          <transport_id>gazebo_loopback_udp</transport_id>
+        </userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+        <!-- ユーザーデータの unicast locator は両 transport が自動生成する。
+             固定の UDP locator をここで指定すると SHM locator が生成されない。 -->
+        <builtin>
+          <discovery_config>
+            <discoveryProtocol>SIMPLE</discoveryProtocol>
+          </discovery_config>
+          <metatrafficUnicastLocatorList>
+            <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+          </metatrafficUnicastLocatorList>
+          <initialPeersList>
+            <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+          </initialPeersList>
+        </builtin>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

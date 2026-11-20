@@ -20,6 +20,7 @@ NVIDIA GPU と NVIDIA Container Toolkit が使える Ubuntu の Notebook ホス�
 | `prepare` | `storage.json`、ビルド前後の `docker system df -v` と `docker buildx du`、`build.log` |
 | `video` | `stereo.mp4`（左目／右目の横並び）、`left.mp4`、`right.mp4`、`video.json` |
 | `benchmark` | `benchmark.json` に実時間で受信したペア数・Hz、シミュレーション時刻のHz、欠落・重複、最大到着間隔 |
+| `diagnose` | 既定20実秒間の ROS 受信を `benchmark.json`、同じ時間帯の Gazebo Transport での左右受信と world 時刻を `gz_probe.json` に記録 |
 | 両試行 | `run.json`、`scene/scene.json`、台の実際の位置 `scene/rig_motion.jsonl`、サーバー・ブリッジ・受信側のログ |
 
 `stereo.mp4` を Notebook のブラウザにドラッグすると、左右を同時に再生・シークできる。実時間の配信と独立に、動画は同じタイムスタンプを持つ左右画像をシミュレーション時刻で30 fpsにサンプリングする。動画の既定長は10秒。受信が滞り前のペアを保持した動画フレームの数は `video.json` の `held_video_frames` で確認できる。
@@ -35,6 +36,25 @@ NVIDIA GPU と NVIDIA Container Toolkit が使える Ubuntu の Notebook ホス�
 
 動画では指定時間で同じ区間を一度通る。ベンチマークでは既定の片道10秒でカメラ台が同じ姿勢列を往復し、描画中の負荷を維持する。移動は保存済み Raceline を用いた軌道再生で、映像と配信の検証用。タイヤや ESC、制御器による閉ループ走行の比較は既存の [2D シミュレーター](simulation.md) で行う。
 
+### 左右画像の受信が遅いとき
+
+Notebook ホストで次を個別に実行する。先の試行の終了コードが2でも次を実行できる。イメージを準備済みなら、この診断と DDS 設定は checkout の更新で使える。
+
+```bash
+atd gazebo diagnose --dds udp
+atd gazebo diagnose --dds shm
+```
+
+両方とも同じシーン・計測時間を使う。`udp` は従来の UDPv4 loopback、`shm` は同じコンテナ内のブリッジと受信プロセスに Fast DDS の共有メモリを使える設定で、通常の動画・計測にも適用する既定値。Gazebo コンテナ専用の `/dev/shm` 上限は128 MiB。別コンテナの ATD ビューアには既存の UDPv4 loopback 設定を使う。[Fast DDS の SHM transport](https://fast-dds.docs.eprosima.com/en/3.x/fastdds/transport/shared_memory/shared_memory.html)
+
+| 診断に表示される結果 | 確認する箇所 |
+|---|---|
+| Gazebo 側ですでに映像が少なく、world 時刻もゆっくり進む | `gz_probe.json` の `world.real_time_factor`。1.0 が実時間相当。描画とシミュレーション全体の負荷を確認する |
+| Gazebo 側は左右とも十分届き、ROS で片眼または両眼の枚数が落ちる | ブリッジ、DDS、ROS 購読処理。2回の結果で共有メモリを有効にした際の変化を見る。UDP 受信バッファ不足の増分はホスト上の他プロセスの通信も含む |
+| ROS 側でも左右の枚数は多いが、ペアが少ない | `pairing.shared_image_stamps` で時刻が一致した総数、`shared_stamps_evicted_before_match` で相手が届くまでに保持上限を超えた数を確認する |
+
+診断用の Gazebo 購読にも画像転送の負荷がかかる。90 Hz の最終判定には同じ DDS 設定で `atd gazebo benchmark` を使用する。ROS が最初の校正ペアを得られなかったときは Gazebo の診断購読期間全体を明示し、異なる観測時間の枚数を直接比較しない。
+
 ## 90 Hz と容量の読み方
 
 - `benchmark.json` の `unique_ordered_pairs` は画像と時刻を左右で照合して、重複を除いて数えた組数。60実秒なら目標は5,400組。購読接続と校正を確認し、ウォームアップを除いた区間で `paired_wall_hz` を測る。`paired_sim_hz` は画像に付いたシミュレーション時刻による周期。両者の差は実時間への追従を見る手掛かりになる。
@@ -45,4 +65,6 @@ ROS は Notebook のループバックで Fast DDS を使う。標準ドメイ�
 
 ## 試作の確認結果
 
-2026-11-20、macOS ARM64 のネイティブ Gazebo Jetty 10.7／OGRE 2（Metal）で、取付高 0.12 m のシーンを描画した。Gazebo Transport 側でシミュレーション時刻が一致する 640 × 480 の左右画像を899組取得し、観測区間の画像タイムスタンプは約11.11 ms間隔、重複と未対応画像は左右とも0だった。左右の投影行列から求めた基線長は 0.095 m。両眼それぞれ10秒・30 fpsのMP4を確認した。Notebook の Linux／EGL、ROS 2 ブリッジを含む実時間レート、専用イメージのビルド容量は Notebook ホストで測定する。
+2026-11-20、macOS ARM64 のネイティブ Gazebo Jetty 10.7／OGRE 2（Metal）で、取付高 0.12 m のシーンを描画した。Gazebo Transport 側でシミュレーション時刻が一致する 640 × 480 の左右画像を899組取得し、観測区間の画像タイムスタンプは約11.11 ms間隔、重複と未対応画像は左右とも0だった。左右の投影行列から求めた基線長は 0.095 m。両眼それぞれ10秒・30 fpsのMP4を確認した。
+
+同日の Notebook 初回計測（`20261120T013905Z-benchmark-3UuCzY`、従来の UDP 設定）は EGL が RTX 4060 Laptop GPU を使用。実時間60秒で ROS 受信は左54枚、右272枚、正順の同時刻ペア9組（0.15組/秒）、最大受信間隔17.90秒。初回計測には Gazebo 側の同時観測が含まれていない。共有メモリ設定の効果は Notebook の比較計測で確認する。

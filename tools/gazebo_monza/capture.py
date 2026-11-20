@@ -22,6 +22,25 @@ TOPICS = {
 INFO_TOPICS = {side: topic.replace("image_rect_raw", "camera_info") for side, topic in TOPICS.items()}
 FRAMES = {"left": "camera_infra1_optical_frame", "right": "camera_infra2_optical_frame"}
 BASELINE_M = 0.095
+PENDING_FRAMES = 16
+
+
+def stamp_intervals(stamps):
+    return [(b - a) / NANO for a, b in zip(stamps, stamps[1:])]
+
+
+def missing_slots(intervals):
+    return sum(max(0, round(dt * TARGET_HZ) - 1) for dt in intervals)
+
+
+def udp_error_counters(path=Path("/proc/net/snmp")):
+    # host networking shares these counters with all other processes on the Notebook.
+    try:
+        header, values = [line.split() for line in path.read_text().splitlines() if line.startswith("Udp:")]
+        row = dict(zip(header, values))
+        return {name: int(row[name]) for name in ("InErrors", "RcvbufErrors", "SndbufErrors")}
+    except (OSError, ValueError, KeyError):
+        return None
 
 
 class StereoPairs:
@@ -29,7 +48,8 @@ class StereoPairs:
 
     def __init__(self):
         self.pending = {side: OrderedDict() for side in TOPICS}
-        self.seen = {side: OrderedDict() for side in TOPICS}
+        # Keep only timestamps for the post-run overlap check. Pixel storage stays bounded.
+        self.seen = {side: set() for side in TOPICS}
         self.received = dict.fromkeys(TOPICS, 0)
         self.duplicates = dict.fromkeys(TOPICS, 0)
         self.expired = dict.fromkeys(TOPICS, 0)
@@ -43,14 +63,12 @@ class StereoPairs:
         if stamp in seen:
             self.duplicates[side] += 1
             return None
-        seen[stamp] = None
-        if len(seen) > 512:
-            seen.popitem(last=False)
+        seen.add(stamp)
         other = "right" if side == "left" else "left"
         if stamp not in self.pending[other]:
             self.pending[side][stamp] = frame
             # Limit retention of unmatched full-size video frames.
-            if len(self.pending[side]) > 16:
+            if len(self.pending[side]) > PENDING_FRAMES:
                 self.pending[side].popitem(last=False)
                 self.expired[side] += 1
             return None
@@ -62,14 +80,37 @@ class StereoPairs:
         self.arrivals.append(arrival)
         return (frame, partner) if side == "left" else (partner, frame)
 
-    def summary(self, wall_seconds):
+    def summary(self, wall_seconds, *, image_wall_seconds=None):
         count = len(self.stamps)
-        intervals = [(b - a) / NANO for a, b in zip(self.stamps, self.stamps[1:])]
+        intervals = stamp_intervals(self.stamps)
         arrival_intervals = [b - a for a, b in zip(self.arrivals, self.arrivals[1:])]
         span = (self.stamps[-1] - self.stamps[0]) / NANO if count else 0.0
-        missing = sum(max(0, round(dt * TARGET_HZ) - 1) for dt in intervals)
+        if image_wall_seconds is None:
+            image_wall_seconds = wall_seconds
+        streams = {}
+        for side, received_stamps in self.seen.items():
+            stamps = sorted(received_stamps)
+            gaps = stamp_intervals(stamps)
+            sim_span = (stamps[-1] - stamps[0]) / NANO if stamps else 0.0
+            streams[side] = {
+                "unique_images": len(stamps),
+                "unique_wall_hz": len(stamps) / image_wall_seconds if image_wall_seconds > 0 else None,
+                "unique_sim_hz": (len(stamps) - 1) / sim_span if sim_span > 0 else None,
+                "first_sim_ns": stamps[0] if stamps else None,
+                "last_sim_ns": stamps[-1] if stamps else None,
+                "missing_sim_slots_between_images_estimate": missing_slots(gaps),
+                "largest_sim_gap_ms": max(gaps) * 1000 if gaps else None,
+            }
+        shared = len(self.seen["left"] & self.seen["right"])
         return {
             "received_images": self.received,
+            "image_measurement_wall_s": image_wall_seconds,
+            "image_streams": streams,
+            "pairing": {
+                "pending_limit_per_eye": PENDING_FRAMES,
+                "shared_image_stamps": shared,
+                "shared_stamps_evicted_before_match": shared - count - self.out_of_order_pairs,
+            },
             "duplicate_images": self.duplicates,
             "unpaired_images": {s: self.expired[s] + len(self.pending[s]) for s in TOPICS},
             "out_of_order_pairs": self.out_of_order_pairs,
@@ -80,7 +121,7 @@ class StereoPairs:
             "measurement_wall_s": wall_seconds,
             "paired_wall_hz": count / wall_seconds if wall_seconds > 0 else None,
             "paired_sim_hz": (count - 1) / span if span > 0 else None,
-            "missing_sim_slots_between_pairs_estimate": missing,
+            "missing_sim_slots_between_pairs_estimate": missing_slots(intervals),
             "largest_sim_gap_ms": max(intervals) * 1000 if intervals else None,
             "largest_arrival_gap_ms": max(arrival_intervals) * 1000 if intervals else None,
         }
@@ -223,11 +264,14 @@ def benchmark_passes(metrics):
 
 def capture(args, report):
     import rclpy
+    from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import qos_profile_sensor_data
     from sensor_msgs.msg import CameraInfo, Image
 
     rclpy.init()
     node = rclpy.create_node("atd_monza_stereo_" + args.mode)
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     pairs = StereoPairs()
     start = None
     first_pair_at = None
@@ -235,6 +279,7 @@ def capture(args, report):
     deadline = None
     success = False
     measure = args.mode == "benchmark"
+    udp_start = None
     ready = args.output / f"{args.mode}.ready"
     ready_at = None
     calibration = Calibration()
@@ -279,7 +324,7 @@ def capture(args, report):
                 break
             if time.monotonic() - discovery_at >= args.startup_timeout:
                 raise TimeoutError("No matched ROS publisher for " + ", ".join(missing))
-            rclpy.spin_once(node, timeout_sec=0.05)
+            executor.spin_once(timeout_sec=0.05)
         if not rclpy.ok():
             raise RuntimeError("ROS shut down during publisher discovery")
         ready.touch(exist_ok=False)
@@ -298,6 +343,7 @@ def capture(args, report):
                 if start is None and now >= first_pair_at + args.warmup:
                     # Discovery and warm-up samples do not count towards either rate.
                     pairs = StereoPairs()
+                    udp_start = udp_error_counters()
                     start = now
                     deadline = start + args.duration
                 if deadline is not None and now >= deadline:
@@ -309,16 +355,26 @@ def capture(args, report):
                     break
                 if now - first_pair_at > args.video_timeout:
                     raise TimeoutError("Video did not cover the requested simulation interval")
-            rclpy.spin_once(node, timeout_sec=0.015)
+            executor.spin_once(timeout_sec=0.015)
         if not success:
             raise RuntimeError("ROS shut down before capture completed")
     finally:
         now = time.monotonic()
         if measure:
             elapsed = args.duration if success else (max(now - start, 0.0) if start else 0.0)
+            image_elapsed = elapsed
+            report["measurement_start_monotonic_s"] = start
+            report["measurement_end_monotonic_s"] = start + elapsed if start is not None else None
+            udp_end = udp_error_counters() if udp_start is not None else None
+            report["udp_namespace_counter_deltas"] = (
+                {key: udp_end[key] - value for key, value in udp_start.items()}
+                if udp_end is not None and all(udp_end[key] >= value for key, value in udp_start.items())
+                else None
+            )
         else:
             elapsed = max(now - first_pair_at, 0.0) if first_pair_at is not None else 0.0
-        report.update(pairs.summary(elapsed))
+            image_elapsed = max(now - ready_at, 0.0) if ready_at is not None else 0.0
+        report.update(pairs.summary(elapsed, image_wall_seconds=image_elapsed))
         if first_pair_at is not None and ready_at is not None:
             report["first_pair_wait_wall_s"] = first_pair_at - ready_at
         report["stereo_calibration"] = calibration.result
@@ -328,6 +384,7 @@ def capture(args, report):
                               held_video_frames=video.repeated_frames)
                 video.close(success)
         finally:
+            executor.shutdown()
             node.destroy_node()
             rclpy.try_shutdown()
 

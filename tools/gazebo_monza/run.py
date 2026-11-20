@@ -99,13 +99,16 @@ def inspect_motion(scene_dir, scene, metrics):
 
 
 def run(args, report):
-    mode, out = args.mode, args.output
+    diagnose = args.mode == "diagnose"
+    mode = "benchmark" if diagnose else args.mode
+    out = args.output
     scene_dir = out / "scene"
     scene = world.build(scene_dir, height=args.camera_height, pitch_deg=args.camera_pitch_deg,
                         travel_seconds=args.duration if mode == "video" else 10.0, repeat=mode == "benchmark")
     config = out / "bridge.yaml"
     config.write_text(json.dumps(bridge_topics(), indent=2) + "\n")
-    report.update(ros_domain_id=os.environ.get("ROS_DOMAIN_ID", "0"), scene="scene/scene.json",
+    report.update(ros_domain_id=os.environ.get("ROS_DOMAIN_ID", "0"),
+                  dds_profile=os.environ.get("FASTDDS_DEFAULT_PROFILES_FILE"), scene="scene/scene.json",
                   simulated_rear_axle_height_m=.0325)
     if shutil.which("nvidia-smi"):
         info = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version,memory.total",
@@ -129,20 +132,51 @@ def run(args, report):
                                   "--frame-id", parent, "--child-frame-id", child,
                                   "--x", str(x), "--y", str(y), "--z", str(z),
                                   "--roll", str(roll), "--pitch", str(pitch), "--yaw", str(yaw)])
+        probe = None
+        if diagnose:
+            probe = start("gz_probe", [sys.executable, str(HERE / "gz_probe.py"), "--output", str(out)])
+            wait_for((out / "gz_probe.ready").is_file, children, 30, "Gazebo 側の診断購読の準備")
         receiver = start("capture", [sys.executable, str(HERE / "capture.py"), "--output", str(out),
                                      "--mode", mode, "--duration", str(args.duration)])
         wait_for((out / f"{mode}.ready").is_file, children, 70, "左右カメラの ROS publisher と subscriber の接続")
         wait_for(unpause, children, 45, "Gazebo の再生開始")
-        wait_for(lambda: receiver.poll() is not None,
-                 {k: v for k, v in children.items() if v is not receiver},
+        servers = {k: v for k, v in children.items() if v is not receiver and v is not probe}
+        wait_for(lambda: receiver.poll() is not None, servers,
                  max(150, args.duration * (11 if mode == "video" else 1) + 120), "ステレオ計測の完了")
         exit_code = receiver.returncode
+        if probe is not None:
+            if not (out / "benchmark.json").is_file():
+                raise RuntimeError("ROS の計測区間を取得できません。capture.log を確認してください")
+            wait_for(lambda: probe.poll() is not None, servers, 20, "Gazebo 側の診断集計")
+            if probe.returncode != 0:
+                raise RuntimeError("Gazebo 側の集計に失敗しました。gz_probe.log と benchmark.json を確認してください")
 
     metrics_path = out / f"{mode}.json"
     if not metrics_path.is_file():
         raise RuntimeError("受信結果を取得できません。capture.log を確認してください")
     metrics = json.loads(metrics_path.read_text())
     report["capture_status"] = metrics["status"]
+    if diagnose:
+        gz = json.loads((out / "gz_probe.json").read_text())
+        report["gz_probe"] = "gz_probe.json"
+        window = "ROS と同じ計測区間" if gz["window"] == "ros_measurement" else "ROS 計測開始前を含む全区間"
+        print(f"Gazebo（{window} {gz['measurement_wall_s']:.1f} 秒）  左 {gz['received_images']['left']} 枚 / "
+              f"右 {gz['received_images']['right']} 枚  同時刻 {gz['matching_stamps']} 組 "
+              f"({gz['paired_wall_hz']:.2f} 組/秒)", flush=True)
+        rtf = gz["world"]["real_time_factor"]
+        if rtf is not None:
+            print(f"Gazebo 時間の進み {rtf:.3f} シミュレーション秒/実秒", flush=True)
+    if "received_images" in metrics:
+        eyes = metrics["received_images"]
+        print(f"ROS 受信  左 {eyes['left']} 枚 / 右 {eyes['right']} 枚  "
+              f"同時刻・順序通り {metrics['unique_ordered_pairs']} 組", flush=True)
+        if diagnose:
+            pairing = metrics["pairing"]
+            print(f"ROS 左右の共通時刻 {pairing['shared_image_stamps']} 組、"
+                  f"照合バッファから外れた後に相手が届いたもの {pairing['shared_stamps_evicted_before_match']} 組")
+            counters = metrics.get("udp_namespace_counter_deltas")
+            if counters is not None:
+                print(f"Notebook 全体の UDP 受信バッファ不足エラー増分 {counters['RcvbufErrors']}")
     if metrics["status"] == "error" or exit_code not in (0, 2):
         raise RuntimeError(metrics.get("error", f"capture exit {exit_code}"))
     report["motion"] = inspect_motion(scene_dir, scene, metrics)
@@ -153,21 +187,23 @@ def run(args, report):
                         "-filter_complex", "hstack=inputs=2", "-c:v", "libx264", "-crf", "19",
                         "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out / "stereo.mp4")],
                        check=True, timeout=max(60, args.duration * 4))
-    print(f"ROS 左右ペア {metrics['unique_ordered_pairs']} 組、実時間 {metrics['paired_wall_hz']:.2f} 組/秒",
-          flush=True)
+        print(f"動画 {metrics['video_frames']} フレーム中、前の画像を再表示 {metrics['held_video_frames']} フレーム")
+    print(f"ROS 実時間 {metrics['paired_wall_hz']:.2f} 組/秒", flush=True)
+    if mode == "benchmark":
+        print("90 Hz 判定 " + ("達成" if metrics["pass_90hz"] else "未達"), flush=True)
     return exit_code
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--mode", choices=("benchmark", "video"), required=True)
+    parser.add_argument("--mode", choices=("benchmark", "video", "diagnose"), required=True)
     parser.add_argument("--duration", type=float)
     parser.add_argument("--camera-height", type=float, default=.12)
     parser.add_argument("--camera-pitch-deg", type=float, default=0)
     args = parser.parse_args()
     if args.duration is None:
-        args.duration = 10.0 if args.mode == "video" else 60.0
+        args.duration = {"video": 10.0, "benchmark": 60.0, "diagnose": 20.0}[args.mode]
     if not math.isfinite(args.duration) or args.duration <= 0:
         parser.error("duration must be finite and positive")
     args.output = args.output.resolve()

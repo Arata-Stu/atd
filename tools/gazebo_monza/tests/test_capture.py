@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import capture
@@ -33,6 +33,8 @@ class PairTests(unittest.TestCase):
         self.assertEqual(report["duplicate_images"], {"left": 0, "right": 3})
         self.assertEqual(report["unpaired_images"], {"left": 0, "right": 1})
         self.assertEqual(report["out_of_order_pairs"], 1)
+        self.assertEqual(report["pairing"]["shared_image_stamps"], 4)
+        self.assertEqual(report["pairing"]["shared_stamps_evicted_before_match"], 0)
         self.assertEqual(report["missing_sim_slots_between_pairs_estimate"], 1)
         self.assertFalse(capture.benchmark_passes(report))
 
@@ -46,6 +48,34 @@ class PairTests(unittest.TestCase):
         self.assertEqual(slow["paired_wall_hz"], 45)
         self.assertAlmostEqual(slow["paired_sim_hz"], 90)
         self.assertFalse(capture.benchmark_passes(slow))
+
+    def test_per_eye_delivery_and_overflow_of_live_pairing_buffer(self):
+        pairs = capture.StereoPairs()
+        for i in range(20):
+            pairs.feed("left", stereo_stamp(i), i / 90)
+        for i in (0, 1, 4, 9, 19):
+            pairs.feed("right", stereo_stamp(i), 0.5 + i / 90)
+        result = pairs.summary(1)
+        self.assertEqual(result["received_images"], {"left": 20, "right": 5})
+        self.assertEqual(result["unique_ordered_pairs"], 3)
+        self.assertEqual(result["pairing"]["shared_image_stamps"], 5)
+        self.assertEqual(result["pairing"]["shared_stamps_evicted_before_match"], 2)
+        left, right = (result["image_streams"][side] for side in capture.TOPICS)
+        self.assertAlmostEqual(left["unique_sim_hz"], 90)
+        self.assertEqual(left["unique_wall_hz"], 20)
+        self.assertEqual(right["unique_wall_hz"], 5)
+        self.assertEqual(right["missing_sim_slots_between_images_estimate"], 15)
+        self.assertEqual((right["first_sim_ns"], right["last_sim_ns"]), (0, stereo_stamp(19)))
+        self.assertFalse(capture.benchmark_passes(result))
+
+    def test_udp_counters_linux_and_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            snmp = Path(directory) / "snmp"
+            self.assertIsNone(capture.udp_error_counters(snmp))
+            snmp.write_text("Udp: InDatagrams InErrors RcvbufErrors SndbufErrors\nUdp: 200 5 4 1\n")
+            self.assertEqual(capture.udp_error_counters(snmp), {"InErrors": 5, "RcvbufErrors": 4, "SndbufErrors": 1})
+            snmp.write_text("Icmp: InErrors\nIcmp: 0\n")
+            self.assertIsNone(capture.udp_error_counters(snmp))
 
     def test_input_geometry_and_row_padding(self):
         pixel_row = bytes(range(256)) * 2 + bytes(128)
@@ -66,7 +96,7 @@ class CaptureLoopTests(unittest.TestCase):
         callbacks = {}
         raw = bytes(640 * 480)
 
-        def spin_once(node, timeout_sec):
+        def spin_once(timeout_sec):
             if matched and clock.next_frame < frame_count:
                 stamp = stereo_stamp(clock.next_frame)
                 clock.now += 1.0 / 90
@@ -91,15 +121,21 @@ class CaptureLoopTests(unittest.TestCase):
 
         node = SimpleNamespace(create_subscription=subscribe, destroy_node=lambda: None,
                                destroy_subscription=lambda sub: callbacks.pop(sub.topic))
+        executor = Mock(spin_once=spin_once)
         ros = SimpleNamespace(init=lambda: None, create_node=lambda name: node,
-                              spin_once=spin_once, ok=lambda: True, try_shutdown=lambda: None)
+                              ok=lambda: True, try_shutdown=lambda: None)
         fake_modules = {"rclpy": ros, "rclpy.qos": SimpleNamespace(qos_profile_sensor_data=object()),
+                        "rclpy.executors": SimpleNamespace(SingleThreadedExecutor=lambda: executor),
                         "sensor_msgs": SimpleNamespace(), "sensor_msgs.msg": SimpleNamespace(Image=object, CameraInfo=object)}
         args = SimpleNamespace(output=directory, mode="benchmark", duration=1.0, warmup=0.2,
                                startup_timeout=0.5, video_timeout=100.0)
         report = {}
-        with patch.dict(sys.modules, fake_modules), patch.object(capture.time, "monotonic", lambda: clock.now):
+        counters = [{"InErrors": i, "RcvbufErrors": i, "SndbufErrors": 0} for i in (5, 7)]
+        with patch.dict(sys.modules, fake_modules), patch.object(capture.time, "monotonic", lambda: clock.now), \
+                patch.object(capture, "udp_error_counters", side_effect=counters):
             status = capture.capture(args, report)
+        executor.add_node.assert_called_once_with(node)
+        executor.shutdown.assert_called_once_with()
         return status, report
 
     def test_fixed_window_after_warmup_and_silent_startup(self):
@@ -111,6 +147,8 @@ class CaptureLoopTests(unittest.TestCase):
             self.assertEqual(report["stereo_calibration"]["stamp_ns"], 0)
             self.assertAlmostEqual(report["stereo_calibration"]["baseline_from_projection_m"], 0.095)
             self.assertAlmostEqual(report["measurement_wall_s"], 1)
+            self.assertAlmostEqual(report["measurement_end_monotonic_s"] - report["measurement_start_monotonic_s"], 1)
+            self.assertEqual(report["udp_namespace_counter_deltas"], {"InErrors": 2, "RcvbufErrors": 2, "SndbufErrors": 0})
         with tempfile.TemporaryDirectory() as root:
             with self.assertRaisesRegex(TimeoutError, "No synchronized"):
                 self.run_receiver(Path(root), 0)

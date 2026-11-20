@@ -6,11 +6,13 @@ source "$project/scripts/lib/detect_host.sh"
 
 usage() {
     cat <<'HELP'
-使い方: ./scripts/gazebo.sh prepare|run|video|benchmark [--duration 秒] [--camera-height m] [--camera-pitch-deg 度] [--dry-run]
+使い方: ./scripts/gazebo.sh prepare|run|video|benchmark|diagnose [--duration 秒] [--dds shm|udp] [--camera-height m] [--camera-pitch-deg 度] [--dry-run]
   prepare     Gazebo 専用の Docker をビルドし、増分・ビルド中の最大ディスク使用量を記録
   run         動画を記録し、別セッションで配信を計測（引数なしの既定）
   video       左右の車載動画を保存（既定 10 シミュレーション秒）
   benchmark   録画を止めた状態で ROS 2 の受信を計測（既定 60 実時間秒）
+  diagnose    同じ計測区間に Gazebo 側でも画像とシミュレーション時刻を観測（既定 20 実時間秒）
+  --dds shm|udp   Gazebo コンテナ内に Fast DDS 共有メモリを追加（shm、既定）、または従来の UDP のみ（udp）
   --camera-height m   地面から左右光学中心までの高さを指定
   --camera-pitch-deg 度   カメラの下向き角度を指定（既定 0）
   --dry-run           対象イメージ・保存先・実行コマンドを表示
@@ -26,13 +28,17 @@ show_command() { printf '%q ' "$@"; printf '\n'; }
 
 action=run
 if [[ $# -gt 0 && "$1" != -* ]]; then action="$1"; shift; fi
-case "$action" in prepare|run|video|benchmark) ;; *) fail "不明な操作: $action";; esac
+case "$action" in prepare|run|video|benchmark|diagnose) ;; *) fail "不明な操作: $action";; esac
 dry_run=false
+dds=shm
 sim_args=()
 while (( $# )); do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --dry-run) dry_run=true; shift ;;
+        --dds)
+            [[ "$action" != prepare && ( "${2:-}" = shm || "${2:-}" = udp ) ]] || fail "走行時に --dds shm または --dds udp を指定してください"
+            dds="$2"; shift 2 ;;
         --duration|--camera-height|--camera-pitch-deg)
             [[ "$action" != prepare ]] || fail "$1 は走行時に指定してください"
             [[ $# -ge 2 ]] || fail "$1 の値が必要です"
@@ -80,10 +86,14 @@ if ! $dry_run; then
     flock -n 9 || fail "同じ ROS domain の Gazebo が実行中です: $domain"
 fi
 run_mode() {
-    local mode="$1" out size status
-    out="$(new_output "$mode")"
+    local mode="$1" out size status profile=/workspaces/atd/docker/middleware_profiles/fastdds.xml
+    out="$(new_output "$mode-$dds")"
     local -a command=(docker run --rm --init --pull=never --gpus all --network host
         --user "$(id -u):$(id -g)")
+    if [[ "$dds" = shm ]]; then
+        profile=/workspaces/atd/docker/gazebo_monza/fastdds.xml
+        command+=(--shm-size=128m)
+    fi
     # PRIME / hybrid graphics 等で render node が存在するホストは既存グループを引き継ぐ。
     local gpu_device
     for gpu_device in /dev/dri/renderD*; do
@@ -93,13 +103,14 @@ run_mode() {
     command+=(--tmpfs "/home/simulator:uid=$(id -u),gid=$(id -g),mode=0700"
         --env HOME=/home/simulator --env XDG_RUNTIME_DIR=/home/simulator
         --env GZ_SIM_SYSTEM_PLUGIN_PATH=/workspaces/atd/tools/gazebo_monza
+        --env "FASTDDS_DEFAULT_PROFILES_FILE=$profile"
         --env NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute
         --env "ROS_DOMAIN_ID=$domain" --env "GZ_PARTITION=atd_monza_${out##*/}"
         --mount "type=bind,src=$project,dst=/workspaces/atd,readonly"
         --mount "type=bind,src=$out,dst=/output" "$image"
         python3 /workspaces/atd/tools/gazebo_monza/run.py --mode "$mode" --output /output)
     if (( ${#sim_args[@]} )); then command+=("${sim_args[@]}"); fi
-    printf '%s  ROS_DOMAIN_ID=%s  保存先 %s\n' "$mode" "$domain" "$out"
+    printf '%s  DDS=%s  ROS_DOMAIN_ID=%s  保存先 %s\n' "$mode" "$dds" "$domain" "$out"
     if $dry_run; then show_command "${command[@]}"; return; fi
     status=0
     "${command[@]}" || status=$?

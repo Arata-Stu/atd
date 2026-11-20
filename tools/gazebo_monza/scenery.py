@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from functools import lru_cache
+from itertools import chain
 import json
 from math import ceil, cos, dist, pi, sin
 from pathlib import Path
@@ -12,6 +13,8 @@ from geography import project
 SCENERY_FILE = Path(__file__).resolve().parent / 'reference' / 'monza_scenery.geojson'
 SCENERY_LAP_FILE = SCENERY_FILE.with_name('monza_lap_scenery.geojson')
 MONZA_BACKGROUND = SCENERY_FILE.with_name('monza_background.geojson')
+MONZA_FOREST_MARGINS = SCENERY_FILE.with_name('monza_forest_margins.geojson')
+MONZA_ASCARI = SCENERY_FILE.with_name('monza_ascari.geojson')
 
 
 class Features:
@@ -37,7 +40,9 @@ class Features:
 
 @lru_cache(maxsize=2)
 def monza_features(lap=False):
-    files = [SCENERY_FILE, SCENERY_LAP_FILE, MONZA_BACKGROUND] if lap else [SCENERY_FILE]
+    files = [SCENERY_FILE]
+    if lap:
+        files.extend([SCENERY_LAP_FILE, MONZA_BACKGROUND, MONZA_FOREST_MARGINS, MONZA_ASCARI])
     return Features(files, project)
 
 
@@ -45,10 +50,14 @@ def polygons(kind, lap=False):
     return monza_features(lap).polygons(kind)
 
 
-def flat_triangles(data, kind, z):
-    for props, (exterior,) in data.polygons(kind):
+def polygon_triangles(polygons, z):
+    for props, (exterior,) in polygons:
         for triangle in props['triangles']:
             yield [(*exterior[i], z) for i in triangle]
+
+
+def flat_triangles(data, kind, z):
+    return polygon_triangles(data.polygons(kind), z)
 
 
 def sand_triangles(lap=False):
@@ -86,6 +95,7 @@ def woodland(lap=False, *, data=None):
     """Deterministic stand-ins within mapped woodland. Neither stems nor species were surveyed."""
     aspects = {'oak': 1.14, 'pine': .75, 'poplar': .29}
     by_species = defaultdict(list)
+    stems = []
     # Monza's additional forest polygons were already clipped around structures.
     stand_rings = [rings for _, rings in (data or monza_features()).polygons('grandstand')]
     data = data or monza_features(lap)
@@ -93,6 +103,7 @@ def woodland(lap=False, *, data=None):
         props = tree['properties']
         rng = Random(props['osm_id'])
         x, y = data.project(*tree['geometry']['coordinates'][:2])
+        stems.append((x, y))
         height = float(props.get('height_m') or rng.uniform(9, 18)) * .1
         species = rng.choice(('oak', 'poplar', 'pine'))
         angle = rng.uniform(0, pi)
@@ -101,8 +112,10 @@ def woodland(lap=False, *, data=None):
             dx, dy = radius*cos(a), radius*sin(a)
             by_species[species].append([(x-dx, y-dy, 0), (x+dx, y+dy, 0),
                                         (x+dx, y+dy, height), (x-dx, y-dy, height)])
-    for props, rings in data.polygons('woodland'):
-        rng = Random(props['osm_id'])
+    for props, rings in chain(data.polygons('woodland'), data.polygons('scrub')):
+        margin = props.get('placement') == 'forest_margin'
+        scrub = props['kind'] == 'scrub'
+        rng = Random(props['model_seed'] if margin else props['osm_id'])
         xs, ys = zip(*rings[0])
         xmin, ymin = min(xs), min(ys)
         # The lap supplement is already clipped around raceways, stands and
@@ -114,10 +127,20 @@ def woodland(lap=False, *, data=None):
                 y = ymin + (iy + rng.uniform(.10, .90)) * spacing
                 species = rng.choice(('oak', 'oak', 'pine', 'poplar'))
                 height = rng.uniform(1.25, 2.35)
+                if scrub:
+                    # Low and spreading broadleaf silhouettes inside the mapped scrub bed.
+                    species, height = 'oak', rng.uniform(.27, .57)
+                elif margin:
+                    # Layer young broadleaf growth among the adult trees and leave clearings.
+                    species = rng.choice(('oak', 'oak', 'poplar'))
+                    if rng.random() < .30:
+                        height = rng.uniform(.55, 1.05)
                 angle = rng.uniform(0, pi)
                 if not _inside(x, y, rings):
                     continue
-                radius = height * aspects[species] / 2
+                if margin and any(abs(x-px) < .65 and (x-px)**2+(y-py)**2 < .65**2 for px, py in stems):
+                    continue
+                radius = height * (2.3 if scrub else aspects[species]) / 2
                 directions = [(radius*cos(a), radius*sin(a)) for a in (angle, angle + pi/2)]
                 ends = [(x + sign*dx, y + sign*dy) for dx, dy in directions for sign in (-1, 1)]
                 if not all(_inside(px, py, rings) for px, py in ends):
@@ -126,6 +149,7 @@ def woodland(lap=False, *, data=None):
                     continue
                 if any(_inside(px, py, footprint) for px, py in [(x, y), *ends] for footprint in stand_rings):
                     continue
+                stems.append((x, y))
                 for dx, dy in directions:
                     by_species[species].append([(x-dx, y-dy, 0), (x+dx, y+dy, 0),
                                                 (x+dx, y+dy, height), (x-dx, y-dy, height)])
@@ -192,10 +216,13 @@ def grandstand(lap=False, *, data=None):
                                  height-.025, height-.005, rise_u=.06-height))
         if props.get('covered'):
             roof = height + .36
-            for u in columns:
+            # The temporary stand beside the fan zone has open end bays.
+            first, last = props.get('canopy_bays', (0, sections))
+            for u in columns[first:last + 1]:
                 supports.extend(_box(front, back, u-half_u, u+half_u, v-half_v, v+half_v,
                                      height, roof+.04))
-            canopies.extend(_box(front, back, 0, 1, .02, 1, roof, roof+.035, rise_v=.04))
+            canopies.extend(_box(front, back, first/sections, last/sections, .02, 1,
+                                 roof, roof+.035, rise_v=.04))
     yield 'stand_decks', (.55, .55, .53), decks
     yield 'stand_benches', (.34, .39, .42), benches
     yield 'stand_steel', (.24, .27, .28), supports

@@ -27,11 +27,24 @@ class LapSceneryTest(unittest.TestCase):
                     self.assertIn('background_sha256', metadata['geography'])
                     for name in ('grid_white_paint', 'start_gantry_housings', 'monza_bridge_roof',
                                  'monza_guardrail', 'monza_pit_wall_green', 'monza_historic_wall',
-                                 'pit_podium_concrete', 'pit_podium_handrails', 'monza_radio_masts'):
+                                 'pit_podium_concrete', 'pit_podium_handrails', 'monza_radio_masts',
+                                 'lesmo_tyre_shoulders', 'lesmo_marshal_screens', 'ascari_panel_face',
+                                 'ascari_catch_mesh', 'ascari_recessed_kerb', 'junior_merge_centerline'):
                         visual = sdf.find(f".//visual[@name='{name}']")
                         self.assertIsNotNone(visual, name)
                         self.assertTrue(Path(visual.findtext('geometry/mesh/uri')).is_file(), name)
                     self.assertIn('trackside_sha256', metadata['geography'])
+                    self.assertIn('ascari_sha256', metadata['geography'])
+                    self.assertIn('forest_margins_sha256', metadata['geography'])
+                    channel = (directory / 'ascari_recessed_kerb.obj').read_text().splitlines()
+                    heights = {float(line.split()[3]) for line in channel if line.startswith('v ')}
+                    self.assertEqual(heights, {0., -.003, -.001})
+                    traps = sdf.find(".//visual[@name='lesmo_ascari_gravel']")
+                    self.assertTrue(Path(traps.findtext('material/pbr/metal/albedo_map')).is_file())
+                    plain_sand = sdf.find(".//visual[@name='sand']")
+                    sand_faces = sum(row.startswith('f ') for visual in (traps, plain_sand)
+                                     for row in Path(visual.findtext('geometry/mesh/uri')).read_text().splitlines())
+                    self.assertEqual(sand_faces, sum(1 for _ in scenery.sand_triangles(True)))
                     net = sdf.find(".//visual[@name='monza_catch_mesh']")
                     self.assertEqual(net.findtext('material/double_sided'), 'true')
                     tile = Path(net.findtext('material/pbr/metal/albedo_map'))
@@ -45,6 +58,8 @@ class LapSceneryTest(unittest.TestCase):
                 else:
                     self.assertNotIn('background_sha256', metadata['geography'])
                     self.assertIsNone(sdf.find(".//model[@name='monza_trackside']"))
+                    self.assertIsNone(sdf.find(".//visual[@name='lesmo_ascari_gravel']"))
+                    self.assertIsNone(sdf.find(".//visual[@name='ascari_recessed_kerb']"))
 
     def test_background_has_mapped_objects_beyond_old_clipping_plane(self):
         from math import cos, sin, tan
@@ -87,7 +102,7 @@ class LapSceneryTest(unittest.TestCase):
         short, full = planes(False), planes(True)
         self.assertLess(short, full)
         self.assertLess(len(full) // 2, 3000)
-        regions = [rings for _, rings in scenery.polygons('woodland', True)]
+        regions = [rings for kind in ('woodland', 'scrub') for _, rings in scenery.polygons(kind, True)]
         edges, _ = geography.load_track()
         for a, b in full - short:
             self.assertTrue(any(scenery._inside(*a, region) and scenery._inside(*b, region)

@@ -9,8 +9,10 @@ from pathlib import Path
 import shutil
 import xml.etree.ElementTree as ET
 
-from geography import cross_sections, kerb_intervals, load_track, reference_metadata
+from geography import ascari_entry_kerb, cross_sections, kerb_intervals, load_track, reference_metadata
 import circuits
+import monza_ascari
+import monza_lesmo
 import monza_start_grid
 import monza_trackside
 import scenery
@@ -23,8 +25,11 @@ OPTICAL_FRAMES = {"left": "camera_infra1_optical_frame", "right": "camera_infra2
 KERB_BLOCK_M = .20
 # Full widths in RC metres. The OSM ways provide only the centre of these pavements.
 ALTERNATE_WIDTH_M = {"bypass_centerline": .50, "motorcycle_centerline": .72}
+LAP_ALTERNATE_WIDTH_M = {**ALTERNATE_WIDTH_M, "junior_merge_centerline": .70}
 CAMERA_FAR_M = 45
 MONZA_LAP_FAR_M = 100
+# The two Lesmo traps and three Ascari traps in the Monza lap OSM snapshot.
+LESMO_ASCARI_GRAVEL = {231025694, 231025696, 231026023, 231026026, 231026028}
 
 
 def default_travel_seconds(route, circuit="monza"):
@@ -161,12 +166,22 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
         surface(link, output, "grass", [grass], (1, 1, 1), 1.0)
     for kind, color, z in (("grass", (.36, .51, .14), -.0035), ("water", (.11, .32, .40), -.003),
                            ("sand", (.61, .53, .39), -.002)):
+        polygons = data.polygons(kind)
+        if kind == "sand" and circuit == "monza" and lap:
+            gravel, other = [], []
+            for item in polygons:
+                target = gravel if item[0]['osm_id'] in LESMO_ASCARI_GRAVEL else other
+                target.append(item)
+            surface(link, output, "lesmo_ascari_gravel", scenery.polygon_triangles(gravel, z),
+                    (1, 1, 1), .20, texture_name="runoff_gravel.jpg")
+            polygons = other
         surface(link, output, "mapped_" + kind if kind == "grass" else kind,
-                scenery.flat_triangles(data, kind, z), color)
-    secondary_widths = ALTERNATE_WIDTH_M if circuit == "monza" else {"pit_lane": .65}
+                scenery.polygon_triangles(polygons, z), color)
     if circuit == "monza" and lap:
+        secondary_widths = LAP_ALTERNATE_WIDTH_M
         asphalt_texture, asphalt_span = "monza_asphalt.jpg", 3.2
     else:
+        secondary_widths = ALTERNATE_WIDTH_M if circuit == "monza" else {"pit_lane": .65}
         asphalt_texture, asphalt_span = "floor.jpg", .8
     for kind, width in secondary_widths.items():
         faces = [face for props, points in data.lines(kind)
@@ -182,9 +197,11 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
     surface(link, output, "floor", road, (1, 1, 1), asphalt_span, texture_name=asphalt_texture)
     paint = []
     kerbs = [[], []]
+    recessed_faces = []
     for side, spans in kerb_intervals.items():
         span_index = 0
         points = source[side]
+        recessed_span = ascari_entry_kerb(points) if circuit == "monza" and lap and side == "right" else None
         normals = list(offset_normals(points, side))
         distance = 0.
         for i, a in enumerate(points):
@@ -203,6 +220,15 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
 
             paint.append([border(distance, -.022, .0007), border(end, -.022, .0007),
                           border(end, -.002, .0007), border(distance, -.002, .0007)])
+            if recessed_span:
+                start = max(distance, recessed_span[0])
+                stop = min(end, recessed_span[1])
+                if stop > start:
+                    # A shallow concrete channel beside the pavement. The low
+                    # point stays above the mapped grass at z=-0.0035.
+                    for (u, h), (v, g) in (((0, 0), (.065, -.003)), ((.065, -.003), (.10, -.001))):
+                        recessed_faces.append([border(start, u, h), border(stop, u, h),
+                                               border(stop, v, g), border(start, v, g)])
             # Divide the kerb at fixed arc-length stations; the stripe pattern
             # continues through each vertex of the mapped edge, even on a tight bend.
             while span_index < len(spans) and spans[span_index][1] <= distance:
@@ -226,6 +252,7 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
     surface(link, output, "edge_paint", paint, (.85, .86, .82))
     surface(link, output, "kerb_red", kerbs[0], (.60, .028, .022))
     surface(link, output, "kerb_white", kerbs[1], (.90, .89, .82))
+    surface(link, output, "ascari_recessed_kerb", recessed_faces, (.52, .51, .48))
 
     if circuit == "monza" and lap:
         for name, color, faces in monza_start_grid.details(source, data):
@@ -236,8 +263,10 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
             else:
                 surface(link, output, name, faces, color, face_up=False)
         _, trackside = model(world, "monza_trackside")
-        for name, color, faces in monza_trackside.geometry(source, data):
-            if name == "monza_catch_mesh":
+        for name, color, faces in chain(monza_trackside.geometry(source, data),
+                                        monza_lesmo.details(source, data),
+                                        monza_ascari.details(source, data)):
+            if name in ("monza_catch_mesh", "ascari_catch_mesh"):
                 surface(trackside, output, name, faces, color, .10, face_up=False,
                         cutout=True, texture_name="monza_catch_mesh.png")
             elif name in ("monza_weathered_concrete", "monza_jointed_concrete", "monza_historic_wall"):
@@ -313,7 +342,7 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
             "scenery_sha256": sha256(scenery.SCENERY_FILE.read_bytes()).hexdigest(),
             "modelled": ["stand elevations and seats", "individual trees", "level terrain",
                          "kerb extents and profile", "width of alternate pavements", "surface appearance"],
-            "alternate_width_rc_m": ALTERNATE_WIDTH_M,
+            "alternate_width_rc_m": LAP_ALTERNATE_WIDTH_M if lap else ALTERNATE_WIDTH_M,
         }
         if lap:
             geography.update(lap_scenery_file=f"reference/{scenery.SCENERY_LAP_FILE.name}",
@@ -321,11 +350,20 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                              background_file=f"reference/{scenery.MONZA_BACKGROUND.name}",
                              background_sha256=sha256(scenery.MONZA_BACKGROUND.read_bytes()).hexdigest())
             geography.update(trackside_file=f"reference/{monza_trackside.REFERENCE.name}",
-                             trackside_sha256=sha256(monza_trackside.REFERENCE.read_bytes()).hexdigest())
+                             trackside_sha256=sha256(monza_trackside.REFERENCE.read_bytes()).hexdigest(),
+                             ascari_file=f"reference/{monza_ascari.REFERENCE.name}",
+                             ascari_sha256=sha256(monza_ascari.REFERENCE.read_bytes()).hexdigest(),
+                             forest_margins_file=f"reference/{scenery.MONZA_FOREST_MARGINS.name}",
+                             forest_margins_sha256=sha256(scenery.MONZA_FOREST_MARGINS.read_bytes()).hexdigest())
             geography["modelled"].extend(["grid and pavement repairs", "pit and stand facades",
                                          "asphalt tone at RC scale", "grandstand catch fencing",
                                          "podium elevations and railings", "radio mast profiles",
-                                         "barrier sections and bridge elevations"])
+                                         "barrier sections and bridge elevations",
+                                         "Lesmo and Ascari kerb extents and gravel appearance",
+                                         "Lesmo tyre banks and marshal light positions",
+                                         "Ascari and back-straight trackside equipment",
+                                         "tree and scrub placement in mapped forest margins",
+                                         "Junior circuit merge width"])
     else:
         source, points, project = circuits.load_lap(circuit)
         kerbs = circuits.estimated_kerbs(source, points)

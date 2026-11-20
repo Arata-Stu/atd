@@ -18,9 +18,26 @@ LAP_START_LON_LAT = (9.2811729, 45.6189632)
 # indices on the pinned rings anchor the paint near the apex, not a kerb survey.
 # T1 nodes 14298513142 / 14298513151; T2 nodes 14298365021 / 14298365028.
 _CHICANE_KERB_VERTICES = {"right": (43, 52), "left": (49, 56)}
-# Inside of the final right-hand bend, Curva Alboreto. Its extent on the
-# mapped right edge (way 1569604642 v1) is an estimate, as for Rettifilo.
-_ALBORETO_KERB_VERTICES = (571, 598)
+# Additional GP-lap kerbs, ordered in the direction of travel along each
+# pinned OSM edge. Endpoints follow the bend or track-out rather than an
+# assumed offset along the centreline. The SRO Monza 2023 track-limit photos
+# show the outside kerbs at the exits of T6, T7 and T10; their lengths and the
+# dimensions of the replacement kerbs after the 2024 resurfacing are estimated.
+_LAP_KERB_VERTICES = {
+    "left": (
+        (182, 199),  # T6 Lesmo 1 exit
+        (217, 225),  # T7 Lesmo 2 exit
+        (283, 291),  # T8 Ascari first apex
+        (307, 315),  # T10 Ascari final apex
+    ),
+    "right": (
+        (222, 249),  # T6 Lesmo 1 apex
+        (273, 290),  # T7 Lesmo 2 apex
+        (410, 431),  # T9 Ascari middle apex
+        (446, 466),  # T10 exit onto the back straight
+        (571, 598),  # T11 Curva Alboreto apex
+    ),
+}
 
 
 def local_projection(origin_lon, origin_lat):
@@ -90,10 +107,17 @@ def kerb_spans(edges):
 def kerb_intervals(edges, lap):
     spans = {side: [interval] for side, interval in kerb_spans(edges).items()}
     if lap:
-        stations = _stations(edges["right"])
-        start, end = _ALBORETO_KERB_VERTICES
-        spans["right"].append((stations[start], stations[end]))
+        for side, pairs in _LAP_KERB_VERTICES.items():
+            stations = _stations(edges[side])
+            spans[side].extend((stations[start], stations[end]) for start, end in pairs)
     return spans
+
+
+def ascari_entry_kerb(right):
+    # FIA 2026 §27 starts the recessed kerb at the 100 m board. Vertex 383
+    # on the pinned right ring is at lap s=352.25, beside the modelled board.
+    start = _stations(right)[383]
+    return start, start + 100 * SCALE
 
 
 def _point_at(points, stations, s):

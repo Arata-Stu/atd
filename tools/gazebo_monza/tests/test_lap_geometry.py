@@ -6,7 +6,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from circuits import circuit_ids, load_lap, track_data
-from geography import SCALE, load_track, project, reference_metadata
+from geography import (SCALE, _point_at, _stations, ascari_entry_kerb, kerb_intervals,
+                       load_track, project, reference_metadata)
 
 
 class LapGeometryTests(unittest.TestCase):
@@ -62,6 +63,37 @@ class LapGeometryTests(unittest.TestCase):
         self.assertNotIn("start_finish", reference_metadata())
         with self.assertRaises(ValueError):
             load_track("pit")
+
+    def test_lesmo_and_ascari_kerbs_follow_the_correct_edges(self):
+        # Sample lap chainage independently of the left/right boundary lengths.
+        lap = kerb_intervals(self.edges, True)
+        short = kerb_intervals(self.edges, False)
+        for side, vertices in self.edges.items():
+            arc = _stations(vertices)
+            self.assertEqual(short[side], lap[side][:1])
+            self.assertTrue(all(a[1] < b[0] for a, b in zip(lap[side], lap[side][1:])))
+            expected = {
+                225: "right", 236: "left",   # Lesmo 1 apex and track-out
+                257: "right", 265: "left",   # Lesmo 2 apex and track-out
+                365: "left", 375: "right", 384: "left", 391: "right",
+                340: None, 420: None,        # straights on either side of Ascari
+            }
+            for s, kerb_side in expected.items():
+                with self.subTest(station=s, side=side):
+                    xy = min(self.poses, key=lambda p: abs(p[0]-s))[1:3]
+                    i = min(range(len(vertices)), key=lambda j: dist(vertices[j], xy))
+                    on_kerb = any(start <= arc[i] <= end for start, end in lap[side])
+                    self.assertEqual(on_kerb, side == kerb_side)
+
+    def test_recessed_entry_kerb_starts_at_the_t8_braking_board(self):
+        right = self.edges['right']
+        start, end = ascari_entry_kerb(right)
+        entry = _point_at(right, _stations(right), start)
+        nearest_pose = min(self.poses, key=lambda pose: dist(pose[1:3], entry))
+        self.assertAlmostEqual(nearest_pose[0], 352.35, delta=.25)
+        self.assertAlmostEqual(end-start, 100*SCALE)
+        for raised_start, raised_end in kerb_intervals(self.edges, True)['right']:
+            self.assertTrue(end < raised_start or start > raised_end)
 
     def test_offset_roads_keep_both_triangles_facing_up_through_every_corner(self):
         def signed_area(a, b, c):

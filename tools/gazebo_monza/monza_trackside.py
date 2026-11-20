@@ -53,17 +53,16 @@ def _post(batch, x, y, dx, dy, width, depth, low, high):
     batch.extend(_beam(a, b, width, low, high))
 
 
-def _grandstand_fence(batches, rail):
+def _grandstand_fence(batches, rail, *, setback=.13):
     """Track-facing catch net behind the left Armco, open at rail ends."""
     columns = []
     for i, (x, y) in enumerate(rail):
         prev, following = rail[max(0, i-1)], rail[min(i+1, len(rail)-1)]
         length = dist(prev, following)
         nx, ny = (prev[1]-following[1])/length, (following[0]-prev[0])/length
-        # At full scale the net stands 1.3 m behind the rail. The top
-        # cantilevers 0.55 m towards the track while clearing the Armco.
-        knee = (x+.13*nx, y+.13*ny)
-        tip = (x+.075*nx, y+.075*ny)
+        # The top cantilevers 0.55 m towards the track at full scale.
+        knee = (x+setback*nx, y+setback*ny)
+        tip = (x+(setback-.055)*nx, y+(setback-.055)*ny)
         columns.append([(*knee, .035), (*knee, .32), (*tip, .38)])
 
     next_post = 0.

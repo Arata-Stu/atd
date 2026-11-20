@@ -14,6 +14,8 @@ Monza 全周の材質はこの `floor.jpg` から作った。骨材の縮尺を�
 
 芝には ambientCG の Grass 005（手続き生成とビットマップを組み合わせた素材）を使った。1K の Color マップの R・G・B にそれぞれ 23・26・4 を加え、8 bit の範囲に収めた。[ambientCG Grass 005](https://ambientcg.com/view?id=Grass005)・[CC0 ライセンス](https://docs.ambientcg.com/license/)
 
+Monza 全周のレズモとアスカリでは、地図に記録された5区画の砂利トラップに `runoff_gravel.jpg` を使う。Charlotte Baglioni 撮影、Dario Barresi 処理の Clean Pebbles の 1K Diffuse JPEG を 512 × 512 に縮小した。写真の幅 2 m に対応して RC 上の 0.20 m ごとに貼る。粒の色や並びは代表素材による近似である。[Poly Haven Clean Pebbles](https://polyhaven.com/a/clean_pebbles)・[CC0 ライセンス](https://polyhaven.com/license)
+
 色調と繰り返し幅はこの RC コースのために選んだ。配信する左右画像は可視光の材質をモノクロで描画したもので、実車 D455 での路面や芝の赤外反射率は未計測。
 
 ## 樹木

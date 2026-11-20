@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import type { Job } from './types';
+import { JobLog } from './JobLog';
 import { Icon } from './ui';
 import { ACTIVE, STATUS } from './job_status';
 import { calibrationHash, receivedBag } from './calibration';
@@ -30,8 +31,8 @@ export function App() {
   const [page, setPage] = useState<Page>(() => PAGES.find(item => '#' + item.id === window.location.hash.split('?')[0])?.id ?? 'map'), [connected, setConnected] = useState(false), [notice, setNotice] = useState<{ message: string; error: boolean } | null>(null);
   const [capture, setCapture] = useState(() =>
     new URLSearchParams(window.location.hash.split('?')[1]).get('view') === 'capture');
-  const [jobs, setJobs] = useState<Job[]>([]), [drawer, setDrawer] = useState(false), [jobId, setJobId] = useState(''), [log, setLog] = useState('');
-  const dirty = useRef(false), selectedJob = useRef('');
+  const [jobs, setJobs] = useState<Job[]>([]), [drawer, setDrawer] = useState(false), [jobId, setJobId] = useState('');
+  const dirty = useRef(false);
   const notify = useCallback((message: string, error = false) => setNotice({ message, error }), []);
   const onDirty = useCallback((value: boolean) => { dirty.current = value; }, []);
   const refreshJobs = useCallback(async () => { const result = await api<{ items: Job[] }>('jobs'); setJobs(result.items); setConnected(true); }, []);
@@ -43,11 +44,6 @@ export function App() {
   }, [refreshJobs]);
   useEffect(() => { const handler = (e: BeforeUnloadEvent) => { if (dirty.current) { e.preventDefault(); e.returnValue = ''; } }; window.addEventListener('beforeunload', handler); return () => window.removeEventListener('beforeunload', handler); }, []);
   useEffect(() => { if (!jobId && jobs.length) setJobId(jobs[0].id); }, [jobs, jobId]);
-  useEffect(() => {
-    if (!drawer || !jobId) return; let cancelled = false; let timer: ReturnType<typeof setTimeout>; selectedJob.current = jobId;
-    async function poll() { try { const result = await api<{ text: string }>(`jobs/${encodeURIComponent(jobId)}/log`); if (!cancelled) setLog(result.text); } catch (e) { if (!cancelled) setLog((e as Error).message); } if (!cancelled) timer = setTimeout(poll, 1800); }
-    setLog(''); void poll(); return () => { cancelled = true; clearTimeout(timer); };
-  }, [drawer, jobId]);
   useEffect(() => {
     function syncCapture(event: HashChangeEvent) {
       const [pageHash, query] = window.location.hash.split('?');
@@ -82,7 +78,8 @@ export function App() {
     setDrawer(false);
     setCapture(next);
   }
-  const received = receivedBag(jobs.find(job => job.id === jobId));
+  const selectedJob = jobs.find(job => job.id === jobId);
+  const received = receivedBag(selectedJob);
   const current = PAGES.find(item => item.id === page)!;
   return <div className={'app-shell' + (page === 'live' && capture ? ' live-capture-shell' : '')}><aside className="app-sidebar"><a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('map'); }} aria-label="ATD Studio ホーム"><span className="brand-mark">A<span/></span><span>ATD<small>STUDIO</small></span></a><div className="workspace-label">WORKSPACE</div><nav aria-label="メインメニュー">{PAGES.map(item => <button key={item.id} aria-label={item.title + ' ' + item.subtitle} title={item.title} className={page === item.id ? 'active' : ''} onClick={() => navigate(item.id)}><Icon name={item.icon} size={20}/><span>{item.title}<small>{item.subtitle}</small></span>{page === item.id && <i/>}</button>)}</nav><div className="sidebar-bottom"><div className="host-card"><span className="host-icon"><Icon name="folder" size={18}/></span><div><strong>Notebook</strong><small>ローカルワークスペース</small></div><span className="status-dot"/></div><p>BUILD · OBSERVE · REFINE</p></div></aside>
     <main className="main-shell"><header className="app-header"><div className="breadcrumb">ワークスペース<Icon name="chevron" size={14}/><strong>{current.title}</strong></div><div className="header-right"><span className={'connection-indicator ' + (connected ? 'online' : '')}><i/>{connected ? 'ローカル接続' : '接続を確認中'}</span><span className="header-separator"/><span className="local-label">ATD / DEVELOPMENT</span></div></header>
@@ -92,6 +89,12 @@ export function App() {
     </main>
     {notice && <div className={'toast ' + (notice.error ? 'error' : '')} role={notice.error ? 'alert' : 'status'}><Icon name={notice.error ? 'info' : 'check'} size={19}/><span>{notice.message}</span><button className="icon-button" aria-label="通知を閉じる" onClick={() => setNotice(null)}><Icon name="close" size={16}/></button></div>}
     <button className={'jobs-trigger ' + (active.length ? 'running' : '')} onClick={() => setDrawer(!drawer)} aria-expanded={drawer}><Icon name="list" size={18}/><span>ジョブ</span><b>{active.length || jobs.length}</b><Icon name={drawer ? 'close' : 'chevron'} size={15}/></button>
-    {drawer && <section className="jobs-drawer" aria-label="ジョブとログ"><header><div><span className="eyebrow">ACTIVITY</span><h3>ジョブとログ</h3></div><button className="icon-button" aria-label="ジョブを閉じる" onClick={() => setDrawer(false)}><Icon name="close"/></button></header><div className="jobs-layout"><div className="jobs-list">{jobs.map(job => <button key={job.id} className={jobId === job.id ? 'selected' : ''} onClick={() => setJobId(job.id)}><span className={'job-state ' + job.status}>{job.cancel_requested && ACTIVE.has(job.status) ? '停止要求中' : STATUS[job.status] || job.status}</span><strong>{job.title || job.kind || job.id}</strong><small>{job.message || job.id}</small></button>)}{!jobs.length && <p className="panel-empty">実行した処理はここに表示されます。</p>}</div><div className="job-log"><div><strong>{jobs.find(job => job.id === jobId)?.title || '実行ログ'}</strong>{received && page !== 'calibration' && <button className="button small" onClick={() => navigate('calibration', received)}>この bag を車両校正へ</button>}{jobs.find(job => job.id === jobId && ACTIVE.has(job.status)) && <button className="button small" disabled={!!jobs.find(job => job.id === jobId)?.cancel_requested} onClick={async () => { try { await api(`jobs/${encodeURIComponent(jobId)}/cancel`, {}); await refreshJobs(); notify('停止を要求しました'); } catch (e) { notify((e as Error).message, true); } }}>{jobs.find(job => job.id === jobId)?.cancel_requested ? '停止要求中' : '停止を要求'}</button>}</div><pre>{log || 'ログはまだありません。'}</pre></div></div></section>}
+    {drawer && <section className="jobs-drawer" aria-label="ジョブとログ"><header><div><span className="eyebrow">ACTIVITY</span><h3>ジョブとログ</h3></div><button className="icon-button" aria-label="ジョブを閉じる" onClick={() => setDrawer(false)}><Icon name="close"/></button></header><div className="jobs-layout"><div className="jobs-list">{jobs.map(job => <button key={job.id} className={jobId === job.id ? 'selected' : ''} onClick={() => setJobId(job.id)}><span className={'job-state ' + job.status}>{job.cancel_requested && ACTIVE.has(job.status) ? '停止要求中' : STATUS[job.status] || job.status}</span><strong>{job.title || job.kind || job.id}</strong><small>{job.message || job.id}</small></button>)}{!jobs.length && <p className="panel-empty">実行した処理はここに表示されます。</p>}</div><JobLog key={jobId} jobId={jobId} title={selectedJob?.title || '実行ログ'}>
+        {received && page !== 'calibration' && <button className="button small" onClick={() => navigate('calibration', received)}>この bag を車両校正へ</button>}
+        {selectedJob && ACTIVE.has(selectedJob.status) && <button className="button small" disabled={!!selectedJob.cancel_requested} onClick={async () => {
+          try { await api(`jobs/${encodeURIComponent(jobId)}/cancel`, {}); await refreshJobs(); notify('停止を要求しました'); }
+          catch (e) { notify((e as Error).message, true); }
+        }}>{selectedJob.cancel_requested ? '停止要求中' : '停止を要求'}</button>}
+      </JobLog></div></section>}
   </div>;
 }

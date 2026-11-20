@@ -27,6 +27,46 @@ def client(tmp_path):
         yield client
 
 
+def test_job_log_tail_pages_reconstruct_large_utf8_log(client):
+    root = client.app.state.jobs.root
+    atomic_json(root / 'map1.json', {'status': 'succeeded'})
+    contents = '開始\n' + ('一周🏁\n' * 65000) + '完了\n'
+    data = contents.encode()
+    (root / 'map1.log').write_bytes(data)
+    url = '/api/jobs/map1/log'
+    first = client.get(url).json()
+    assert first['offset'] == 256 * 1024
+    assert first['text'].startswith('開始\n') and 'start' not in first
+
+    page = client.get(url, params={'tail': True}).json()
+    assert page['offset'] == len(data) and page['text'].endswith('完了\n')
+    assert client.get(url, params={'tail': True, 'offset': page['offset']}).json() == {
+        'start': len(data), 'offset': len(data), 'text': ''}
+    pieces = [page['text']]
+    while page['start']:
+        end = page['start']
+        page = client.get(url, params={'tail': True, 'before': end}).json()
+        assert page['offset'] == end and 0 < end - page['start'] <= 256 * 1024
+        pieces.append(page['text'])
+    assert ''.join(reversed(pieces)) == contents
+
+
+def test_job_log_tail_waits_for_complete_utf8_while_running(client):
+    root = client.app.state.jobs.root
+    atomic_json(root / 'map1.json', {'status': 'running', 'started': time.time()})
+    url = '/api/jobs/map1/log'
+    assert client.get(url, params={'tail': True}).json() == {'start': 0, 'offset': 0, 'text': ''}
+    log = root / 'map1.log'
+    encoded = '進'.encode()
+    log.write_bytes(b'abc' + encoded[:1])
+    assert client.get(url, params={'tail': True}).json() == {'start': 0, 'offset': 3, 'text': 'abc'}
+    with log.open('ab') as stream:
+        stream.write(encoded[1:])
+    assert client.get(url, params={'tail': True, 'offset': 3}).json() == {
+        'start': 0, 'offset': 6, 'text': 'abc進'}
+    assert client.get(url, params={'offset': 3}).json() == {'offset': 6, 'text': '進'}
+
+
 def test_geometry_clearance_speed_and_rejection():
     doc = dict(left=ring(3), right=ring(1), custom=ring(2), closed=True)
     for kind in ('centerline', 'custom'):

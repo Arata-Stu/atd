@@ -345,8 +345,8 @@ def create_app(record_root=None, result_root=None, static_dir=None):
         return jobs.get(key)
 
     @app.get('/api/jobs/{key}/log')
-    def job_log(key: str, offset: int = 0):
-        return jobs.log(key, offset)
+    def job_log(key: str, offset: int = 0, tail: bool = False, before: int | None = None):
+        return jobs.log(key, offset, tail=tail, before=before)
 
     @app.post('/api/jobs/{key}/cancel')
     def job_cancel(key: str):

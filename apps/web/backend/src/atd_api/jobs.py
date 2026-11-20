@@ -1,6 +1,7 @@
 """固定 action を独立 worker で実行。永続状態と lease で再接続を扱う。"""
 from __future__ import annotations
 
+import codecs
 from contextlib import contextmanager
 import fcntl
 import os
@@ -15,6 +16,7 @@ import uuid
 from .store import atomic_json, read_json, identifier
 
 ACTIVE = {'starting', 'running', 'queued'}
+LOG_PAGE_BYTES = 256 * 1024
 ACTIONS = {'generate', 'map_build', 'vgl', 'capture', 'pull', 'push', 'calibration', 'localization_validation',
            'planning_replay', 'speed_replay', 'manual_drive_replay', 'manual_drive_vo', 'simulation_benchmark'}
 
@@ -132,15 +134,36 @@ class Jobs:
             state['cancel_requested'] = True
         return state
 
-    def log(self, key, offset=0):
-        self.get(key)
+    def log(self, key, offset=0, *, tail=False, before=None):
+        state = self.get(key)
         path = self.root / (key + '.log')
-        if not path.exists():
-            return dict(text='', offset=0)
-        with path.open('rb') as stream:
-            stream.seek(max(0, min(offset, path.stat().st_size)))
-            data = stream.read(256 * 1024)
-            return dict(text=data.decode(errors='replace'), offset=stream.tell())
+        try:
+            stream = path.open('rb')
+        except FileNotFoundError:
+            return dict(text='', start=0, offset=0) if tail else dict(text='', offset=0)
+        with stream:
+            size = os.fstat(stream.fileno()).st_size
+            if not tail:
+                stream.seek(max(0, min(offset, size)))
+                data = stream.read(LOG_PAGE_BYTES)
+                return dict(text=data.decode(errors='replace'), offset=stream.tell())
+
+            end = size if before is None else max(0, min(before, size))
+            if before is None and offset == size:
+                return dict(text='', start=end, offset=end)
+            start = max(0, end - LOG_PAGE_BYTES)
+            stream.seek(start)
+            data = stream.read(end - start)
+            # A UTF-8 code point crossing the start belongs to the preceding page.
+            skip = 0
+            if start:
+                while skip < min(3, len(data)) and 0x80 <= data[skip] < 0xc0:
+                    skip += 1
+            decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+            final = end == size and state['status'] not in ACTIVE
+            text = decoder.decode(data[skip:], final=final)
+            partial, _ = decoder.getstate()
+            return dict(text=text, start=start + skip, offset=stream.tell() - len(partial))
 
 
 class Task:

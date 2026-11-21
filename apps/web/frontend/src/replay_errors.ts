@@ -7,6 +7,8 @@ export interface ReplayRun {
   reason: string | null;
   sample_count: number;
   slam_max_map_size?: number;
+  tracking?: 'vo' | 'vio';
+  imu_hz?: number;
   laps: number | null;
 }
 

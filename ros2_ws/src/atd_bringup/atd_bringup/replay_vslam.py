@@ -19,7 +19,7 @@ from .replay_gt_course import load_course
 from .replay_gt_geometry import Trace
 from .replay_gt_node import ground_truth_viewer
 from .replay_gt_source import find_ground_truth
-from .replay_inputs import GROUND_TRUTH_ERROR, GROUND_TRUTH_PATH, STEREO_TOPICS, select_bag, validate_bag
+from .replay_inputs import GROUND_TRUTH_ERROR, GROUND_TRUTH_PATH, IMU_TOPIC, STEREO_TOPICS, select_bag, validate_bag
 from .replay_result import ReplayResult
 
 
@@ -38,7 +38,7 @@ def estimated_only_config(preset, directory):
     return output
 
 
-def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=None, *, slam_max_map_size=0):
+def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=None, *, slam_max_map_size=0, imu=None):
     from .replay_readiness import wait_and_resume
 
     with ExitStack() as children:
@@ -47,8 +47,12 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
             children.callback(stop, process)
             return process
 
-        launch = start(['ros2', 'launch', 'atd_bringup', 'bag_vslam.launch.py',
-                        f'slam_max_map_size:={slam_max_map_size}'])
+        launch_args = ['ros2', 'launch', 'atd_bringup', 'bag_vslam.launch.py', f'slam_max_map_size:={slam_max_map_size}']
+        topics = list(STEREO_TOPICS)
+        if imu:
+            launch_args.extend(['tracking_mode:=1', f'imu_frame:={imu.frame}', f'imu_frequency:={imu.frequency}'])
+            topics.append(IMU_TOPIC)
+        launch = start(launch_args)
         rviz = start(['rviz2', '-d', str(rviz_config), '--ros-args',
                       '-p', 'use_sim_time:=true', '-r', '__node:=rviz2'])
         spin_overlay = None
@@ -58,7 +62,7 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
         player = start(['ros2', 'bag', 'play', str(bag), '--start-paused', '--disable-keyboard-controls',
                         '--clock', '--rate', str(rate), '--qos-profile-overrides-path', str(qos),
                         '--remap', f'__node:={player_name}',
-                        '--topics', *STEREO_TOPICS])
+                        '--topics', *topics])
 
         def check_viewer():
             if launch.poll() is not None:
@@ -73,12 +77,13 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
             if player.poll() is not None:
                 raise RuntimeError(f'再生開始前に rosbag2 が終了しました（exit {player.returncode}）')
 
-        print(f'{bag} ({rate:g} 倍速)  slam_max_map_size={slam_max_map_size}'
+        tracking = f'VIO (IMU {imu.frequency:g} Hz, {imu.frame})' if imu else 'VO'
+        print(f'{bag} ({rate:g} 倍速)  {tracking}  slam_max_map_size={slam_max_map_size}'
               '\ncuVSLAM と RViz の購読準備を待っています。', flush=True)
         finished = False
         try:
             wait_and_resume(node, player_name=f'/{player_name}', check_running=check_startup,
-                            ground_truth=spin_overlay is not None)
+                            ground_truth=spin_overlay is not None, vio=imu is not None)
             print('bag を再生しています。終了するには RViz を閉じるか Ctrl+C を押してください。', flush=True)
             while True:
                 if not finished and player.poll() is not None:
@@ -101,7 +106,7 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                     spin_overlay(timeout_sec=.05)
 
 
-def run(bag, rate, *, slam_max_map_size=0):
+def run(bag, rate, *, slam_max_map_size=0, tracking='vo'):
     from ament_index_python.packages import get_package_share_directory
     import rclpy
     from rclpy.signals import SignalHandlerOptions
@@ -128,7 +133,7 @@ def run(bag, rate, *, slam_max_map_size=0):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise ValueError(f'ROS domain {domain} では既に atd replay が実行中です') from exc
-        validate_bag(bag)
+        imu = validate_bag(bag, vio=tracking == 'vio')
         trace = None
         try:
             ground_truth = find_ground_truth(bag)
@@ -152,15 +157,17 @@ def run(bag, rate, *, slam_max_map_size=0):
             root = Path('/data/results')
             course = load_course(bag, ground_truth, root)
             result = stack.enter_context(ReplayResult(root, bag, rate, trace, course,
-                                                     slam_max_map_size=slam_max_map_size))
+                                                     slam_max_map_size=slam_max_map_size, imu=imu))
             print(f'Gazebo 正解軌跡: {ground_truth}\n比較結果の保存先: {result.directory}', flush=True)
-        run_session(node, bag, rate, config, qos, trace, result, slam_max_map_size=slam_max_map_size)
+        run_session(node, bag, rate, config, qos, trace, result, slam_max_map_size=slam_max_map_size, imu=imu)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('bag', nargs='?', help='/data/record/rosbags からの相対パス、または絶対パス')
     parser.add_argument('--rate', type=float, default=0.5, help='再生倍率（既定 0.5）')
+    parser.add_argument('--tracking', choices=('vo', 'vio'), default='vo',
+                        help='vo はステレオのみ（既定）、vio は統合 IMU も使用')
     parser.add_argument('--slam-max-map-size', type=int, default=0,
                         help='SLAM 地図の姿勢数上限（既定 0 は無制限）')
     args = parser.parse_args(argv)
@@ -171,7 +178,7 @@ def main(argv=None):
     try:
         bag = select_bag(args.bag)
         if bag is not None:
-            run(bag, args.rate, slam_max_map_size=args.slam_max_map_size)
+            run(bag, args.rate, slam_max_map_size=args.slam_max_map_size, tracking=args.tracking)
         return 0
     except KeyboardInterrupt:
         return 130

@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geography
 from monza_motion import MonzaMotion, interpolate, travel_fraction
+from sensor_profile import IMU_MODES, RESOLUTIONS, imu_streams
 import world
 
 
@@ -95,6 +96,24 @@ class MonzaWorldTest(unittest.TestCase):
             self.assertAlmostEqual(degrees(poses[0][3]), 85, delta=3)
             self.assertLess(min(degrees(p[3]) for p in poses if 13 < p[0] < 16), -15)
             self.assertAlmostEqual(degrees(poses[-1][3]), 105, delta=3)
+
+    def test_stereo_resolutions_and_imu_clock(self):
+        for resolution, (width, height) in RESOLUTIONS.items():
+            with self.subTest(resolution=resolution), tempfile.TemporaryDirectory() as tmp, patch.object(world, "track"):
+                scene = world.build(tmp, resolution=resolution, imu_hz=400)
+                sdf = ET.parse(Path(tmp) / "world.sdf")
+                self.assertEqual([(int(c.findtext("width")), int(c.findtext("height")))
+                                  for c in sdf.findall(".//sensor/camera/image")], [(width, height)] * 2)
+                camera = scene["camera"]
+                self.assertEqual((camera["width"], camera["height"]), (width, height))
+                self.assertAlmostEqual(camera["nominal_focal_px"] / width, 337.2096 / 640, places=6)
+                self.assertLess(float(sdf.findtext(".//physics/max_step_size")), 1 / 400)
+                self.assertEqual(sdf.findtext(".//world/gravity"), "0 0 -9.80665")
+                self.assertEqual(len(scene["imu"]["streams"]), 3)
+        self.assertEqual(imu_streams(IMU_MODES["off"]), {})
+        for options in ({"resolution": "1280x800"}, {"imu_hz": -1}):
+            with self.assertRaises(ValueError):
+                world.build(Path("/unused"), **options)
 
     def test_asphalt_mesh_covers_the_line_and_leaves_runoff_on_both_sides(self):
         with tempfile.TemporaryDirectory() as tmp:

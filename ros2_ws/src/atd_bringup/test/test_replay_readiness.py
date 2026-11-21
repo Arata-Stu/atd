@@ -53,6 +53,14 @@ class GateTests(unittest.TestCase):
         modules.start()
         self.addCleanup(modules.stop)
 
+    def test_vio_waits_for_bag_and_tracker_imu_endpoints(self):
+        topic, kind = '/camera/camera/imu', 'sensor_msgs/msg/Imu'
+        self.pubs[topic], self.subs[topic] = [endpoint(self.player, kind)], []
+        self.assertFalse(_missing_endpoints(self.node, self.player, self.rviz))
+        self.assertIn(topic, ' '.join(_missing_endpoints(self.node, self.player, self.rviz, vio=True)))
+        self.subs[topic].append(endpoint('/visual_slam', kind))
+        self.assertFalse(_missing_endpoints(self.node, self.player, self.rviz, vio=True))
+
     def test_waits_for_configured_rviz_displays_before_resuming(self):
         path = '/visual_slam/tracking/slam_path'
         ready = self.subs[path]

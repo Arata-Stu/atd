@@ -154,6 +154,25 @@ ros2 topic info /visual_slam/tracking/odometry --verbose --no-daemon
 
 `_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_` は、DDS が配信を検出し、その配信元を ROS ノードとまだ対応付けられていない状態。再生開始時は名前の解決を待ち、実際に別の配信元を確認した場合は名前を表示して再生を止める。待機中に調べるには、端末に表示された診断コマンドを別の Notebook コンテナ端末で実行する。Gazebo の既定 domain は 74、replay は 75。終了後に通常のシェルで実行した `ros2 topic list` とは、探索する時刻や domain が異なる。[ROS 2 の配信元名の実装](https://github.com/ros2/rmw_dds_common/blob/lyrical/rmw_dds_common/src/graph_cache.cpp#L514-L533)
 
+### 同じ bag でステレオ VO とステレオ＋IMU を比較する
+
+Notebook ホストで次を実行すると、848×480 のステレオと生の加速度200 Hz・ジャイロ400 Hz、統合 IMU 400 Hz を同じ時刻系で記録できる。全コース共通で `--resolution` は `424x240`、`640x480`（既定）、`848x480`、`1280x720` の4通り。IMU は既定で `off`、`--imu 200` では3ストリームとも200 Hzになる。
+
+```bash
+atd gazebo bag --course monza --speed 5 --laps 2 --resolution 848x480 --imu 400
+```
+
+IMU を有効にした bag には発進前の静止区間が最低2シミュレーション秒入る。保存後に各センサーの時刻、固定 TF、周回中の欠落を確認する。各 IMU トピックの実効 Hz は `run.json` の `bag_audit.imu_streams` で確認できる。
+
+Notebook の Isaac ROS コンテナに入り、更新後に一度 `atd build --packages-up-to atd_bringup` と `atd-web build` を実行する。次の2回の再生で同じ bag を選び、1回目の RViz を閉じてから2回目を起動する。
+
+```bash
+atd replay --tracking vo
+atd replay --tracking vio
+```
+
+`vo`（既定）は左右画像、`vio` は左右画像と統合 IMU を使う。VIO 起動時は bag に記録された統合 IMU のフレーム名・時刻から座標系と周期を読み取る。以前のステレオ専用 bag は `vo` で評価できる。統合 IMU がない走行を `vio` と比較するには、IMU を有効にして収録する。Notebook UI の「VSLAM 軌跡誤差」で方式と地図上限を確認し、同じ周回・区間の GT 誤差を比較する。
+
 ### Notebook UI で区間別の誤差を見る
 
 Notebook の Isaac ROS コンテナで変更反映時に `atd build --packages-up-to atd_bringup` と `atd-web build` を実行する。Web 環境を初めて準備する場合は `atd-web prepare` を使う。GT のある bag を `atd replay` で再生すると、比較結果が自動で `/data/results/runs/replay/<実行ID>/` に保存される。再生ごとに新しい ID が付く。
@@ -244,7 +263,7 @@ ros2 topic echo /visual_slam/tracking/odometry --field header.stamp --qos-reliab
 ./scripts/gazebo.sh benchmark --duration 60
 ```
 
-`--camera-height` は床から光学中心までの m。初期値は **0.12 m**、後軸から前方に 0.18 m、水平と仮定している。軸中心高さの仮定値は 0.0325 m。車体設定の後輪軸基準の z と区別する。左右の基線は公称 0.095 m、水平画角は公称 87°、640 × 480 の `mono8` 理想ピンホールカメラ。実機の取付高と個体別キャリブレーションは未測定。モノクロ画像は可視光材質の描画で、D455 の投光パターン、露出制御、振動による像の変化までは再現していない。[実車の座標定義](vehicle_layout.md)・[D455 仕様](https://realsenseai.com/products/stereo-depth-camera-d455/)
+`--camera-height` は床から光学中心までの m。初期値は **0.12 m**、後軸から前方に 0.18 m、水平と仮定している。軸中心高さの仮定値は 0.0325 m。車体設定の後輪軸基準の z と区別する。左右の基線は公称 0.095 m、水平画角は公称 87°の `mono8` 理想ピンホールカメラ。全解像度で水平画角を固定し、縦の画角と CameraInfo の焦点距離・主点は選択した解像度に従う。実機の取付高と個体別キャリブレーションは未測定。モノクロ画像は可視光材質の描画で、D455 の投光パターン、露出制御、振動による像の変化までは再現していない。[実車の座標定義](vehicle_layout.md)・[D455 仕様](https://realsenseai.com/products/stereo-depth-camera-d455/)
 
 動画の `--duration` は1周または選択区間を走るシミュレーション秒数。全周動画は `--laps` で周回を増やせる。ベンチマークの `--duration` は実時間の計測窓で、走行速度は `--speed` で独立に選べる。移動は地図上の走路中心付近をたどる軌道再生で、映像と配信の検証用。タイヤや ESC、制御器による閉ループ走行の比較は既存の [2D シミュレーター](simulation.md) で行う。
 
@@ -274,6 +293,16 @@ atd gazebo diagnose --dds shm
 - `storage.json` の `filesystems[].net_used_bytes` はビルド前後の実ディスク差分、`peak_added_bytes_sampled` はビルド中に0.5秒間隔で観測した最大増分。共有レイヤー込みの論理イメージサイズ `image_size_after_bytes` と使い分ける。ファイルシステム全体の空き容量を読むため、測定中は同じディスクで別のビルドや大きなコピーを避ける。ビルドキャッシュ・既存イメージを自動削除する処理はない。生成した動画などの占有量は各試行の `output-size-kib.txt` に KiB で残る。
 
 ROS は Notebook のループバックで Fast DDS を使う。標準ドメインは 74。動画・計測の起動中は ROS に `/clock`、`/tf_static`、`/camera/camera/infra{1,2}/image_rect_raw` と両方の `camera_info` が出る。Simulation 用の別プロセスで購読するときは同じドメイン・ループバック設定を使う。Jetson への接続や車両への指令は不要。
+
+IMU を有効にした走行では、次の `sensor_msgs/msg/Imu` も配信する。Hz はシミュレーション時刻での設定値。
+
+| ROS トピック | データ | frame_id |
+|---|---|---|
+| `/camera/camera/accel/sample` | 生の加速度（200 Hz、m/s²） | `camera_accel_optical_frame` |
+| `/camera/camera/gyro/sample` | 生の角速度（200 / 400 Hz、rad/s） | `camera_gyro_optical_frame` |
+| `/camera/camera/imu` | ジャイロ時刻に合わせた加速度と角速度。400 Hz 設定では加速度の間の時刻を線形補間 | `camera_gyro_optical_frame` |
+
+IMU は左右レンズの中点にあると仮定し、Gazebo で観測したカメラ台の姿勢変化から比力と角速度を計算する。水平静止時の加速度は optical 座標の y 方向に約 −9.81 m/s²。路面の凹凸による振動、センサーのノイズやバイアスはモデル化していない。実機に対する VIO 精度は実機の bag で検証する。
 
 ## 試作の確認結果
 

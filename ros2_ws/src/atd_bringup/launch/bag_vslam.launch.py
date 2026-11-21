@@ -12,5 +12,11 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('slam_max_map_size', default_value='0',
                               description='SLAM 地図に保持する姿勢数の上限。0 は無制限。'),
-        stereo_container(True, mapping=True, visualize_landmarks=True, slam_max_map_size=limit),
+        DeclareLaunchArgument('tracking_mode', default_value='0', choices=['0', '1']),
+        DeclareLaunchArgument('imu_frame', default_value='camera_gyro_optical_frame'),
+        DeclareLaunchArgument('imu_frequency', default_value='200.0'),
+        stereo_container(True, mapping=True, visualize_landmarks=True, slam_max_map_size=limit,
+                         tracking_mode=ParameterValue(LaunchConfiguration('tracking_mode'), value_type=int),
+                         imu_frame=ParameterValue(LaunchConfiguration('imu_frame'), value_type=str),
+                         imu_frequency=ParameterValue(LaunchConfiguration('imu_frequency'), value_type=float)),
     ])

@@ -16,6 +16,8 @@ import monza_lesmo
 import monza_start_grid
 import monza_trackside
 import scenery
+from rig_imu import GRAVITY_M_S2
+from sensor_profile import IMU_FRAME, IMU_MODES, IMU_TOPIC, RESOLUTIONS, imu_streams
 
 HERE = Path(__file__).resolve().parent
 BASELINE_M = 0.095
@@ -301,7 +303,7 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
             surface(trees, output, name, faces, (1, 1, 1), face_up=False, cutout=True)
 
 
-def cameras(link, height, pitch, circuit, far):
+def cameras(link, height, pitch, circuit, far, width, image_height):
     for side, sign in (("left", 1), ("right", -1)):
         sensor = ET.SubElement(link, "sensor", type="camera", name=side)
         field(sensor, "pose", vector(FORWARD_M, sign*BASELINE_M/2, height, 0, pitch, 0))
@@ -313,8 +315,8 @@ def cameras(link, height, pitch, circuit, far):
         field(camera, "camera_info_topic", f"/{circuit}/{side}/camera_info")
         field(camera, "horizontal_fov", HFOV)
         image = ET.SubElement(camera, "image")
-        field(image, "width", 640)
-        field(image, "height", 480)
+        field(image, "width", width)
+        field(image, "height", image_height)
         field(image, "format", "L_INT8")
         clip = ET.SubElement(camera, "clip")
         field(clip, "near", .025)
@@ -322,7 +324,12 @@ def cameras(link, height, pitch, circuit, far):
 
 
 def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
-          circuit="monza", route=None, wait_for_capture=False, speed_mps=None, laps=1, record_ground_truth=False):
+          circuit="monza", route=None, wait_for_capture=False, speed_mps=None, laps=1, record_ground_truth=False,
+          resolution="640x480", imu_hz=0):
+    if resolution not in RESOLUTIONS:
+        raise ValueError("unsupported stereo resolution: " + str(resolution))
+    width, image_height = RESOLUTIONS[resolution]
+    streams = imu_streams(imu_hz)
     if type(laps) is not int or laps < 1:
         raise ValueError("laps must be a positive integer")
     if route is None and laps > 1:
@@ -396,7 +403,7 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
         raise ValueError("requested run duration is too large") from exc
     if not isfinite(total_seconds) or not isfinite(speed_mps):
         raise ValueError("requested speed and run duration must be finite")
-    focal = 320 / tan(HFOV/2)
+    focal = width / (2 * tan(HFOV/2))
     scene = {
         "course": circuit, "environment": "outdoor_circuit",
         "scenery": ("monza_gp_osm" if lap else "monza_prima_variante_osm") if circuit == "monza" else circuit + "_gp",
@@ -411,8 +418,13 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                    "far_clip_m": far,
                    "midpoint_forward_from_rear_axle_m": FORWARD_M, "baseline_m": BASELINE_M,
                    "horizontal_fov_deg": degrees(HFOV), "nominal_focal_px": focal,
-                   "width": 640, "height": 480, "rate_hz": 90, "optical_frames": OPTICAL_FRAMES,
+                   "width": width, "height": image_height, "rate_hz": 90, "optical_frames": OPTICAL_FRAMES,
                    "mount_source": "Simulation assumption; actual lens height, pose and intrinsics unmeasured."},
+        "imu": {"rate_hz": imu_hz, "frame_id": IMU_FRAME, "topic": IMU_TOPIC,
+                "streams": {topic: {"frame_id": frame, "rate_hz": rate} for topic, (frame, rate) in streams.items()},
+                "model": "Ideal specific force and angular velocity from post-physics planar rig poses. "
+                         "Both optical IMU frames are at the stereo midpoint. No sensor noise or bias. "
+                         "Combined acceleration is linearly interpolated between 200 Hz samples."},
     }
     if record_ground_truth:
         scene["trajectory"]["trace_interval_s"] = min(.05, travel_seconds / 120)
@@ -421,10 +433,12 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     scene_file.write_text(json.dumps(scene, indent=2) + "\n")
     root = ET.Element("sdf", version="1.12")
     world = ET.SubElement(root, "world", name=circuit)
-    # A 1/90 s step rounded to gz's nanosecond duration. Motion and both exposures
-    # use this simulation clock; a slower renderer is detected on the ROS side.
+    if imu_hz:
+        field(world, "gravity", vector(0, 0, -GRAVITY_M_S2))
+    # Sample the measured rig above the highest IMU rate when enabled; retain the
+    # same stereo exposure frequency. The IMU resamples these ticks in sim time.
     physics = ET.SubElement(world, "physics", name="camera_step", type="ignored")
-    field(physics, "max_step_size", .011111111)
+    field(physics, "max_step_size", .001111111 if imu_hz else .011111111)
     field(physics, "real_time_factor", 1.0)
     for filename, system in (("physics", "Physics"), ("user-commands", "UserCommands"),
                              ("scene-broadcaster", "SceneBroadcaster"), ("sensors", "Sensors")):
@@ -447,7 +461,7 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     _, x, y, yaw = points[0]
     field(rig, "pose", vector(x, y, 0, 0, 0, yaw))
     field(link, "gravity", "false")
-    cameras(link, height, radians(pitch_deg), circuit, far)
+    cameras(link, height, radians(pitch_deg), circuit, far, width, image_height)
     motion = ET.SubElement(rig, "plugin", filename="gz-sim-python-system-loader-system",
                            name="gz::sim::systems::PythonSystemLoader")
     field(motion, "module_name", "monza_motion")
@@ -462,6 +476,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--camera-height", type=float, default=.12, help="Optical midpoint above floor in m")
     parser.add_argument("--camera-pitch-deg", type=float, default=0, help="Positive pitches down")
+    parser.add_argument("--resolution", choices=RESOLUTIONS, default="640x480")
+    parser.add_argument("--imu", choices=IMU_MODES, default="off")
     parser.add_argument("--circuit", choices=circuits.circuit_ids(), default="monza")
     parser.add_argument("--route", choices=("chicane", "lap"))
     timing = parser.add_mutually_exclusive_group()
@@ -475,6 +491,7 @@ if __name__ == "__main__":
     route = "lap" if args.laps is not None and args.route is None else args.route
     try:
         build(args.output, args.camera_height, args.camera_pitch_deg, args.travel_seconds, args.repeat,
-              circuit=args.circuit, route=route, speed_mps=args.speed, laps=1 if args.laps is None else args.laps)
+              circuit=args.circuit, route=route, speed_mps=args.speed, laps=1 if args.laps is None else args.laps,
+              resolution=args.resolution, imu_hz=IMU_MODES[args.imu])
     except ValueError as exc:
         parser.error(str(exc))

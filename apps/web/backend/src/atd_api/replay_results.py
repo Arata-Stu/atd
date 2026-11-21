@@ -54,6 +54,14 @@ def _summary(folder):
     keys = ('version', 'id', 'bag', 'created_at', 'status', 'sample_count', 'rate', 'circuit', 'laps',
             'lap_length_m', 'reason')
     summary = {key: value.get(key) for key in keys}
+    if 'tracking' in value:
+        if value['tracking'] not in ('vo', 'vio'):
+            raise ValueError('replay の追跡方式が不正です')
+        summary['tracking'] = value['tracking']
+        if value['tracking'] == 'vio':
+            if not _finite(value.get('imu_hz')) or value['imu_hz'] <= 0:
+                raise ValueError('VIO の IMU 周波数が不正です')
+            summary['imu_hz'] = value['imu_hz']
     if 'slam_max_map_size' in value:
         limit = value['slam_max_map_size']
         if type(limit) is not int or limit < 0:

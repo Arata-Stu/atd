@@ -118,18 +118,21 @@ def test_unavailable_run_and_symlinks(saved):
         moved.rename(path)
 
 
-def test_real_recorder_to_ui_and_partial_result(tmp_path, monkeypatch):
+@pytest.mark.parametrize('tracking', ['vo', 'vio'])
+def test_real_recorder_to_ui_and_partial_result(tmp_path, monkeypatch, tracking):
     source = Path(__file__).resolve().parents[4] / 'ros2_ws/src'
     for pkg in ('atd_bringup', 'atd_mapping'):
         monkeypatch.syspath_prepend(str(source / pkg))
     from atd_bringup.replay_gt_geometry import Alignment, PlanarPose, Trace
+    from atd_bringup.replay_inputs import ImuProfile
     from atd_bringup.replay_result import ReplayResult
 
     results = tmp_path / 'results'
     api = TestClient(create_app(tmp_path / 'record', results, tmp_path / 'static'))
     trace = Trace((0, 1_000_000_000, 2_000_000_000),
                   tuple(PlanarPose(x, 2., 0.) for x in (0., 1., 2.)))
-    recorder = ReplayResult(results, 'manual-selection', .5, trace, {})
+    imu = ImuProfile('camera_gyro_optical_frame', 400.) if tracking == 'vio' else None
+    recorder = ReplayResult(results, 'manual-selection', .5, trace, {}, imu=imu)
     url = '/api/replay/runs/' + recorder.directory.name
     assert api.get(url).json()['samples'] == []
     q = (0., 0., 0., 1.)
@@ -138,6 +141,9 @@ def test_real_recorder_to_ui_and_partial_result(tmp_path, monkeypatch):
     recorder.record(1_000_000_000, trace.poses[1], alignment, (1.5, 1., 0.), q)
     recorder.close(KeyboardInterrupt())
     result = api.get(url).json()
+    assert api.get('/api/replay/runs').json()['items'][0]['tracking'] == tracking
+    assert result['tracking'] == tracking
+    assert result.get('imu_hz') == (400. if imu else None)
     assert result['status'] == 'partial' and result['sample_count'] == 2
     assert result['anchor_stamp_ns'] == '0' and result['gap_threshold_s'] == .25
     assert result['samples'][1]['along_m'] == .5 and result['samples'][1]['lateral_m'] == -1.

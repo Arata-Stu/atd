@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import yaml
 
 from atd_bringup import replay_vslam as replay
+from atd_bringup.replay_inputs import ImuProfile
 
 
 class ReplaySessionTests(unittest.TestCase):
@@ -30,7 +31,8 @@ class ReplaySessionTests(unittest.TestCase):
         replay.run_session(Mock(), 'two words/run', 0.5, self.config, 'qos.yaml', ground_truth, result, **options)
 
     def test_eof_keeps_viewer_open_until_closed(self):
-        def resume(node, *, player_name, check_running, ground_truth):
+        def resume(node, *, player_name, check_running, ground_truth, vio):
+            self.assertFalse(vio)
             self.assertFalse(ground_truth)
             check_running()
             cmd = self.spawn.call_args.args[0]
@@ -75,7 +77,7 @@ class ReplaySessionTests(unittest.TestCase):
         trace, result, spin = Mock(), Mock(), Mock()
         overlay = self.stack.enter_context(patch.object(replay, 'ground_truth_viewer', return_value=nullcontext(spin)))
 
-        def resume(node, *, player_name, check_running, ground_truth):
+        def resume(node, *, player_name, check_running, ground_truth, vio):
             check_running()
             self.assertTrue(ground_truth)
             overlay.assert_called_once_with(trace, result)
@@ -116,12 +118,25 @@ class ReplaySessionTests(unittest.TestCase):
         with patch.object(replay, 'select_bag', return_value='bag') as select, patch.object(replay, 'run') as run:
             for options, limit in (([], 0), (['--slam-max-map-size', '300'], 300)):
                 self.assertEqual(replay.main(['bag', *options]), 0)
-                run.assert_called_with('bag', .5, slam_max_map_size=limit)
+                run.assert_called_with('bag', .5, slam_max_map_size=limit, tracking='vo')
+            self.assertEqual(replay.main(['bag', '--tracking', 'vio']), 0)
+            run.assert_called_with('bag', .5, slam_max_map_size=0, tracking='vio')
             select.reset_mock()
             for invalid in ('-1', '2147483648', '3.5'):
                 with self.subTest(invalid=invalid), self.assertRaises(SystemExit), redirect_stderr(StringIO()):
                     replay.main(['bag', '--slam-max-map-size', invalid])
             select.assert_not_called()
+
+    def test_vio_uses_unified_imu_and_its_measured_rate(self):
+        self.ready.side_effect = KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.session(imu=ImuProfile('camera_gyro_optical_frame', 400.0))
+        launch, _, player = [call.args[0] for call in self.spawn.call_args_list]
+        self.assertIn('imu_frequency:=400.0', launch)
+        self.assertIn('tracking_mode:=1', launch)
+        self.assertIn('imu_frame:=camera_gyro_optical_frame', launch)
+        self.assertEqual(player[player.index('--topics') + 1:], [*replay.STEREO_TOPICS, replay.IMU_TOPIC])
+        self.assertTrue(self.ready.call_args.kwargs['vio'])
 
     def test_playback_failure_after_resume_is_reported(self):
         self.player.returncode = 2

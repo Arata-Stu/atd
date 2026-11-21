@@ -97,7 +97,7 @@ class RunContractTests(unittest.TestCase):
                 out = Path(tmp)
                 directory = out / "scene"
                 directory.mkdir()
-                report = {}
+                report = {"imu_hz": 0}
                 def next_phase(probe, children, timeout, label, check_mapper):
                     check_mapper()
                     self.assertFalse(probe())
@@ -135,7 +135,7 @@ class RunContractTests(unittest.TestCase):
                 out = Path(tmp)
                 (out / signal).write_text(payload)
                 with self.assertRaisesRegex(RuntimeError, "tracking lost|中断"):
-                    run.map_laps({}, out, "monza", {}, {})
+                    run.map_laps({}, out, "monza", {}, {"imu_hz": 0})
                 self.assertFalse((out / "scene/lap_capture.ready").exists())
                 self.assertFalse((out / "lap.complete.json").exists())
 
@@ -157,6 +157,22 @@ class RunContractTests(unittest.TestCase):
             self.assertEqual(by_child[frame][3], pose[1])
             self.assertEqual(by_child[frame][5:], (-pi/2, 0, -pi/2))
         self.assertEqual(topics["/world/monza/clock"]["ros_topic_name"], "/clock")
+
+    def test_selected_imu_endpoints_and_optical_frames(self):
+        inertial = {("imu", run.IMU_TOPIC), ("accel", run.ACCEL_TOPIC), ("gyro", run.GYRO_TOPIC)}
+        camera = {"midpoint_forward_from_rear_axle_m": .1, "height_above_floor_m": .12,
+                  "pitch_down_deg": 0, "optical_frames": capture.FRAMES, "baseline_m": .095}
+        for imu_hz in (0, 200, 400):
+            endpoints = [row for row in run.bridge_topics("spa", imu_hz)
+                         if row["ros_type_name"] == "sensor_msgs/msg/Imu"]
+            self.assertEqual({(row["gz_topic_name"], row["ros_topic_name"]) for row in endpoints},
+                             {(f"/spa/{name}", topic) for name, topic in inertial} if imu_hz else set())
+            self.assertTrue(all(row["gz_type_name"] == "gz.msgs.IMU" and row["direction"] == "GZ_TO_ROS"
+                                and row["qos_profile"] == "SENSOR_DATA" for row in endpoints))
+            frames = [tf for tf in run.transforms(camera, imu_hz) if tf[1] in (run.ACCEL_FRAME, run.GYRO_FRAME)]
+            self.assertEqual(len(frames), 2 if imu_hz else 0)
+            for tf in frames:
+                self.assertEqual((tf[0], *tf[2:]), ("camera_link", 0, 0, 0, -pi/2, 0, -pi/2))
 
     def test_serve_waits_for_compatible_stereo_subscribers_and_advancing_ros_clock(self):
         ros = MagicMock()
@@ -187,7 +203,7 @@ class RunContractTests(unittest.TestCase):
                        qos_check_compatible=lambda pub, sub: (2 if sub == "incompatible" else 0, ""))}
         with patch.dict(sys.modules, modules), patch.object(run.time, "sleep"), \
                 patch.object(run, "unpause", side_effect=play_when_ready) as play:
-            run.start_stream({}, True, "spa")
+            run.start_stream({}, True, "spa", imu_hz=400)
         play.assert_called_once()
         self.assertEqual(ros.create_node.call_args.kwargs["parameter_overrides"], [("use_sim_time", True)])
         self.assertEqual(ros.spin_once.call_count, len(stamps))
@@ -282,7 +298,7 @@ class RunContractTests(unittest.TestCase):
                 out = Path(tmp)
                 args = SimpleNamespace(mode=mode, route="lap", circuit="spa", output=out,
                                        speed=3., laps=2, duration=None, wait_for_stereo=True,
-                                       camera_height=.12, camera_pitch_deg=0.)
+                                       camera_height=.12, camera_pitch_deg=0., resolution="848x480", imu="400")
                 if mode == "video":
                     metrics = {"mode": mode, "status": "complete", "largest_sim_gap_ms": 12,
                                "held_video_frames": 0, "video_frames": 4000, "paired_wall_hz": 45.}
@@ -296,6 +312,8 @@ class RunContractTests(unittest.TestCase):
                         patch.object(run, "drive_laps") as drive, patch.object(run, "inspect_motion", return_value=motion):
                     self.assertEqual(run.run(args, report), 0)
                 trajectory = json.loads((out / "scene/scene.json").read_text())["trajectory"]
+                self.assertEqual(report["geometry"], [848, 480])
+                self.assertEqual((report["accel_hz"], report["gyro_hz"], report["imu_hz"]), (200, 400, 400))
                 distance = trajectory["end_s_m"]
                 self.assertAlmostEqual(report["total_travel_seconds"], 2 * distance / 3.)
                 self.assertFalse(trajectory["repeat"])
@@ -305,6 +323,7 @@ class RunContractTests(unittest.TestCase):
                                     if str(run.HERE / "capture.py") in call.args[0]]
                     self.assertAlmostEqual(float(capture_cmd[capture_cmd.index("--duration") + 1]),
                                            report["total_travel_seconds"])
+                    self.assertEqual(capture_cmd[capture_cmd.index("--resolution") + 1], "848x480")
                 else:
                     stream.assert_called_once()
                     drive.assert_called_once()

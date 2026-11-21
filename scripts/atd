@@ -131,7 +131,7 @@ choose() {
 }
 
 gazebo_from_menu() {
-    local title="$1" action catalog circuit route speed laps
+    local title="$1" action catalog circuit route speed laps resolution imu
     shift
     action="$(choose "$title" bag 'ステレオ rosbag を記録' map '走行中に cuVSLAM 地図を作成' \
         video '左右の車載動画を保存' serve 'ステレオ画像と /clock を配信' \
@@ -167,7 +167,11 @@ gazebo_from_menu() {
         [[ "$laps" != q ]] || return 0
         if [[ -n "$laps" ]]; then args+=(--laps "$laps"); fi
     fi
-    "$@" "${args[@]}"
+    resolution="$(choose "$title / ステレオ解像度" 640x480 '既定 · 90 Hz' 424x240 '90 Hz' \
+        848x480 '90 Hz' 1280x720 '90 Hz')" || return 0
+    imu="$(choose "$title / IMU" off 'ステレオのみ' 400 '加速度 200 Hz・ジャイロと統合 IMU 400 Hz' \
+        200 '加速度・ジャイロ・統合 IMU 200 Hz')" || return 0
+    "$@" "${args[@]}" --resolution "$resolution" --imu "$imu"
 }
 
 run_from_menu() {

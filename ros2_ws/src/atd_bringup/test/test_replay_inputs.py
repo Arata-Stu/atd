@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from atd_bringup.replay_inputs import select_bag, validate_bag
+from atd_bringup.replay_inputs import IMU_TOPIC, ImuProfile, select_bag, validate_bag
 
 
 class ReplaySelectionTests(unittest.TestCase):
@@ -68,13 +68,14 @@ class ReplayInputValidationTests(unittest.TestCase):
                                           ConverterOptions=lambda *_: None),
             'rclpy.serialization': SimpleNamespace(deserialize_message=lambda raw, _: raw),
             'tf2_msgs.msg': SimpleNamespace(TFMessage=object),
+            'sensor_msgs.msg': SimpleNamespace(Imu=object),
         }
         modules = patch.dict(sys.modules, mocks)
         modules.start()
         self.addCleanup(modules.stop)
 
     def write_metadata(self, empty=None):
-        rows = [dict(topic_metadata=dict(name=name, type=kind), message_count=int(name != empty))
+        rows = [dict(topic_metadata=dict(name=name, type=kind), message_count=0 if name == empty else 4)
                 for name, kind in self.topics.items()]
         (self.bag / 'metadata.yaml').write_text(json.dumps({
             'rosbag2_bagfile_information': dict(storage_identifier='mcap', topics_with_message_count=rows),
@@ -108,3 +109,24 @@ class ReplayInputValidationTests(unittest.TestCase):
         self.set_static_frames(frames[:1])
         with self.assertRaisesRegex(ValueError, 'base_link to camera_infra2_optical_frame'):
             validate_bag(self.bag)
+
+    def test_vio_reads_sensor_time_and_requires_imu_extrinsics(self):
+        self.write_metadata()
+        with self.assertRaisesRegex(ValueError, '統合 IMU'):
+            validate_bag(self.bag, vio=True)
+        self.topics[IMU_TOPIC] = 'sensor_msgs/msg/Imu'
+        self.write_metadata()
+        imu_frame = 'camera_gyro_optical_frame'
+        for include_imu_tf in (True, False):
+            frames = ['camera_infra1_optical_frame', 'camera_infra2_optical_frame']
+            self.set_static_frames(frames + ([imu_frame] if include_imu_tf else []))
+            tf = self.reader.read_next.return_value
+            self.reader.has_next.side_effect = [True] * 4 + [False, True, False]
+            samples = [(IMU_TOPIC, SimpleNamespace(header=SimpleNamespace(frame_id=imu_frame,
+                        stamp=SimpleNamespace(sec=1, nanosec=i * 2_500_000))), 0) for i in range(4)]
+            self.reader.read_next.side_effect = [*samples, tf]
+            if include_imu_tf:
+                self.assertEqual(validate_bag(self.bag, vio=True), ImuProfile(imu_frame, 400.0))
+            else:
+                with self.assertRaisesRegex(ValueError, 'Missing static TF.*' + imu_frame):
+                    validate_bag(self.bag, vio=True)

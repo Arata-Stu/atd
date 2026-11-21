@@ -9,11 +9,14 @@ import sys
 import tempfile
 import time
 
+from bag_audit import check_imu
 from capture import (Calibration, FRAMES, HEIGHT, INFO_TOPICS, NANO, StereoPairs, TARGET_HZ,
                      TOPICS, WIDTH, check_image)
+from sensor_profile import imu_streams
 
 
 RECORDER = "atd_gazebo_lap_recorder"
+IMU_PREROLL_S = 2
 TOPIC_NAMES = (*TOPICS.values(), *INFO_TOPICS.values(), "/tf_static")
 # Use the same latched TF policy that the offline mapper uses to replay this bag.
 TF_QOS = Path(__file__).resolve().parents[2] / "ros2_ws/src/atd_mapping/config/replay_qos.yaml"
@@ -45,14 +48,15 @@ def staging_path(final):
     return workdir / final.name
 
 
-def command(pending):
+def command(pending, *, imu_hz=0):
     return ["ros2", "bag", "record", "--storage", "mcap", "--output", str(pending),
             "--node-name", RECORDER, "--use-sim-time", "--disable-keyboard-controls",
-            "--qos-profile-overrides-path", str(TF_QOS), "--topics", *TOPIC_NAMES]
+            "--qos-profile-overrides-path", str(TF_QOS), "--topics", *TOPIC_NAMES, *imu_streams(imu_hz)]
 
 
-def wait_for_sample(children, wait_for, *, min_stamp=1, required_edges=()):
-    """Observe a calibrated stereo pair only at the two stationary endpoints."""
+def wait_for_sample(children, wait_for, *, min_stamp=1, required_edges=(), geometry=(WIDTH, HEIGHT),
+                    imu_hz=0, preroll_s=0):
+    """走行前後で、選択した解像度の校正済み左右画像と有効な慣性入力を待つ。"""
     import rclpy
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
     from rclpy.signals import SignalHandlerOptions
@@ -60,11 +64,13 @@ def wait_for_sample(children, wait_for, *, min_stamp=1, required_edges=()):
     from tf2_msgs.msg import TFMessage
 
     pairs = StereoPairs()
-    calibration = Calibration()
+    calibration = Calibration(geometry)
     missing_edges = set(required_edges)
+    imu_profile = imu_streams(imu_hz)
+    first_imu, last_imu = {}, {}
 
     def on_image(side, image):
-        stamp = check_image(image)
+        stamp = check_image(image, geometry)
         if image.header.frame_id != FRAMES[side]:
             raise ValueError(f"{side} image optical frame mismatch: {image.header.frame_id}")
         if stamp >= min_stamp and pairs.feed(side, stamp, time.monotonic()) is not None:
@@ -78,26 +84,43 @@ def wait_for_sample(children, wait_for, *, min_stamp=1, required_edges=()):
     def on_tf(message):
         missing_edges.difference_update((tf.header.frame_id, tf.child_frame_id) for tf in message.transforms)
 
+    def on_imu(name, message):
+        stamp = check_imu(name, message, imu_profile[name][0])
+        if stamp >= min_stamp:
+            first_imu.setdefault(name, stamp)
+            last_imu[name] = stamp
+
     with rclpy.init(args=[], signal_handler_options=SignalHandlerOptions.NO), rclpy.create_node(
         "atd_gazebo_record_check"
     ) as node:
         def subscribed():
             return all(any(sub.node_name == RECORDER for sub in node.get_subscriptions_info_by_topic(topic))
-                       for topic in TOPIC_NAMES)
+                       for topic in (*TOPIC_NAMES, *imu_profile))
 
-        wait_for(subscribed, children, 60, "recorder の画像・CameraInfo・固定TF購読")
+        wait_for(subscribed, children, 60, "recorder のセンサーおよび固定TF購読")
         for side, topic in TOPICS.items():
             node.create_subscription(Image, topic, partial(on_image, side), qos_profile_sensor_data)
             node.create_subscription(CameraInfo, INFO_TOPICS[side], partial(on_info, side), qos_profile_sensor_data)
         if missing_edges:
             node.create_subscription(TFMessage, "/tf_static", on_tf, QoSProfile(
                 depth=100, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        if imu_profile:
+            from sensor_msgs.msg import Imu
+            for topic in imu_profile:
+                node.create_subscription(Imu, topic, partial(on_imu, topic), qos_profile_sensor_data)
 
         def received():
             rclpy.spin_once(node, timeout_sec=.05)
-            return calibration.result is not None and not missing_edges
+            if calibration.result is None or missing_edges or len(last_imu) != len(imu_profile):
+                return False
+            first = max([calibration.result["stamp_ns"], *first_imu.values()])
+            last = min([pairs.stamps[-1], *last_imu.values()])
+            return not preroll_s or last - first >= preroll_s * NANO
 
-        wait_for(received, children, 60, "同時刻の左右画像・CameraInfo と必要な固定TF", poll_interval=0)
+        description = "同時刻の左右画像・CameraInfo、選択した慣性入力と固定TF"
+        if preroll_s:
+            description += f"、停止中のセンサー記録 {preroll_s} シミュレーション秒"
+        wait_for(received, children, 240 if preroll_s else 60, description, poll_interval=0)
 
 
 def close_recorder(proc):
@@ -126,9 +149,13 @@ def audit_and_publish(pending, final, timing, report, trace):
         sys.path.pop(0)
 
     laps = report["laps_requested"]
-    print(f"{laps}周分のステレオ入力と固定TFを保存済み MCAP で検査しています。", flush=True)
+    imu_hz = report.get("imu_hz", 0)
+    sensors = "ステレオ・IMU" if imu_hz else "ステレオ"
+    print(f"{laps}周分の{sensors}入力と固定TFを保存済み MCAP で検査しています。", flush=True)
     audit = audit_bag(pending, timing["start_sim_ns"], timing["finish_sim_ns"],
-                      laps=laps, lap_duration_s=report["lap_duration_s"])
+                      laps=laps, lap_duration_s=report["lap_duration_s"],
+                      geometry=tuple(report.get("geometry", (WIDTH, HEIGHT))), imu_hz=imu_hz,
+                      preroll_s=IMU_PREROLL_S if imu_hz else 0)
     report["bag_audit"] = audit
     store_ground_truth(pending, trace, audit["file_bytes"], course=recorded_course(report))
     check_destination(final)
@@ -142,6 +169,9 @@ def audit_and_publish(pending, final, timing, report, trace):
     print(f"{laps}周のステレオ {audit['complete_stereo_samples']} 組、最大間隔 "
           f"{audit['largest_gap_sim_s'] * 1000:.1f} ms、MCAP {sum(audit['file_bytes'].values()) / 1e9:.2f} GB",
           flush=True)
+    for topic, stream in audit.get("imu_streams", {}).items():
+        print(f"{topic}  {stream['samples']} 件、平均 {stream['measured_sim_hz']:.1f} Hz（sim）、"
+              f"欠落推定 {stream['missing_slots_estimate']} 件", flush=True)
     if audit["coverage"] == "gaps_detected":
         print("画像欠落あり。周回中にステレオ入力が途切れた区間があります。"
               "この bag はオフライン地図作成に使用できます。", flush=True)

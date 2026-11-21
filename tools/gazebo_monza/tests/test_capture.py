@@ -78,15 +78,19 @@ class PairTests(unittest.TestCase):
             self.assertIsNone(capture.udp_error_counters(snmp))
 
     def test_input_geometry_and_row_padding(self):
-        pixel_row = bytes(range(256)) * 2 + bytes(128)
-        image = SimpleNamespace(width=640, height=480, encoding="mono8", step=642,
-                                data=(pixel_row + b"XX") * 480,
-                                header=SimpleNamespace(stamp=SimpleNamespace(sec=1, nanosec=4)))
-        self.assertEqual(capture.check_image(image), 1_000_000_004)
-        self.assertEqual(capture.packed_pixels(image), pixel_row * 480)
+        for width, height in capture.RESOLUTIONS.values():
+            pixel_row = b"\x01" * width
+            image = SimpleNamespace(width=width, height=height, encoding="mono8", step=width + 2,
+                                    data=(pixel_row + b"XX") * height,
+                                    header=SimpleNamespace(stamp=SimpleNamespace(sec=1, nanosec=4)))
+            self.assertEqual(capture.check_image(image, (width, height)), 1_000_000_004)
+            self.assertEqual(capture.packed_pixels(image), pixel_row * height)
+            if width != capture.WIDTH:
+                with self.assertRaises(ValueError):
+                    capture.check_image(image)
         image.encoding = "rgb8"
         with self.assertRaises(ValueError):
-            capture.check_image(image)
+            capture.check_image(image, (width, height))
 
 
 class CaptureLoopTests(unittest.TestCase):
@@ -135,7 +139,7 @@ class CaptureLoopTests(unittest.TestCase):
                         "sensor_msgs": SimpleNamespace(), "sensor_msgs.msg": SimpleNamespace(Image=object, CameraInfo=object)}
         args = SimpleNamespace(output=directory, mode="video" if lap_video else "benchmark",
                                route="lap" if lap_video else "chicane", duration=.2 if lap_video else 1.0, warmup=0.2,
-                               startup_timeout=0.5, video_timeout=100.0)
+                               startup_timeout=0.5, video_timeout=100.0, resolution="640x480")
         report = {}
         counters = [{"InErrors": i, "RcvbufErrors": i, "SndbufErrors": 0} for i in (5, 7)]
         with patch.dict(sys.modules, fake_modules), patch.object(capture.time, "monotonic", lambda: clock.now), \
@@ -218,11 +222,12 @@ class StereoVideoTests(unittest.TestCase):
             video.close(True)
 
     def test_sync_video_files_with_different_pixels(self):
-        count = capture.WIDTH * capture.HEIGHT
+        width, height = capture.RESOLUTIONS["424x240"]
+        count = width * height
         frames = (bytes(count), bytes([255]) * count)
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            video = capture.StereoVideo(output, 0.2)
+            video = capture.StereoVideo(output, 0.2, geometry=(width, height))
             for index in (0, 3, 12, 18):
                 video.add(stereo_stamp(index), frames)
             self.assertEqual(video.written, 6)
@@ -233,7 +238,7 @@ class StereoVideoTests(unittest.TestCase):
                 data = subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-of", "json", path])
                 stream = json.loads(data)["streams"][0]
                 self.assertEqual(int(stream["nb_frames"]), 6)
-                self.assertEqual((stream["width"], stream["height"]), (640, 480))
+                self.assertEqual((stream["width"], stream["height"]), (width, height))
                 pixel = subprocess.check_output(["ffmpeg", "-v", "error", "-i", path, "-frames:v", "1",
                                                  "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
                 self.assertLessEqual(abs(pixel[0] - expected), 2)

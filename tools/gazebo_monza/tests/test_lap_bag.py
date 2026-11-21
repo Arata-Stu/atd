@@ -2,6 +2,7 @@
 import contextlib
 import io
 from pathlib import Path
+import copy
 import signal
 import subprocess
 import sys
@@ -39,6 +40,9 @@ class LapBagTests(unittest.TestCase):
         self.assertIn("--use-sim-time", cmd)
         self.assertEqual(set(cmd[cmd.index("--topics") + 1:]),
                          {*lap_bag.TOPICS.values(), *lap_bag.INFO_TOPICS.values(), "/tf_static"})
+        with_imu = lap_bag.command(Path("/some/new/bag"), imu_hz=400)
+        self.assertEqual(set(with_imu[with_imu.index("--topics") + 1:]),
+                         {*lap_bag.TOPIC_NAMES, *lap_bag.imu_streams(400)})
         qos = Path(cmd[cmd.index("--qos-profile-overrides-path") + 1]).read_text()
         self.assertIn("durability: transient_local", qos)
         self.assertIn("reliability: reliable", qos)
@@ -65,6 +69,18 @@ class LapBagTests(unittest.TestCase):
         for p, c in sorted(edges):
             tf = SimpleNamespace(header=SimpleNamespace(frame_id=p), child_frame_id=c)
             messages.append(("/tf_static", SimpleNamespace(transforms=[tf])))
+        for name, (frame, _) in lap_bag.imu_streams(400).items():
+            header = SimpleNamespace(frame_id=frame, stamp=SimpleNamespace(sec=7, nanosec=42))
+            vector = SimpleNamespace(x=0., y=0., z=1.)
+            messages.append((name, SimpleNamespace(header=header, linear_acceleration=vector,
+                                                   angular_velocity=vector, angular_velocity_covariance=[0.] * 9,
+                                                   linear_acceleration_covariance=[0.] * 9)))
+        start_frames = [(name, msg) for name, msg in messages if name != "/tf_static"]
+        for sec in (8, 9):
+            for name, msg in start_frames:
+                later = copy.deepcopy(msg)
+                later.header.stamp.sec = sec
+                messages.append((name, later))
         def spin(*args, **kwargs):
             topic, msg = messages.pop(0)
             callbacks[topic](msg)
@@ -82,10 +98,10 @@ class LapBagTests(unittest.TestCase):
                    "rclpy.qos": SimpleNamespace(DurabilityPolicy=SimpleNamespace(TRANSIENT_LOCAL=1),
                                                 ReliabilityPolicy=SimpleNamespace(RELIABLE=1),
                                                 QoSProfile=SimpleNamespace, qos_profile_sensor_data=object()),
-                   "sensor_msgs.msg": SimpleNamespace(CameraInfo=object, Image=object),
+                   "sensor_msgs.msg": SimpleNamespace(CameraInfo=object, Image=object, Imu=object),
                    "tf2_msgs.msg": SimpleNamespace(TFMessage=object)}
         with patch.dict(sys.modules, modules):
-            lap_bag.wait_for_sample({}, wait, required_edges=edges)
+            lap_bag.wait_for_sample({}, wait, required_edges=edges, imu_hz=400, preroll_s=2)
         self.assertEqual(messages, [])
 
     def test_start_and_finish_are_observed_before_graceful_recorder_close(self):
@@ -96,7 +112,7 @@ class LapBagTests(unittest.TestCase):
                 (root / "rosbags").mkdir()
                 final = root / "rosbags/gazebo-monza"
                 events = []
-                children, report = {}, {}
+                children, report = {}, {"geometry": [848, 480], "imu_hz": 400}
                 proc = MagicMock()
                 def gate(children, wait_for, **kwargs):
                     self.assertIs(children["recorder"], proc)
@@ -106,7 +122,7 @@ class LapBagTests(unittest.TestCase):
                     if interrupted:
                         raise KeyboardInterrupt()
                     return timing
-                with patch.object(run, "start_stream", side_effect=lambda *a: events.append("clock")), \
+                with patch.object(run, "start_stream", side_effect=lambda *a, **kw: events.append("clock")), \
                         patch.object(run, "transforms", return_value=[("base_link", "camera_link", 0)]), \
                         patch.object(subprocess, "Popen", return_value=proc), \
                         patch.object(lap_bag, "wait_for_sample", side_effect=gate), \
@@ -119,10 +135,11 @@ class LapBagTests(unittest.TestCase):
                         pending, actual = run.record_laps(children, root, "monza", {"camera": {}}, report, final)
                         self.assertEqual(actual, timing)
                         self.assertEqual(pending, Path(report["partial_bag"]))
-                self.assertEqual(events[:3], ["clock", ("sample", {"required_edges": {("base_link", "camera_link")}}),
-                                              "lap"])
+                profile = {"geometry": (848, 480), "imu_hz": 400}
+                start_gate = {**profile, "required_edges": {("base_link", "camera_link")}, "preroll_s": 2}
+                self.assertEqual(events[:3], ["clock", ("sample", start_gate), "lap"])
                 self.assertEqual(events[3:], ["close"] if interrupted else
-                                 [("sample", {"min_stamp": 3_250_000_000}), "close"])
+                                 [("sample", {**profile, "min_stamp": 3_250_000_000}), "close"])
                 self.assertFalse(children)
                 self.assertFalse(final.exists())
 
@@ -133,7 +150,7 @@ class LapBagTests(unittest.TestCase):
             final.parent.mkdir()
             args = SimpleNamespace(mode="bag", route="lap", circuit="spa", output=root,
                                    bag_output=final, duration=17., speed=None, laps=2,
-                                   camera_height=.12, camera_pitch_deg=0.)
+                                   camera_height=.12, camera_pitch_deg=0., resolution="424x240", imu="off")
             scene = {"camera": {"height_above_floor_m": .12, "midpoint_forward_from_rear_axle_m": .1,
                                 "pitch_down_deg": 0., "baseline_m": .095, "optical_frames": lap_bag.FRAMES},
                      "trajectory": {"travel_seconds": 17., "laps": 2, "speed_mps": 1.2,
@@ -157,6 +174,8 @@ class LapBagTests(unittest.TestCase):
             self.assertTrue(all("use_sim_time:=true" in p.command for p in processes[1:]))
             self.assertEqual(build.call_args.kwargs["travel_seconds"], 17.)
             self.assertEqual(build.call_args.kwargs["laps"], 2)
+            self.assertEqual(report["geometry"], [424, 240])
+            self.assertEqual(build.call_args.kwargs["resolution"], "424x240")
             self.assertEqual(report["total_travel_seconds"], 34.)
             self.assertEqual(report["lap_length_m"], 20.4)
             self.assertFalse(build.call_args.kwargs["repeat"])
@@ -183,7 +202,8 @@ class LapBagTests(unittest.TestCase):
                     lap_bag.audit_and_publish(pending, final, timing, report, trace)
                 self.assertEqual(list(rosbags.rglob("metadata.yaml")), [])
                 self.assertTrue((Path(report["partial_bag"]) / "metadata.yaml").is_file())
-                audit.assert_called_once_with(pending, 10, 123, laps=1, lap_duration_s=1e-7)
+                audit.assert_called_once_with(pending, 10, 123, laps=1, lap_duration_s=1e-7,
+                                              geometry=(640, 480), imu_hz=0, preroll_s=0)
                 audit.side_effect = None
                 audit.return_value = {"coverage": "gaps_detected", "complete_stereo_samples": 2, "largest_gap_sim_s": .3,
                                       "file_bytes": {"test.mcap": 1234}}

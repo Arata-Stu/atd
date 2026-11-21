@@ -94,7 +94,7 @@ class CompositionTests(unittest.TestCase):
     def test_bag_vslam_loads_the_mapper_component_for_live_visualization(self):
         path = Path(__file__).resolve().parents[1] / 'launch/bag_vslam.launch.py'
         with fake_launch():
-            limit, container = runpy.run_path(str(path))['generate_launch_description']().entities
+            limit, mode, frame, frequency, container = runpy.run_path(str(path))['generate_launch_description']().entities
         tracker, = container.composable_node_descriptions
         self.assertEqual((container.package, container.executable), ('rclcpp_components', 'component_container_mt'))
         self.assertEqual((tracker.package, tracker.plugin),
@@ -106,6 +106,11 @@ class CompositionTests(unittest.TestCase):
                      'enable_landmarks_view', 'publish_map_to_odom_tf', 'publish_odom_to_base_tf'):
             self.assertIs(params[flag], True)
         self.assertEqual(params['path_max_size'], 50000)
+        self.assertEqual(mode.choices, ['0', '1'])
+        for arg, key, type_ in ((mode, 'tracking_mode', int), (frame, 'imu_frame', str),
+                                (frequency, 'calibration_frequency', float)):
+            self.assertEqual((params[key].args[0].name, params[key].value_type), (arg.args[0], type_))
+        self.assertEqual(dict(tracker.remappings)['visual_slam/imu'], '/camera/camera/imu')
         self.assertEqual((limit.args[0], limit.default_value), ('slam_max_map_size', '0'))
         self.assertEqual((params['slam_max_map_size'].args[0].name, params['slam_max_map_size'].value_type),
                          (limit.args[0], int))

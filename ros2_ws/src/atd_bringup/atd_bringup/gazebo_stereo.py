@@ -4,7 +4,8 @@ from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 
 
-def stereo_container(sim_time, *, mapping=False, visualize_landmarks=False, slam_max_map_size=0):
+def stereo_container(sim_time, *, mapping=False, visualize_landmarks=False, slam_max_map_size=0,
+                     tracking_mode=0, imu_frame='camera_gyro_optical_frame', imu_frequency=200.0):
     mapping_params = {'slam_max_map_size': slam_max_map_size} if mapping else {}
     if visualize_landmarks:
         mapping_params.update(enable_slam_visualization=True, enable_landmarks_view=True, path_max_size=50000)
@@ -14,7 +15,8 @@ def stereo_container(sim_time, *, mapping=False, visualize_landmarks=False, slam
         parameters=[{
             **mapping_params,
             'use_sim_time': sim_time,
-            'num_cameras': 2, 'min_num_images': 2, 'tracking_mode': 0,
+            'num_cameras': 2, 'min_num_images': 2, 'tracking_mode': tracking_mode,
+            'imu_frame': imu_frame, 'calibration_frequency': imu_frequency, 'imu_qos': 'SENSOR_DATA',
             'rectified_images': True, 'image_qos': 'SENSOR_DATA',
             'base_frame': 'base_link', 'odom_frame': 'odom',
             'camera_optical_frames': ['camera_infra1_optical_frame', 'camera_infra2_optical_frame'],
@@ -23,6 +25,7 @@ def stereo_container(sim_time, *, mapping=False, visualize_landmarks=False, slam
             'publish_odom_to_base_tf': True, 'publish_map_to_odom_tf': mapping,
         }],
         remappings=[
+            ('visual_slam/imu', '/camera/camera/imu'),
             ('visual_slam/image_0', '/camera/camera/infra1/image_rect_raw'),
             ('visual_slam/image_1', '/camera/camera/infra2/image_rect_raw'),
             ('visual_slam/camera_info_0', '/camera/camera/infra1/camera_info'),

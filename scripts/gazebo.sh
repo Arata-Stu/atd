@@ -27,6 +27,8 @@ usage() {
   --wait-for-stereo   serve を一時停止状態で起動し、左右の画像と CameraInfo の購読を待って走行開始
   --dds shm|udp   Gazebo コンテナ内に Fast DDS 共有メモリを追加（shm、既定）、または従来の UDP のみ（udp）
   --camera-height m   地面から左右光学中心までの高さを指定
+  --resolution WxH    左右とも 424x240 / 640x480（既定）/ 848x480 / 1280x720、90 Hz
+  --imu off|200|400   加速度 200 Hz、ジャイロと統合 IMU は指定 Hz で配信（既定 off）
   --camera-pitch-deg 度   カメラの下向き角度を指定（既定 0）
   --dry-run           対象イメージ・保存先・実行コマンドを表示
 
@@ -78,6 +80,14 @@ while (( $# )); do
         --dds)
             [[ "$action" != prepare && ( "${2:-}" = shm || "${2:-}" = udp ) ]] || fail "走行時に --dds shm または --dds udp を指定してください"
             dds="$2"; shift 2 ;;
+        --resolution)
+            [[ "$action" != prepare ]] || fail "$1 は走行時に指定してください"
+            case "${2:-}" in 424x240|640x480|848x480|1280x720) ;; *) fail "--resolution は 424x240, 640x480, 848x480, 1280x720 から選択してください";; esac
+            sim_args+=("$1" "$2"); shift 2 ;;
+        --imu)
+            [[ "$action" != prepare ]] || fail "$1 は走行時に指定してください"
+            case "${2:-}" in off|200|400) ;; *) fail "--imu は off, 200, 400 から選択してください";; esac
+            sim_args+=("$1" "$2"); shift 2 ;;
         --duration|--camera-height|--camera-pitch-deg)
             [[ "$action" != prepare ]] || fail "$1 は走行時に指定してください"
             [[ "$1" != --duration || "$action" != serve ]] || fail "serve の終了条件は --laps または Ctrl+C で指定してください"

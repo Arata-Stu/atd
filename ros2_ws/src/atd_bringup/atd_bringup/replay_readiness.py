@@ -5,7 +5,7 @@ import shlex
 from time import monotonic
 
 from atd_bringup.replay_inputs import (
-    GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, SLAM_ODOMETRY, STEREO_WORKFLOW,
+    GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, IMU_TOPIC, SLAM_ODOMETRY, STEREO_WORKFLOW,
 )
 
 
@@ -68,7 +68,7 @@ def _connection_issues(topic, publishers, subscribers, producer, consumer):
     return missing
 
 
-def _missing_endpoints(node, player_name, rviz_name, ground_truth=False):
+def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=False):
     inputs = {
         STEREO_WORKFLOW['left_image']: 'sensor_msgs/msg/Image',
         STEREO_WORKFLOW['right_image']: 'sensor_msgs/msg/Image',
@@ -77,6 +77,8 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False):
         STEREO_WORKFLOW['tf_static']: 'tf2_msgs/msg/TFMessage',
         '/clock': 'rosgraph_msgs/msg/Clock',
     }
+    if vio:
+        inputs[IMU_TOPIC] = 'sensor_msgs/msg/Imu'
     missing = []
     nodes = [_name(name, namespace) for name, namespace in node.get_node_names_and_namespaces()]
     overlay = '/' + GROUND_TRUTH_NODE
@@ -123,7 +125,7 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False):
 
 
 def wait_and_resume(node, player_name='/rosbag2_player', timeout_s=90.0, *,
-                    rviz_name='/rviz2', check_running=None, ground_truth=False):
+                    rviz_name='/rviz2', check_running=None, ground_truth=False, vio=False):
     """再生開始の応答まで待つ。check_running は子プロセスの異常終了時に例外を送出する。"""
     import rclpy
     from rosbag2_interfaces.srv import IsPaused, Resume
@@ -161,7 +163,7 @@ def wait_and_resume(node, player_name='/rosbag2_player', timeout_s=90.0, *,
     resume = node.create_client(Resume, player_name + '/resume')
     try:
         while True:
-            waiting = _missing_endpoints(node, player_name, rviz_name, ground_truth)
+            waiting = _missing_endpoints(node, player_name, rviz_name, ground_truth, vio)
             if not paused.service_is_ready():
                 waiting.append(player_name + '/is_paused')
             if not resume.service_is_ready():
@@ -169,7 +171,7 @@ def wait_and_resume(node, player_name='/rosbag2_player', timeout_s=90.0, *,
             if not waiting:
                 if not call(paused, IsPaused.Request(), player_name + '/is_paused').paused:
                     raise RuntimeError(f'{player_name} が開始待ちの一時停止状態ではありません')
-                waiting = _missing_endpoints(node, player_name, rviz_name, ground_truth)
+                waiting = _missing_endpoints(node, player_name, rviz_name, ground_truth, vio)
                 if not waiting:
                     break
             poll('、'.join(waiting))

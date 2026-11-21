@@ -13,12 +13,14 @@ import time
 
 import world
 import lap_bag
+from capture import TARGET_HZ
 from monza_motion import interpolate, travel_fraction
+from sensor_profile import ACCEL_FRAME, ACCEL_TOPIC, GYRO_FRAME, GYRO_TOPIC, IMU_MODES, IMU_TOPIC, RESOLUTIONS
 
 HERE = Path(__file__).resolve().parent
 
 
-def bridge_topics(circuit="monza"):
+def bridge_topics(circuit="monza", imu_hz=0):
     topics = [{"ros_topic_name": "/clock", "gz_topic_name": f"/world/{circuit}/clock",
                "ros_type_name": "rosgraph_msgs/msg/Clock", "gz_type_name": "gz.msgs.Clock",
                "direction": "GZ_TO_ROS", "qos_profile": "CLOCK"}]
@@ -28,6 +30,11 @@ def bridge_topics(circuit="monza"):
             topics.append({"gz_topic_name": f"/{circuit}/{side}/{gz_suffix}",
                            "ros_topic_name": f"/camera/camera/infra{index}/{ros_suffix}",
                            "gz_type_name": f"gz.msgs.{msg}", "ros_type_name": f"sensor_msgs/msg/{msg}",
+                           "direction": "GZ_TO_ROS", "qos_profile": "SENSOR_DATA", "lazy": False})
+    if imu_hz:
+        for name, topic in (("imu", IMU_TOPIC), ("accel", ACCEL_TOPIC), ("gyro", GYRO_TOPIC)):
+            topics.append({"gz_topic_name": f"/{circuit}/{name}", "ros_topic_name": topic,
+                           "gz_type_name": "gz.msgs.IMU", "ros_type_name": "sensor_msgs/msg/Imu",
                            "direction": "GZ_TO_ROS", "qos_profile": "SENSOR_DATA", "lazy": False})
     return topics
 
@@ -77,13 +84,13 @@ def unpause(circuit):
     return reply.returncode == 0 and "data: true" in reply.stdout
 
 
-def start_stream(children, wait_for_stereo, circuit="monza", check_external=None):
+def start_stream(children, wait_for_stereo, circuit="monza", check_external=None, *, imu_hz=0):
     import rclpy
     from rclpy.parameter import Parameter
     from rclpy.qos import QoSCompatibility, qos_check_compatible
     from rclpy.signals import SignalHandlerOptions
 
-    topics = bridge_topics(circuit)
+    topics = bridge_topics(circuit, imu_hz)
     with rclpy.init(args=[], signal_handler_options=SignalHandlerOptions.NO), rclpy.create_node(
         "atd_gazebo_startup", parameter_overrides=[Parameter("use_sim_time", value=True)]
     ) as node:
@@ -92,7 +99,7 @@ def start_stream(children, wait_for_stereo, circuit="monza", check_external=None
                 raise RuntimeError("同じ ROS ドメインに /clock の発行元が複数あります")
             return all(node.count_publishers(t["ros_topic_name"]) for t in topics)
 
-        wait_for(bridge_ready, children, 60, "ROS の /clock とステレオ画像・CameraInfo の publisher", check_external)
+        wait_for(bridge_ready, children, 60, "ROS の /clock と選択したセンサーの publisher", check_external)
         if wait_for_stereo:
             last_missing = None
 
@@ -100,7 +107,7 @@ def start_stream(children, wait_for_stereo, circuit="monza", check_external=None
                 nonlocal last_missing
                 missing = []
                 for topic in topics:
-                    if topic["ros_topic_name"] == "/clock":
+                    if topic["ros_type_name"] not in ("sensor_msgs/msg/Image", "sensor_msgs/msg/CameraInfo"):
                         continue
                     name = topic["ros_topic_name"]
                     publishers = node.get_publishers_info_by_topic(name)
@@ -131,7 +138,7 @@ def start_stream(children, wait_for_stereo, circuit="monza", check_external=None
         wait_for(clock_advancing, children, 45, "ROS /clock の進行", check_external)
 
 
-def transforms(camera):
+def transforms(camera, imu_hz=0):
     # シミュレーション用後軸中心の仮定値。床基準のレンズ高から差し引く。
     axle_height = .0325
     yield ("base_link", "camera_link", camera["midpoint_forward_from_rear_axle_m"], 0,
@@ -139,6 +146,9 @@ def transforms(camera):
     for side, sign in (("left", 1), ("right", -1)):
         yield ("camera_link", camera["optical_frames"][side], 0, sign * camera["baseline_m"] / 2,
                0, -math.pi / 2, 0, -math.pi / 2)
+    if imu_hz:
+        for frame in (ACCEL_FRAME, GYRO_FRAME):
+            yield ("camera_link", frame, 0, 0, 0, -math.pi / 2, 0, -math.pi / 2)
 
 
 def inspect_lap(scene_dir, trajectory, samples, metrics):
@@ -273,7 +283,7 @@ def map_laps(children, out, circuit, scene, report):
 
     # Let the clock and stereo run at the initial pose until the mapper has
     # actually tracked it. Waiting for odometry with the world paused deadlocks.
-    start_stream(children, False, circuit, check_mapper)
+    start_stream(children, False, circuit, check_mapper, imu_hz=report["imu_hz"])
     (out / "gazebo.ready").touch(exist_ok=False)
     print("スタート位置で cuVSLAM の初期追跡を待っています。", flush=True)
     wait_for((out / "mapping.ready").is_file, children, 240, "cuVSLAM の初期追跡", check_mapper)
@@ -291,21 +301,25 @@ def map_laps(children, out, circuit, scene, report):
 
 def record_laps(children, out, circuit, scene, report, final):
     # Advance the clock with the rig parked. The Lyrical recorder waits for
-    # /clock before it starts discovering the five requested topics.
-    start_stream(children, False, circuit)
+    # /clock before it starts discovering the selected topics.
+    imu_hz = report["imu_hz"]
+    geometry = tuple(report["geometry"])
+    start_stream(children, False, circuit, imu_hz=imu_hz)
     pending = lap_bag.staging_path(final)
     report["partial_bag"] = str(pending)
     print(f"MCAP を記録します。途中の保存先 {pending}", flush=True)
     with (out / "recorder.log").open("w") as log:
-        proc = subprocess.Popen(lap_bag.command(pending), stdout=log, stderr=subprocess.STDOUT,
+        proc = subprocess.Popen(lap_bag.command(pending, imu_hz=imu_hz), stdout=log, stderr=subprocess.STDOUT,
                                 start_new_session=True)
         children["recorder"] = proc
         try:
-            edges = {(p, c) for p, c, *_ in transforms(scene["camera"])}
-            lap_bag.wait_for_sample(children, wait_for, required_edges=edges)
+            edges = {(p, c) for p, c, *_ in transforms(scene["camera"], imu_hz)}
+            lap_bag.wait_for_sample(children, wait_for, required_edges=edges, geometry=geometry, imu_hz=imu_hz,
+                                    preroll_s=lap_bag.IMU_PREROLL_S if imu_hz else 0)
             timing = drive_laps(children, out, scene, report)
             # Keep recording on the stationary finishing pose through the last exposure.
-            lap_bag.wait_for_sample(children, wait_for, min_stamp=timing["finish_sim_ns"] + 250_000_000)
+            lap_bag.wait_for_sample(children, wait_for, min_stamp=timing["finish_sim_ns"] + 250_000_000,
+                                    geometry=geometry, imu_hz=imu_hz)
         finally:
             del children["recorder"]
             lap_bag.close_recorder(proc)
@@ -320,6 +334,9 @@ def run(args, report):
     lap_video = mode == "video" and args.route == "lap"
     finite_serve = mode == "serve" and args.laps is not None
     finite_run = mode in ("video", "map", "bag") or finite_serve
+    width, height = RESOLUTIONS[args.resolution]
+    imu_hz = IMU_MODES[args.imu]
+    report.update(geometry=[width, height], imu_hz=imu_hz, accel_hz=200 if imu_hz else 0, gyro_hz=imu_hz)
     if mode == "bag":
         lap_bag.check_recorder()
         lap_bag.check_destination(args.bag_output)
@@ -327,7 +344,7 @@ def run(args, report):
                         travel_seconds=args.duration if finite_run else None, speed_mps=args.speed,
                         laps=args.laps or 1, repeat=not finite_run, circuit=args.circuit, route=args.route,
                         wait_for_capture=(lap_video or finite_serve or mode in ("map", "bag")),
-                        record_ground_truth=mode == "bag")
+                        record_ground_truth=mode == "bag", resolution=args.resolution, imu_hz=imu_hz)
     trajectory = scene["trajectory"]
     total_seconds = trajectory["total_travel_seconds"]
     duration = total_seconds if finite_run else args.duration
@@ -341,14 +358,16 @@ def run(args, report):
     else:
         schedule = "繰り返し走行"
     print(f"{args.circuit} / {args.route}  RC速度 {trajectory['speed_mps']:.3g} m/s  {schedule}", flush=True)
+    inertial = f"加速度 200 Hz・ジャイロ／統合 {imu_hz} Hz" if imu_hz else "OFF"
+    print(f"ステレオ {width}×{height} @ {TARGET_HZ} Hz  IMU {inertial}", flush=True)
     if mode == "bag":
         report["lap_length_m"] = trajectory["end_s_m"]
-        image_bytes = 2 * lap_bag.WIDTH * lap_bag.HEIGHT * lap_bag.TARGET_HZ * duration
+        image_bytes = 2 * width * height * TARGET_HZ * duration
         print(f"左右画像の容量目安 合計 {image_bytes / 1e9:.2f} GB "
               f"（1周 {image_bytes / trajectory['laps'] / 1e9:.2f} GB × {trajectory['laps']}周、"
-              f"mono8 {lap_bag.WIDTH}×{lap_bag.HEIGHT} × 左右2枚 × {lap_bag.TARGET_HZ} Hz）", flush=True)
+              f"mono8 {width}×{height} × 左右2枚 × {TARGET_HZ} Hz）", flush=True)
     config = out / "bridge.yaml"
-    config.write_text(json.dumps(bridge_topics(args.circuit), indent=2) + "\n")
+    config.write_text(json.dumps(bridge_topics(args.circuit, imu_hz), indent=2) + "\n")
     report.update(ros_domain_id=os.environ.get("ROS_DOMAIN_ID", "0"),
                   dds_profile=os.environ.get("FASTDDS_DEFAULT_PROFILES_FILE"), scene="scene/scene.json",
                   simulated_rear_axle_height_m=.0325)
@@ -371,7 +390,7 @@ def run(args, report):
         start("bridge", ["ros2", "run", "ros_gz_bridge", "parameter_bridge", "--ros-args",
                          "-p", f"config_file:={config}", "-p", clock_param,
                          "-p", "override_timestamps_with_wall_time:=false"])
-        for parent, child, x, y, z, roll, pitch, yaw in transforms(scene["camera"]):
+        for parent, child, x, y, z, roll, pitch, yaw in transforms(scene["camera"], imu_hz):
             start("tf_" + child, ["ros2", "run", "tf2_ros", "static_transform_publisher",
                                   "--frame-id", parent, "--child-frame-id", child,
                                   "--x", str(x), "--y", str(y), "--z", str(z),
@@ -385,7 +404,7 @@ def run(args, report):
             lap_bag.audit_and_publish(pending, args.bag_output, timing, report, scene_dir / "rig_motion.jsonl")
             return 0
         if mode == "serve":
-            start_stream(children, args.wait_for_stereo, args.circuit)
+            start_stream(children, args.wait_for_stereo, args.circuit, imu_hz=imu_hz)
             if finite_serve:
                 drive_laps(children, out, scene, report)
                 print(f"{args.laps}周のゴールを確認しました。配信を終了します。", flush=True)
@@ -399,7 +418,8 @@ def run(args, report):
             probe = start("gz_probe", [sys.executable, str(HERE / "gz_probe.py"), "--output", str(out), "--circuit", args.circuit])
             wait_for((out / "gz_probe.ready").is_file, children, 30, "Gazebo 側の診断購読の準備")
         receiver = start("capture", [sys.executable, str(HERE / "capture.py"), "--output", str(out),
-                                     "--mode", mode, "--route", args.route, "--duration", str(duration)])
+                                     "--mode", mode, "--route", args.route, "--duration", str(duration),
+                                     "--resolution", args.resolution])
         wait_for((out / f"{mode}.ready").is_file, children, 70, "左右カメラの ROS publisher と subscriber の接続")
         wait_for(lambda: unpause(args.circuit), children, 45, "Gazebo の再生開始")
         servers = {k: v for k, v in children.items() if v is not receiver and v is not probe}
@@ -490,6 +510,8 @@ def main():
     parser.add_argument("--wait-for-stereo", action="store_true")
     parser.add_argument("--camera-height", type=float, default=.12)
     parser.add_argument("--camera-pitch-deg", type=float, default=0)
+    parser.add_argument("--resolution", choices=RESOLUTIONS, default="640x480")
+    parser.add_argument("--imu", choices=IMU_MODES, default="off", help="ジャイロ・統合IMUのHz。加速度は200 Hz")
     args = parser.parse_args()
     if (args.mode == "bag") != (args.bag_output is not None):
         parser.error("--bag-output は --mode bag で指定してください")

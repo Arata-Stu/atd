@@ -5,6 +5,8 @@ import json
 from math import atan2, cos, hypot, sin
 from pathlib import Path
 
+from rig_imu import ImuPublisher
+
 
 def interpolate(samples, distances, distance):
     index = max(0, min(bisect_right(distances, distance) - 1, len(samples) - 2))
@@ -34,6 +36,7 @@ class MonzaMotion:
         self.start_s = 0.0
         self.laps = 1
         self.trace_interval_s = None
+        self.imu = None
 
     def configure(self, entity, sdf, ecm, event_mgr):
         from gz.sim import Link, Model
@@ -59,6 +62,9 @@ class MonzaMotion:
         self.trace = scene_file.with_name("rig_motion.jsonl")
         self.trace.write_text("")
         self.next_trace_s = 0.0
+        imu_hz = scene.get("imu", {}).get("rate_hz", 0)
+        if imu_hz:
+            self.imu = ImuPublisher(scene["course"], scene["camera"], imu_hz)
 
     def pre_update(self, info, ecm):
         if info.paused:
@@ -78,16 +84,23 @@ class MonzaMotion:
         self.model.set_world_pose_cmd(ecm, self.pose_type(x, y, 0, 0, 0, yaw))
 
     def post_update(self, info, ecm):
+        if info.paused:
+            return
         seconds = info.sim_time.total_seconds()
+        pose = None
+        if self.imu is not None:
+            pose = self.link.world_pose(ecm)
+            self.imu.update(round(seconds * 1e9), pose)
         # Final sample is already flushed when the completion marker appears.
         # Readers may validate the trace while the sensor streams continue.
-        if info.paused or self.start_s is None or self.finished:
+        if self.start_s is None or self.finished:
             return
         at_finish = self.closed and not self.repeat and seconds >= self.start_s + self.duration * self.laps
         if seconds < self.next_trace_s and not at_finish:
             return
         # Inspect the actual post-physics link, independent of the requested pose.
-        pose = self.link.world_pose(ecm)
+        if pose is None:
+            pose = self.link.world_pose(ecm)
         sample = {"sim_time_s": seconds, "x_m": pose.x(), "y_m": pose.y(), "yaw_rad": pose.yaw()}
         with self.trace.open("a") as stream:
             stream.write(json.dumps(sample) + "\n")

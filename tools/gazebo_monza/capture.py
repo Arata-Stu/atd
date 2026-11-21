@@ -10,7 +10,9 @@ from collections import OrderedDict
 from functools import partial
 from pathlib import Path
 
-WIDTH, HEIGHT = 640, 480
+from sensor_profile import RESOLUTIONS
+
+WIDTH, HEIGHT = RESOLUTIONS["640x480"]
 TARGET_HZ = 90
 VIDEO_HZ = 30
 TOLERANCE = 0.01
@@ -127,10 +129,11 @@ class StereoPairs:
         }
 
 
-def check_image(image):
-    if ((image.width, image.height, image.encoding) != (WIDTH, HEIGHT, "mono8")
-            or image.step < WIDTH or len(image.data) != image.step * HEIGHT):
-        raise ValueError(f"Expected 640x480 mono8; received {image.width}x{image.height} "
+def check_image(image, geometry=(WIDTH, HEIGHT)):
+    width, height = geometry
+    if ((image.width, image.height, image.encoding) != (width, height, "mono8")
+            or image.step < width or len(image.data) != image.step * height):
+        raise ValueError(f"Expected {width}x{height} mono8; received {image.width}x{image.height} "
                          f"{image.encoding}, step={image.step}, bytes={len(image.data)}")
     stamp = image.header.stamp
     if stamp.sec < 0 or not (0 <= stamp.nanosec < NANO):
@@ -140,15 +143,16 @@ def check_image(image):
 
 def packed_pixels(image):
     data = memoryview(image.data).cast("B")
-    if image.step == WIDTH:
+    if image.step == image.width:
         return data
-    return b"".join(data[row * image.step:row * image.step + WIDTH] for row in range(HEIGHT))
+    return b"".join(data[row * image.step:row * image.step + image.width] for row in range(image.height))
 
 
 class Calibration:
     """Verify synchronized per-eye metadata on the first complete four-message sample."""
 
-    def __init__(self):
+    def __init__(self, geometry=(WIDTH, HEIGHT)):
+        self.width, self.height = geometry
         self.samples = OrderedDict()
         self.result = None
 
@@ -164,12 +168,12 @@ class Calibration:
         result = {}
         for side in TOPICS:
             info = sample[side]
-            if (info.width, info.height, info.header.frame_id) != (WIDTH, HEIGHT, FRAMES[side]):
+            if (info.width, info.height, info.header.frame_id) != (self.width, self.height, FRAMES[side]):
                 raise ValueError(f"{side} CameraInfo geometry or optical frame mismatch")
             k, p = list(info.k), list(info.p)
             if (len(k) != 9 or len(p) != 12 or not all(math.isfinite(v) for v in (*k, *p))
                     or min(k[0], k[4], p[0], p[5]) <= 0
-                    or not (0 < p[2] < WIDTH and 0 < p[6] < HEIGHT)):
+                    or not (0 < p[2] < self.width and 0 < p[6] < self.height)):
                 raise ValueError(f"Invalid {side} camera intrinsics")
             result[side] = {"frame_id": info.header.frame_id, "width": info.width,
                             "height": info.height, "k": k, "p": p}
@@ -187,7 +191,7 @@ class Calibration:
 class StereoVideo:
     """Sample real stereo pairs at 30 fps on the simulation time axis."""
 
-    def __init__(self, output, duration, *, include_finish=False):
+    def __init__(self, output, duration, *, include_finish=False, geometry=(WIDTH, HEIGHT)):
         self.output = output
         self.duration_ns = round(duration * NANO)
         self.include_finish = include_finish
@@ -200,14 +204,15 @@ class StereoVideo:
         self.last_stamp = None
         self.last_frames = None
         self.files = [output / (side + ".partial.mp4") for side in TOPICS]
+        width, height = geometry
         # Two stacked gray images in a single pipe keep encoder outputs in lockstep.
         command = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
-            "-f", "rawvideo", "-pixel_format", "gray", "-video_size", f"{WIDTH}x{HEIGHT * 2}",
+            "-f", "rawvideo", "-pixel_format", "gray", "-video_size", f"{width}x{height * 2}",
             "-framerate", str(VIDEO_HZ), "-i", "pipe:0", "-filter_complex_threads", "1",
             "-filter_complex",
-            f"[0:v]split=2[a][b];[a]crop={WIDTH}:{HEIGHT}:0:0[left];"
-            f"[b]crop={WIDTH}:{HEIGHT}:0:{HEIGHT}[right]",
+            f"[0:v]split=2[a][b];[a]crop={width}:{height}:0:0[left];"
+            f"[b]crop={width}:{height}:0:{height}[right]",
         ]
         for side, path in zip(TOPICS, self.files):
             command += ["-map", f"[{side}]", "-c:v", "libx264", "-preset", "veryfast",
@@ -294,7 +299,8 @@ def capture(args, report):
     udp_start = None
     ready = args.output / f"{args.mode}.ready"
     ready_at = None
-    calibration = Calibration()
+    geometry = RESOLUTIONS[args.resolution]
+    calibration = Calibration(geometry)
     info_subscriptions = []
     lap_video = args.mode == "video" and args.route == "lap"
     scene_dir = args.output / "scene"
@@ -306,7 +312,7 @@ def capture(args, report):
         arrival = time.monotonic()
         if ready_at is None or (measure and deadline is not None and arrival >= deadline):
             return
-        stamp = check_image(image)
+        stamp = check_image(image, geometry)
         if image.header.frame_id != FRAMES[side]:
             raise ValueError(f"{side} image optical frame mismatch: {image.header.frame_id!r}")
         result = pairs.feed(side, stamp, arrival, None if measure else packed_pixels(image))
@@ -334,7 +340,7 @@ def capture(args, report):
 
     try:
         if not measure:
-            video = StereoVideo(args.output, args.duration, include_finish=lap_video)
+            video = StereoVideo(args.output, args.duration, include_finish=lap_video, geometry=geometry)
         subscriptions = {}
         for side, topic in TOPICS.items():
             subscriptions[topic] = node.create_subscription(
@@ -440,6 +446,7 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--mode", required=True, choices=("video", "benchmark"))
     parser.add_argument("--route", choices=("chicane", "lap"), default="chicane")
+    parser.add_argument("--resolution", choices=RESOLUTIONS, default="640x480")
     parser.add_argument("--duration", type=float, required=True)
     parser.add_argument("--warmup", type=float, default=1.0, help="benchmark wall seconds after first pair")
     parser.add_argument("--startup-timeout", type=float, default=60.0, help="wall seconds to first pair")
@@ -459,7 +466,7 @@ def main():
     if args.mode == "video" and any((args.output / f"{s}{ext}").exists() for s in TOPICS
                                     for ext in (".mp4", ".partial.mp4")):
         parser.error("Existing stereo video files; use a fresh output directory")
-    report = {"mode": args.mode, "route": args.route, "topics": TOPICS, "geometry": [WIDTH, HEIGHT],
+    report = {"mode": args.mode, "route": args.route, "topics": TOPICS, "geometry": list(RESOLUTIONS[args.resolution]),
               "encoding": "mono8", "target_hz": TARGET_HZ, "rate_tolerance_fraction": TOLERANCE,
               "requested_duration_s": args.duration, "duration_clock": "wall" if args.mode == "benchmark" else "simulation",
               "ready": False, "warmup_wall_s": args.warmup if args.mode == "benchmark" else 0}

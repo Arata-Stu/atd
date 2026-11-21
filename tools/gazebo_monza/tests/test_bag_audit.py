@@ -16,32 +16,43 @@ STEP = round(audit.NANO / audit.TARGET_HZ)
 PIXELS = bytes(640 * 480)
 
 
-def frame(topic, index):
+def frame(topic, index, geometry=(640, 480)):
     side = audit.CAMERAS[topic]
+    w, h = geometry
     sec, ns = divmod(index * STEP, audit.NANO)
     header = Obj(stamp=Obj(sec=sec, nanosec=ns), frame_id=audit.FRAMES[side])
     if topic == audit.TOPICS[side]:
-        return Obj(header=header, width=640, height=480, encoding="mono8", step=640, data=PIXELS)
+        return Obj(header=header, width=w, height=h, encoding="mono8", step=w,
+                   data=PIXELS if geometry == (640, 480) else bytes(w * h))
     tx = -337 * audit.BASELINE_M if side == "right" else 0.
-    return Obj(header=header, width=640, height=480, k=[337, 0, 320, 0, 337, 240, 0, 0, 1],
-               p=[337, 0, 320, tx, 0, 337, 240, 0, 0, 0, 1, 0])
+    return Obj(header=header, width=w, height=h, k=[337, 0, w / 2, 0, 337, h / 2, 0, 0, 1],
+               p=[337, 0, w / 2, tx, 0, 337, h / 2, 0, 0, 0, 1, 0])
 
 
-def static_tf():
+def static_tf(imu_hz=0):
     transforms = []
-    for child, parent, y in (("camera_link", "base_link", 0.),
-                             (audit.FRAMES["left"], "camera_link", .0475),
-                             (audit.FRAMES["right"], "camera_link", -.0475)):
+    imu_frames = {frame for frame, _ in audit.imu_streams(imu_hz).values()}
+    links = [("camera_link", "base_link", 0.), (audit.FRAMES["left"], "camera_link", .0475),
+             (audit.FRAMES["right"], "camera_link", -.0475)]
+    links.extend((frame, "camera_link", 0.) for frame in imu_frames)
+    for child, parent, y in links:
         q = (0, 0, 0, 1) if child == "camera_link" else (-.5, .5, -.5, .5)
         t = Obj(translation=Obj(x=0., y=y, z=0.), rotation=Obj(x=q[0], y=q[1], z=q[2], w=q[3]))
         transforms.append(Obj(header=Obj(frame_id=parent), child_frame_id=child, transform=t))
     return Obj(transforms=transforms)
 
 
-def recording(indices=range(1, 8)):
-    return [(audit.TF, static_tf())] + [
-        (topic, frame(topic, i)) for i in indices for topic in audit.CAMERAS
-    ]
+def recording(indices=range(1, 8), *, geometry=(640, 480), imu_hz=0):
+    messages = [(audit.TF, static_tf(imu_hz))]
+    messages.extend((topic, frame(topic, i, geometry)) for i in indices for topic in audit.CAMERAS)
+    for name, (frame_id, rate) in audit.imu_streams(imu_hz).items():
+        for ns in range(audit.NANO // rate, 8 * STEP, audit.NANO // rate):
+            header = Obj(frame_id=frame_id, stamp=Obj(sec=0, nanosec=ns))
+            messages.append((name, Obj(header=header, linear_acceleration=Obj(x=0., y=-9.8, z=0.),
+                                       angular_velocity=Obj(x=.5, y=0., z=0.),
+                                       linear_acceleration_covariance=[-1. if name == audit.GYRO_TOPIC else 0.] + [0.]*8,
+                                       angular_velocity_covariance=[-1. if name == audit.ACCEL_TOPIC else 0.] + [0.]*8)))
+    return messages
 
 
 def receipt_time(name, msg):
@@ -81,6 +92,57 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(result["interior_stereo_samples_per_lap"], [2, 2])
         with self.assertRaisesRegex(ValueError, "2周目"):
             self.audit(recording([1, 2, 3, 4, 5, 8, 9]), **options)
+
+    def test_selected_geometry_and_all_imu_streams_are_verified_in_sim_time(self):
+        geometry = (424, 240)
+        for rate in (200, 400):
+            messages = recording(geometry=geometry, imu_hz=rate)
+            result = self.audit(messages, geometry=geometry, imu_hz=rate)
+            self.assertEqual(result["geometry"], list(geometry))
+            self.assertEqual(result["stereo_calibration"]["right"]["width"], geometry[0])
+            for name in (audit.ACCEL_TOPIC, audit.GYRO_TOPIC, audit.IMU_TOPIC):
+                stream = result["imu_streams"][name]
+                self.assertEqual(stream["measured_sim_hz"], 200 if name == audit.ACCEL_TOPIC else rate)
+                self.assertEqual(stream["missing_slots_estimate"], 0)
+                self.assertGreater(stream["interior_samples_per_lap"][0], 0)
+                self.assertEqual(result["static_tf_parents"][stream["frame"]], "camera_link")
+        with self.assertRaisesRegex(ValueError, "mono8"):
+            self.audit(messages, imu_hz=400)
+        with self.assertRaisesRegex(ValueError, "必須の topic"):
+            self.audit([(name, m) for name, m in messages if name != audit.GYRO_TOPIC], geometry=geometry, imu_hz=400)
+        with self.assertRaisesRegex(ValueError, "周期"):
+            self.audit(recording(imu_hz=200), imu_hz=400)
+
+    def test_imu_timing_gaps_payload_and_tf(self):
+        messages = recording(imu_hz=400)
+        short = [(name, m) for name, m in messages
+                 if name != audit.IMU_TOPIC or m.header.stamp.nanosec != 30_000_000]
+        result = self.audit(short, imu_hz=400)
+        self.assertEqual(result["imu_streams"][audit.IMU_TOPIC]["missing_slots_estimate"], 1)
+        self.assertEqual(result["imu_streams"][audit.GYRO_TOPIC]["missing_slots_estimate"], 0)
+        with self.assertRaisesRegex(ValueError, "両端"):
+            self.audit([(n, m) for n, m in messages if n != audit.IMU_TOPIC or m.header.stamp.nanosec < 60_000_000],
+                       imu_hz=400)
+        bad = next(m for n, m in messages if n == audit.IMU_TOPIC)
+        bad.angular_velocity.x = float("nan")
+        with self.assertRaisesRegex(ValueError, "角速度"):
+            self.audit(messages, imu_hz=400)
+        bad.angular_velocity.x = 0.
+        bad.header.frame_id = audit.FRAMES["left"]
+        with self.assertRaisesRegex(ValueError, "frame"):
+            self.audit(messages, imu_hz=400)
+        messages = recording(imu_hz=400)
+        messages[0][1].transforms.pop()
+        with self.assertRaisesRegex(ValueError, "固定 TF"):
+            self.audit(messages, imu_hz=400)
+
+    def test_audits_common_sensor_preroll_on_the_bag_clock(self):
+        messages = recording(imu_hz=400)
+        start = 4 * STEP
+        result = self.audit(messages, imu_hz=400, start=start, preroll_s=.03)
+        self.assertAlmostEqual(result["prestart_sensor_span_s"], (start - STEP) / audit.NANO)
+        with self.assertRaisesRegex(ValueError, "走行前記録"):
+            self.audit(messages, imu_hz=400, start=start, preroll_s=.04)
 
     def test_lap_counts_use_exact_header_stamps_and_bracket_both_edges(self):
         messages = recording([1, 2, 3, 4, 6, 7, 8])
@@ -208,7 +270,7 @@ class AuditTests(unittest.TestCase):
         from geometry_msgs.msg import TransformStamped
         from rclpy.serialization import serialize_message
         from rosbag2_py._storage import QoS
-        from sensor_msgs.msg import CameraInfo, Image
+        from sensor_msgs.msg import CameraInfo, Image, Imu
         from tf2_msgs.msg import TFMessage
 
         bag = self.bag / "rosbag"
@@ -222,7 +284,9 @@ class AuditTests(unittest.TestCase):
                 writer.create_topic(rosbag2_py.TopicMetadata(
                     id=idx, name=topic, type=kind, serialization_format="cdr",
                     offered_qos_profiles=[qos] if topic == audit.TF else []))
-            for name, msg in recording(range(1, 5)):
+            geometry = (848, 480)
+            messages = recording(range(1, 5), geometry=geometry, imu_hz=400)
+            for name, msg in sorted(messages, key=lambda item: receipt_time(*item)):
                 if name == audit.TF:
                     message = TFMessage()
                     for source in msg.transforms:
@@ -233,19 +297,28 @@ class AuditTests(unittest.TestCase):
                         rotation = tf.transform.rotation
                         rotation.x, rotation.y, rotation.z, rotation.w = map(float, (q.x, q.y, q.z, q.w))
                         message.transforms.append(tf)
-                else:
+                elif name in audit.CAMERAS:
                     if name in audit.TOPICS.values():
-                        message = Image(width=640, height=480, step=640, encoding="mono8", data=PIXELS)
+                        message = Image(width=msg.width, height=msg.height, step=msg.step, encoding="mono8",
+                                        data=msg.data)
                     else:
-                        message = CameraInfo(width=640, height=480, k=list(map(float, msg.k)), p=list(map(float, msg.p)))
+                        message = CameraInfo(width=msg.width, height=msg.height, k=list(map(float, msg.k)),
+                                             p=list(map(float, msg.p)))
+                else:
+                    message = Imu(angular_velocity_covariance=msg.angular_velocity_covariance,
+                                  linear_acceleration_covariance=msg.linear_acceleration_covariance)
+                    message.angular_velocity.x = msg.angular_velocity.x
+                    message.linear_acceleration.y = msg.linear_acceleration.y
+                if name != audit.TF:
                     message.header.frame_id = msg.header.frame_id
                     message.header.stamp.nanosec = msg.header.stamp.nanosec
                 writer.write(name, serialize_message(message), receipt_time(name, msg))
         finally:
             writer.close()
-        result = audit.audit_bag(bag, STEP + 1, 4 * STEP - 1)
+        result = audit.audit_bag(bag, STEP + 1, 4 * STEP - 1, geometry=geometry, imu_hz=400)
         self.assertEqual(result["complete_stereo_samples"], 4)
-        self.assertEqual(sum(result["message_counts"].values()), 17)
+        self.assertEqual(sum(result["message_counts"].values()), len(messages))
+        self.assertEqual(result["imu_streams"][audit.IMU_TOPIC]["measured_sim_hz"], 400)
         self.assertAlmostEqual(result["stereo_calibration"]["baseline_from_projection_m"], .095)
 
 

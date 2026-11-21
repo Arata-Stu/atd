@@ -17,6 +17,7 @@ while (($#)); do
 使い方: atd replay [BAG] [--tracking vo|vio] [--rate RATE] [--slam-max-map-size N] [--dry-run]
 
 Linux Notebook の Isaac ROS コンテナで cuVSLAM と RViz を起動し、rosbag を再生します。
+対話端末で引数なしの atd replay を実行すると、VO（左右画像）・VIO（左右画像＋統合 IMU）を選んでから bag を選びます。
 BAG を省略すると対話端末で記録を選べます。直接指定する場合はコンテナ内の bag パスを使います。
 Gazebo の正解軌跡がある記録では、青の正解と橙の cuVSLAM 推定を RViz に重ねます。
 画像時刻ごとの誤差は /data/results/runs/replay/ に保存し、Notebook UI の「VSLAM 軌跡誤差」で確認できます。

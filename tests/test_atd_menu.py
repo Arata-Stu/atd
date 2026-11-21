@@ -186,13 +186,24 @@ exit 130
         self.assertNotIn('bringup\t', self.invoke('--list', MENU_TEST_OS='Darwin').stdout)
 
     def test_replay_menu_and_notebook_launcher(self):
-        self.menu(picks=['replay', 'quit'], MENU_TEST_CONTAINER='1')
+        self.menu('replay', keys=b'2\n')
+        self.assert_call('replay.sh', '--tracking', 'vio')
+        self.menu(picks=['replay', 'back', 'replay', 'vio', 'quit'], MENU_TEST_CONTAINER='1')
+        self.assert_call('replay.sh', '--tracking', 'vio')
+        self.menu('replay', picks=['vo'])
+        self.assert_call('replay.sh', '--tracking', 'vo')
+        self.menu('replay', picks=['cancel'])
+        self.assertFalse(self.calls.exists())
+        self.menu('replay', '--tracking', 'vio', picks=[])
+        self.assert_call('replay.sh', '--tracking', 'vio')
+        result = self.invoke('replay')
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_call('replay.sh')
         self.assertNotIn('replay\t', self.invoke('--list', MENU_TEST_OS='Darwin').stdout)
 
         shutil.copy2(PROJECT / 'scripts/replay.sh', self.scripts / 'replay.sh')
         bag = '/data/record/rosbags/my session/lap 01'
-        options = [bag, '--rate', '0.5']
+        options = [bag, '--rate', '0.5', '--tracking', 'vio']
         command = ['env', 'ROS_DOMAIN_ID=75',
                    'FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml',
                    'ros2', 'run', 'atd_bringup', 'replay_vslam', *options]

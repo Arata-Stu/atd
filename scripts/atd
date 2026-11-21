@@ -195,6 +195,9 @@ run_from_menu() {
         web)
             options=(serve 'Web UI を起動' prepare '初回・更新時のオンライン準備' check '準備状態を確認') ;;
         gazebo) gazebo_from_menu "$title" "$@"; return ;;
+        replay)
+            title="$title / 追跡方式"
+            options=(vo 'VO（左右画像）' vio 'VIO（左右画像＋統合 IMU）') ;;
         display)
             options=(status '現在の設定を表示' cui '次回起動を CUI に設定' gui '次回起動を GUI に設定') ;;
         performance)
@@ -208,6 +211,7 @@ run_from_menu() {
     case "$key/$action" in
         build/all|performance/apply|cache/prune) "$@" ;;
         build/*) "$@" --packages-up-to "$action" ;;
+        replay/*) "$@" --tracking "$action" ;;
         hotspot/2.4|hotspot/5) "$@" on --band "$action" ;;
         performance/check) "$@" --check ;;
         cache/inspect) "$@" --dry-run ;;
@@ -223,8 +227,8 @@ if (($#)); then
             exit 0 ;;
     esac
     if resolve_command "$1"; then
-        if [[ "$1" = gazebo && $# = 1 && -t 0 && -t 1 ]]; then
-            gazebo_from_menu "$device $location / gazebo" "${runner[@]}"
+        if [[ ( "$1" = gazebo || "$1" = replay ) && $# = 1 && -t 0 && -t 1 ]]; then
+            run_from_menu "$1" "${runner[@]}"
             exit
         fi
         shift

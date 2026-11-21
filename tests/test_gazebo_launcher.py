@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -36,15 +37,91 @@ class GazeboHostTests(unittest.TestCase):
                 self.assertIn(f"type=bind,src={record_path},dst=/data/record", args)
                 self.assertIn("--shm-size=128m", args)
                 self.assertFalse(any(arg.startswith("--ipc=") for arg in args))
-                for flag, expected in (("--mode", "bag"), ("--route", "lap"), ("--duration", "240"),
-                                       ("--bag-output", f"/data/record/rosbags/gazebo-{circuit}-<run-id>-bag-shm")):
+                for flag, expected in (("--mode", "bag"), ("--route", "lap"), ("--duration", "240")):
                     self.assertEqual(args[args.index(flag) + 1], expected)
+                bag = Path(args[args.index("--bag-output") + 1])
+                self.assertEqual(bag.parent, Path("/data/record/rosbags"))
+                self.assertRegex(bag.name, rf"^gazebo-{circuit}-\d{{4}}-\d{{2}}-\d{{2}}_\d{{2}}-\d{{2}}-\d{{2}}_640x480-90Hz_imu-off$")
+                self.assertTrue(any(arg.endswith(f"/{bag.name},dst=/output") for arg in args))
                 self.assertNotIn("gazebo_mapping.launch.py", output)
                 self.assertEqual(list(root.iterdir()), [config])
             for extra, record in ((["--route", "chicane"], str(configured)), ([], "relative"),
                                   ([], str(root / "has,comma"))):
                 result = subprocess.run([*command, *extra], env={**env, "ATD_RECORD_DIR": record}, capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
+
+    def test_bag_names_in_tokyo_time_use_sensor_settings_and_reserve_unique_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scripts = root / "scripts"
+            (scripts / "lib").mkdir(parents=True)
+            shutil.copy2(ROOT / "scripts/gazebo.sh", scripts / "gazebo.sh")
+            (scripts / "lib/detect_host.sh").write_text("detect_atd_host() { echo pc; }\natd_in_container() { return 1; }\n")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            # 2026-11-21 18:04:05 UTC is 2026-11-22 03:04:05 in Tokyo.
+            fixtures = {
+                "date": """#!/usr/bin/env python3
+import os, sys, time
+if '-u' in sys.argv:
+    os.environ['TZ'] = 'UTC'
+    time.tzset()
+print(time.strftime(sys.argv[-1].removeprefix('+'), time.localtime(1795284245)))
+""",
+                "uname": '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; *) exit 1;; esac\n',
+                "flock": "#!/bin/sh\nexit 0\n",
+                "docker": """#!/bin/sh
+case "$1" in
+    image) test "$2" = inspect ;;
+    run)
+        while [ "$#" -gt 1 ]; do
+            if [ "$1" = --bag-output ]; then
+                mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
+                exit $?
+            fi
+            shift
+        done
+        exit 1 ;;
+    *) exit 1 ;;
+esac
+""",
+            }
+            for name, content in fixtures.items():
+                shim = bin_dir / name
+                shim.write_text(content)
+                shim.chmod(0o755)
+            records = root / "record"
+            results = root / "results"
+            env = {**os.environ, "TZ": "UTC", "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                   "DOCKER_HOST": "unix:///unused", "ATD_RECORD_DIR": str(records), "ATD_RESULT_DIR": str(results)}
+            command = ["bash", str(scripts / "gazebo.sh"), "bag"]
+            prefix = "gazebo-monza-2026-11-22_03-04-05"
+            for settings, profile in (([], "640x480-90Hz_imu-off"),
+                                      (["--resolution", "848x480", "--camera-hz", "60", "--imu", "200"], "848x480-60Hz_imu-200Hz"),
+                                      (["--resolution", "1280x720", "--camera-hz", "30", "--imu", "400"], "1280x720-30Hz_imu-400Hz")):
+                with self.subTest(profile=profile):
+                    output = subprocess.check_output([*command, *settings, "--dry-run"], env=env, text=True)
+                    self.assertIn(f"--bag-output /data/record/rosbags/{prefix}_{profile} ", output)
+            self.assertFalse(records.exists())
+            self.assertFalse(results.exists())
+
+            bag_root = records / "rosbags"
+            run_root = results / "runs/gazebo_monza"
+            base = f"{prefix}_640x480-90Hz_imu-off"
+            # A previously transferred bag may exist without its original run log.
+            (bag_root / base).mkdir(parents=True)
+            for suffix in ("-2", "-3"):
+                name = base + suffix
+                output = subprocess.check_output(command, env=env, text=True)
+                self.assertIn(f"rosbag 保存先 {bag_root / name}\n", output)
+                self.assertTrue((bag_root / name).is_dir())
+                self.assertTrue((run_root / name / "output-size-kib.txt").is_file())
+            # An interrupted run may have a log directory but no published bag.
+            (run_root / (base + "-4")).mkdir()
+            preview = subprocess.check_output([*command, "--dry-run"], env=env, text=True)
+            self.assertIn(f"--bag-output /data/record/rosbags/{base}-5 ", preview)
+            self.assertFalse((run_root / (base + "-5")).exists())
+            self.assertFalse((bag_root / (base + "-5")).exists())
 
     def test_map_connects_two_containers_to_one_lap_and_results_mount(self):
         command = ["bash", str(ROOT / "scripts/gazebo.sh"), "map", "--dry-run"]

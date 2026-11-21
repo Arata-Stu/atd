@@ -1,5 +1,8 @@
 """Notebook の VSLAM 再生に使う記録の選択と、ステレオ入力の事前検査。"""
 
+from datetime import datetime, timedelta, timezone
+import json
+import os
 from pathlib import Path
 import shutil
 from statistics import median
@@ -8,6 +11,7 @@ import sys
 from typing import NamedTuple
 
 from atd_mapping.bag_inputs import inspect_bag, load_metadata
+from .replay_gt_source import LEGACY_NAME, matching_run
 
 
 STEREO_WORKFLOW = {
@@ -25,30 +29,77 @@ GROUND_TRUTH_ERROR = '/atd/replay/position_error'
 GROUND_TRUTH_NODE = 'atd_replay_ground_truth'
 
 
-def select_bag(value, root=Path('/data/record/rosbags')):
+def _legacy_bag_label(relative, root, results_root):
+    match = LEGACY_NAME.fullmatch(relative.name)
+    if not match:
+        return relative.as_posix()
+    try:
+        started = datetime.strptime(match['run'].split('-', 1)[0], '%Y%m%dT%H%M%SZ')
+    except ValueError:
+        return relative.as_posix()
+    jst = started.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=9), 'JST'))
+    label = relative.with_name(f"{match['circuit']}  {jst:%Y-%m-%d %H:%M:%S %Z}").as_posix()
+    try:
+        run = matching_run(root / relative, results_root)
+    except (OSError, ValueError):
+        run = None
+    if run is None:
+        return f'{label}  センサー設定不明'
+
+    directory, report = run
+    audit = report['bag_audit']
+    geometry = report.get('geometry') or audit.get('geometry')
+    hz = report.get('camera_hz') or audit.get('nominal_sim_hz')
+    imu = report.get('imu_hz')
+    if geometry is None and isinstance(audit.get('stereo_calibration'), dict):
+        left = audit['stereo_calibration'].get('left')
+        if isinstance(left, dict) and left.get('width') and left.get('height'):
+            geometry = [left['width'], left['height']]
+    if geometry is None or hz is None or imu is None:
+        try:
+            scene = json.loads((directory / 'scene/scene.json').read_bytes())
+            camera = scene.get('camera', {})
+            geometry = geometry or [camera.get('width'), camera.get('height')]
+            hz = hz or camera.get('rate_hz')
+            if imu is None:
+                imu = scene.get('imu', {}).get('rate_hz')
+        except (OSError, ValueError, AttributeError):
+            pass
+    size = '解像度不明'
+    if isinstance(geometry, list) and len(geometry) == 2 and all(type(v) is int and v > 0 for v in geometry):
+        size = f'{geometry[0]}x{geometry[1]}'
+    rate = f'{hz} Hz' if type(hz) is int and hz > 0 else '撮影Hz不明'
+    inertial = 'IMU 不明'
+    if type(imu) is int and imu >= 0:
+        inertial = 'IMU OFF' if imu == 0 else f'IMU {imu} Hz'
+    return f'{label}  {size}  {rate}  {inertial}'
+
+
+def select_bag(value, root=Path('/data/record/rosbags'), *, results_root=Path('/data/results')):
     """絶対パス・記録ルートからの相対パスを指定、または対話形式で選択する。"""
     if value is None:
         if not sys.stdin.isatty():
             raise ValueError('非対話端末では atd replay BAG で bag のパスを指定してください')
-        choices = sorted(p.parent.relative_to(root).as_posix() for p in root.rglob('metadata.yaml')
-                         if p.is_file())
+        choices = sorted(p.parent.relative_to(root) for p in root.rglob('metadata.yaml') if p.is_file())
         if not choices:
             raise ValueError(f'{root} に metadata.yaml を含む bag がありません')
+        rows = [f'{i:2d}) {_legacy_bag_label(path, root, results_root)}' for i, path in enumerate(choices, 1)]
         try:
             if shutil.which('fzf'):
                 result = subprocess.run(
                     ['fzf', '--read0', '--print0', '--prompt=再生する bag > '],
-                    input='\0'.join(choices), stdout=subprocess.PIPE, text=True)
+                    input=os.fsencode('\0'.join(rows)), stdout=subprocess.PIPE)
                 if result.returncode in (1, 130):
                     return None
                 if result.returncode:
                     raise RuntimeError(f'fzf が終了コード {result.returncode} で失敗しました')
-                value = result.stdout.removesuffix('\0')
-                if value not in choices:
+                row = os.fsdecode(result.stdout.removesuffix(b'\0'))
+                if row not in rows:
                     raise ValueError('一覧から bag を選んでください')
+                value = choices[rows.index(row)]
             else:
-                for index, name in enumerate(choices, 1):
-                    print(f'{index:2d}) {name}')
+                for row in rows:
+                    print(row)
                 number = input('再生する bag の番号（空欄で終了）: ').strip()
                 if not number:
                     return None

@@ -13,7 +13,7 @@ usage() {
   prepare     Gazebo 専用の Docker をビルドし、増分・ビルド中の最大ディスク使用量を記録
   run         動画を記録し、別セッションで配信を計測（スクリプトで操作を省略した場合の既定）
   video       左右の車載動画を保存（走行時間はコース・速度・周回数で決定）
-  bag         指定周回のステレオ rosbag を record/rosbags に保存（既定1周）
+  bag         指定周回のステレオ rosbag を record/rosbags に保存（既定1周）。名前は開始日時（日本時間）と撮影設定
   map         指定周回のステレオ画像で cuVSLAM 地図を保存（既定1周）。Notebook の起動済み atd_pc_dev を使用
   benchmark   録画を止めた状態で ROS 2 の受信を計測（既定 60 実時間秒）
   diagnose    同じ計測区間に Gazebo 側でも画像とシミュレーション時刻を観測（既定 20 実時間秒）
@@ -57,6 +57,9 @@ dds=shm
 speed=
 laps=
 duration=
+resolution=640x480
+camera_hz=90
+imu=off
 sim_args=()
 while (( $# )); do
     case "$1" in
@@ -84,15 +87,15 @@ while (( $# )); do
         --resolution)
             [[ "$action" != prepare ]] || fail "$1 は走行時に指定してください"
             case "${2:-}" in 424x240|640x480|848x480|1280x720) ;; *) fail "--resolution は 424x240, 640x480, 848x480, 1280x720 から選択してください";; esac
-            sim_args+=("$1" "$2"); shift 2 ;;
+            resolution="$2"; shift 2 ;;
         --camera-hz)
             [[ "$action" != prepare ]] || fail "$1 は走行時に指定してください"
             case "${2:-}" in 30|60|90) ;; *) fail "--camera-hz は 30, 60, 90 から選択してください";; esac
-            sim_args+=("$1" "$2"); shift 2 ;;
+            camera_hz="$2"; shift 2 ;;
         --imu)
             [[ "$action" != prepare ]] || fail "$1 は走行時に指定してください"
             case "${2:-}" in off|200|400) ;; *) fail "--imu は off, 200, 400 から選択してください";; esac
-            sim_args+=("$1" "$2"); shift 2 ;;
+            imu="$2"; shift 2 ;;
         --duration|--camera-height|--camera-pitch-deg)
             [[ "$action" != prepare ]] || fail "$1 は走行時に指定してください"
             [[ "$1" != --duration || "$action" != serve ]] || fail "serve の終了条件は --laps または Ctrl+C で指定してください"
@@ -156,6 +159,27 @@ new_output() {
     if $dry_run; then printf '%s/<run-id>-%s\n' "$results" "$1"; return; fi
     mktemp -d "$results/$(date -u +%Y%m%dT%H%M%SZ)-$1-XXXXXX"
 }
+# rosbag と対応する走行ログは同名。別の ROS domain で同時に開始しても、
+# ログディレクトリの mkdir で名前を確保してから記録を始める。
+new_bag_output() {
+    local stamp imu_label="$imu" base name number=1
+    stamp="$(TZ=Asia/Tokyo date +%Y-%m-%d_%H-%M-%S)"
+    if [[ "$imu" != off ]]; then imu_label="${imu}Hz"; fi
+    base="gazebo-${circuit}-${stamp}_${resolution}-${camera_hz}Hz_imu-${imu_label}"
+    name="$base"
+    while true; do
+        if [[ ! -e "$record/rosbags/$name" && ! -L "$record/rosbags/$name" &&
+              ! -e "$results/$name" && ! -L "$results/$name" ]]; then
+            if $dry_run || mkdir -m 700 -- "$results/$name" 2>/dev/null; then
+                printf '%s/%s\n' "$results" "$name"
+                return
+            fi
+            [[ -e "$results/$name" || -L "$results/$name" ]] || fail "走行ログの保存先を作成できません: $results/$name"
+        fi
+        number=$((number + 1))
+        name="$base-$number"
+    done
+}
 if [[ "$action" = prepare ]]; then
     out="$(new_output prepare)"
     prepare=(python3 "$project/docker/gazebo_monza/build_storage.py" "$project/docker/gazebo_monza" "$image" "$out")
@@ -173,7 +197,11 @@ if ! $dry_run; then
 fi
 run_mode() {
     local mode="$1" out size status bag_name profile=/workspaces/atd/docker/middleware_profiles/fastdds.xml
-    out="$(new_output "$mode-$dds")"
+    if [[ "$mode" = bag ]]; then
+        out="$(new_bag_output)"
+    else
+        out="$(new_output "$mode-$dds")"
+    fi
     local -a command=(docker run --rm --init --pull=never --gpus all --network host
         --user "$(id -u):$(id -g)")
     if [[ "$dds" = shm ]]; then
@@ -208,9 +236,10 @@ run_mode() {
     fi
     command+=("$image" python3 /workspaces/atd/tools/gazebo_monza/run.py --mode "$mode" --output /output --circuit "$circuit")
     if (( ${#sim_args[@]} )); then command+=("${sim_args[@]}"); fi
+    command+=(--resolution "$resolution" --camera-hz "$camera_hz" --imu "$imu")
     if [[ -n "$laps" && "$mode" != benchmark ]]; then command+=(--laps "$laps"); fi
     if [[ "$mode" = bag ]]; then
-        bag_name="gazebo-$circuit-${out##*/}"
+        bag_name="${out##*/}"
         command+=(--bag-output "/data/record/rosbags/$bag_name")
         printf 'rosbag 保存先 %s/rosbags/%s\n' "$record" "$bag_name"
     fi

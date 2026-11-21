@@ -24,10 +24,10 @@ class ReplayGTSourceTests(unittest.TestCase):
         (bag / 'test.mcap').write_bytes(b'1234')
         return bag
 
-    def legacy(self, circuit):
-        bag = self.make_bag(f'gazebo-{circuit}-{self.run}')
+    def bag_with_run(self, circuit, bag_name, run_name):
+        bag = self.make_bag(bag_name)
         runs = self.results / 'runs'
-        directory = (runs / 'gazebo_monza' if circuit == 'monza' else runs / 'gazebo' / circuit) / self.run
+        directory = (runs / 'gazebo_monza' if circuit == 'monza' else runs / 'gazebo' / circuit) / run_name
         trace = directory / 'scene/rig_motion.jsonl'
         trace.parent.mkdir(parents=True)
         trace.write_text('{"sim_time_s": 1, "x_m": 2, "y_m": 3, "yaw_rad": 0}\n')
@@ -36,6 +36,15 @@ class ReplayGTSourceTests(unittest.TestCase):
             'bag_path': f'/data/record/rosbags/{bag.name}', 'bag_audit': {'file_bytes': {'test.mcap': 4}},
         }))
         return bag, trace
+
+    def legacy(self, circuit):
+        return self.bag_with_run(circuit, f'gazebo-{circuit}-{self.run}', self.run)
+
+    def test_sensor_settings_in_name_locate_the_matching_run(self):
+        for circuit, imu in [('monza', 'off'), ('spa', '400Hz-2')]:
+            name = f'gazebo-{circuit}-2026-11-21_21-51-25_1280x720-60Hz_imu-{imu}'
+            bag, trace = self.bag_with_run(circuit, name, name)
+            self.assertEqual(find_ground_truth(bag, self.results), trace)
 
     def test_portable_bag_can_be_renamed_and_moved_without_run(self):
         bag = self.make_bag('original')

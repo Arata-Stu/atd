@@ -1,6 +1,7 @@
 from contextlib import redirect_stdout
 from io import StringIO
 import json
+import os
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -33,11 +34,15 @@ class ReplaySelectionTests(unittest.TestCase):
                 select_bag('missing', self.root)
 
     def test_fzf_returns_a_parent_qualified_path_or_cancels(self):
+        name = 'Track/実験\t12\r\nlap'
+        (self.root / name).mkdir()
+        (self.root / name / 'metadata.yaml').touch()
         with patch.object(sys.stdin, 'isatty', return_value=True), \
                 patch('shutil.which', return_value='fzf'), patch('subprocess.run') as run:
-            run.return_value = SimpleNamespace(returncode=0, stdout=self.names[1] + '\0')
-            self.assertEqual(select_bag(None, self.root), self.root / self.names[1])
-            self.assertEqual(run.call_args.kwargs['input'].split('\0'), self.names)
+            rows = [f'{i:2d}) {choice}' for i, choice in enumerate([*self.names, name], 1)]
+            run.return_value = SimpleNamespace(returncode=0, stdout=os.fsencode(rows[-1] + '\0'))
+            self.assertEqual(select_bag(None, self.root), self.root / name)
+            self.assertEqual(os.fsdecode(run.call_args.kwargs['input']).split('\0'), rows)
             run.return_value = SimpleNamespace(returncode=130, stdout='')
             self.assertIsNone(select_bag(None, self.root))
 
@@ -50,6 +55,38 @@ class ReplaySelectionTests(unittest.TestCase):
             self.assertIsNone(select_bag(None, self.root))
             with self.assertRaisesRegex(ValueError, '番号'):
                 select_bag(None, self.root)
+
+    def test_legacy_gazebo_menu_displays_recorded_settings_and_preserves_paths(self):
+        run_id = '20261121T125125Z-bag-shm-tocxLI'
+        name = f'gazebo-monza-{run_id}'
+        folder = self.root / 'archive with space' / name
+        folder.mkdir(parents=True)
+        (folder / 'metadata.yaml').touch()
+        (folder / 'record.mcap').write_bytes(b'mock')
+        results = self.root / 'results'
+        directory = results / 'runs/gazebo_monza' / run_id
+        scene = directory / 'scene/scene.json'
+        scene.parent.mkdir(parents=True)
+        scene.write_text(json.dumps({'camera': {'width': 1280, 'height': 720, 'rate_hz': 60}}))
+        report = dict(mode='bag', status='complete', circuit='monza', scene='scene/scene.json',
+                      bag_path=f'/data/record/rosbags/{name}', bag_audit={'file_bytes': {'record.mcap': 4}})
+        report_file = directory / 'run.json'
+        for fields, sensor_label in [
+                ({}, '1280x720  60 Hz  IMU 不明'),
+                ({'imu_hz': 0}, '1280x720  60 Hz  IMU OFF'),
+                ({'geometry': [848, 480], 'camera_hz': 90, 'imu_hz': 400}, '848x480  90 Hz  IMU 400 Hz'),
+                ({'bag_path': 'different'}, 'センサー設定不明')]:
+            with self.subTest(fields=fields):
+                report_file.write_text(json.dumps({**report, **fields}))
+                def choose(_cmd, *, input, **_):
+                    rows = os.fsdecode(input).split('\0')
+                    row, = [value for value in rows if 'archive with space/monza' in value]
+                    self.assertIn('2026-11-21 21:51:25 JST', row)
+                    self.assertIn(sensor_label, row)
+                    return SimpleNamespace(returncode=0, stdout=os.fsencode(row + '\0'))
+                with patch.object(sys.stdin, 'isatty', return_value=True), \
+                        patch('shutil.which', return_value='fzf'), patch('subprocess.run', side_effect=choose):
+                    self.assertEqual(select_bag(None, self.root, results_root=results), folder)
 
 
 class ReplayInputValidationTests(unittest.TestCase):

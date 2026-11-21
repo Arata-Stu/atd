@@ -11,6 +11,9 @@ TRACE = 'rig_motion.jsonl'
 SIDECAR = 'atd_ground_truth'
 LEGACY_NAME = re.compile(
     r'gazebo-(?P<circuit>[a-z0-9_]+)-(?P<run>[0-9]{8}T[0-9]{6}Z-bag-(?:shm|udp)-[A-Za-z0-9]{6})')
+BAG_NAME = re.compile(
+    r'gazebo-(?P<circuit>[a-z0-9_]+)-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_'
+    r'\d+x\d+-\d+Hz_imu-(?:off|\d+Hz)(?:-\d+)?')
 
 
 def _sha256(path):
@@ -50,10 +53,11 @@ def _check_mcap_sizes(bag, expected):
 
 
 def matching_run(bag, results_root):
-    match = LEGACY_NAME.fullmatch(bag.name)
+    match = BAG_NAME.fullmatch(bag.name) or LEGACY_NAME.fullmatch(bag.name)
     if not match:
         return None
-    circuit, run = match.group('circuit', 'run')
+    circuit = match['circuit']
+    run = match.groupdict().get('run', bag.name)
     runs = results_root / 'runs'
     directory = (runs / 'gazebo_monza' if circuit == 'monza' else runs / 'gazebo' / circuit) / run
     if not directory.exists():

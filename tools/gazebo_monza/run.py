@@ -342,8 +342,11 @@ def run(args, report):
         schedule = "繰り返し走行"
     print(f"{args.circuit} / {args.route}  RC速度 {trajectory['speed_mps']:.3g} m/s  {schedule}", flush=True)
     if mode == "bag":
+        report["lap_length_m"] = trajectory["end_s_m"]
         image_bytes = 2 * lap_bag.WIDTH * lap_bag.HEIGHT * lap_bag.TARGET_HZ * duration
-        print(f"{trajectory['laps']}周の左右画像の容量目安 {image_bytes / 1e9:.2f} GB", flush=True)
+        print(f"左右画像の容量目安 合計 {image_bytes / 1e9:.2f} GB "
+              f"（1周 {image_bytes / trajectory['laps'] / 1e9:.2f} GB × {trajectory['laps']}周、"
+              f"mono8 {lap_bag.WIDTH}×{lap_bag.HEIGHT} × 左右2枚 × {lap_bag.TARGET_HZ} Hz）", flush=True)
     config = out / "bridge.yaml"
     config.write_text(json.dumps(bridge_topics(args.circuit), indent=2) + "\n")
     report.update(ros_domain_id=os.environ.get("ROS_DOMAIN_ID", "0"),

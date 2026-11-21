@@ -121,6 +121,7 @@ def audit_and_publish(pending, final, timing, report, trace):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros2_ws/src/atd_bringup"))
     try:
         from atd_bringup.replay_gt_source import store_ground_truth
+        from atd_bringup.replay_gt_course import recorded_course
     finally:
         sys.path.pop(0)
 
@@ -129,7 +130,7 @@ def audit_and_publish(pending, final, timing, report, trace):
     audit = audit_bag(pending, timing["start_sim_ns"], timing["finish_sim_ns"],
                       laps=laps, lap_duration_s=report["lap_duration_s"])
     report["bag_audit"] = audit
-    store_ground_truth(pending, trace, audit["file_bytes"])
+    store_ground_truth(pending, trace, audit["file_bytes"], course=recorded_course(report))
     check_destination(final)
     pending.rename(final)
     del report["partial_bag"]

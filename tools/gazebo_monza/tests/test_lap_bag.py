@@ -136,7 +136,8 @@ class LapBagTests(unittest.TestCase):
                                    camera_height=.12, camera_pitch_deg=0.)
             scene = {"camera": {"height_above_floor_m": .12, "midpoint_forward_from_rear_axle_m": .1,
                                 "pitch_down_deg": 0., "baseline_m": .095, "optical_frames": lap_bag.FRAMES},
-                     "trajectory": {"travel_seconds": 17., "laps": 2, "speed_mps": 1.2, "total_travel_seconds": 34.}}
+                     "trajectory": {"travel_seconds": 17., "laps": 2, "speed_mps": 1.2,
+                                    "end_s_m": 20.4, "total_travel_seconds": 34.}}
             timing = {"start_sim_ns": 10, "finish_sim_ns": 20}
             processes = []
             def start(command, **kwargs):
@@ -157,6 +158,7 @@ class LapBagTests(unittest.TestCase):
             self.assertEqual(build.call_args.kwargs["travel_seconds"], 17.)
             self.assertEqual(build.call_args.kwargs["laps"], 2)
             self.assertEqual(report["total_travel_seconds"], 34.)
+            self.assertEqual(report["lap_length_m"], 20.4)
             self.assertFalse(build.call_args.kwargs["repeat"])
             self.assertTrue(build.call_args.kwargs["wait_for_capture"])
             self.assertTrue(build.call_args.kwargs["record_ground_truth"])

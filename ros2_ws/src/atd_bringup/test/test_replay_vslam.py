@@ -1,4 +1,4 @@
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -26,8 +26,8 @@ class ReplaySessionTests(unittest.TestCase):
         self.output = self.stack.enter_context(redirect_stdout(StringIO()))
         self.config = Path(__file__).resolve().parents[1] / 'config/bag_vslam.rviz'
 
-    def session(self, ground_truth=None):
-        replay.run_session(Mock(), 'two words/run', 0.5, self.config, 'qos.yaml', ground_truth)
+    def session(self, ground_truth=None, result=None):
+        replay.run_session(Mock(), 'two words/run', 0.5, self.config, 'qos.yaml', ground_truth, result)
 
     def test_eof_keeps_viewer_open_until_closed(self):
         def resume(node, *, player_name, check_running, ground_truth):
@@ -72,28 +72,28 @@ class ReplaySessionTests(unittest.TestCase):
                          ('/atd/replay/position_error', 'Reliable', 'Transient Local'))
 
     def test_gazebo_replay_starts_overlay_before_resume_and_keeps_it_after_eof(self):
-        overlay = Mock()
-        overlay.poll.return_value = None
-        self.spawn.side_effect = [self.launch, self.rviz, overlay, self.player]
-        trace = Path('two words/run/rig_motion.jsonl')
+        trace, result, spin = Mock(), Mock(), Mock()
+        overlay = self.stack.enter_context(patch.object(replay, 'ground_truth_viewer', return_value=nullcontext(spin)))
 
         def resume(node, *, player_name, check_running, ground_truth):
             check_running()
             self.assertTrue(ground_truth)
-            self.assertEqual(self.spawn.call_args_list[2].args[0],
-                             ['ros2', 'run', 'atd_bringup', 'replay_ground_truth', str(trace)])
+            overlay.assert_called_once_with(trace, result)
             self.player.returncode = 0
 
-        def close(_):
+        def close(**_):
+            result.mark_eof.assert_called_once()
             self.assertIn('末尾に到達', self.output.getvalue())
             self.stop.assert_not_called()
             self.rviz.returncode = 0
 
         self.ready.side_effect = resume
-        self.tick.side_effect = close
-        self.session(trace)
+        spin.side_effect = close
+        with patch.object(replay.time, 'monotonic', side_effect=[1., 1.2, 2.]):
+            self.session(trace, result)
+        self.assertEqual(spin.call_count, 2)
         self.assertEqual([c.args[0] for c in self.stop.call_args_list],
-                         [self.player, overlay, self.rviz, self.launch])
+                         [self.player, self.rviz, self.launch])
 
     def test_bag_without_ground_truth_only_subscribes_to_its_estimate_and_sensors(self):
         with TemporaryDirectory() as directory:

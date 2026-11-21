@@ -9,9 +9,9 @@ from atd_bringup.replay_inputs import (
 from atd_bringup.replay_readiness import _missing_endpoints, wait_and_resume
 
 
-def endpoint(name, kind, qos='compatible'):
+def endpoint(name, kind, qos='compatible', gid=b'\x10\x20'):
     namespace, _, leaf = name.rpartition('/')
-    return NS(node_namespace=namespace or '/', node_name=leaf, topic_type=kind, qos_profile=qos)
+    return NS(node_namespace=namespace or '/', node_name=leaf, topic_type=kind, qos_profile=qos, endpoint_gid=gid)
 
 
 class GateTests(unittest.TestCase):
@@ -84,6 +84,41 @@ class GateTests(unittest.TestCase):
             wait_and_resume(self.node, self.player, timeout_s=0)
         self.resume.call_async.assert_not_called()
 
+    def test_unknown_image_writer_becomes_player_before_resume(self):
+        topic = STEREO_WORKFLOW['left_image']
+        writer = self.pubs[topic][0]
+        self.pubs[topic] = [endpoint('_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_', 'sensor_msgs/msg/Image')]
+
+        def discover_owner(node, timeout_sec):
+            self.resume.call_async.assert_not_called()
+            self.pubs[topic] = [writer]
+
+        self.ros.spin_once.side_effect = discover_owner
+        wait_and_resume(self.node, self.player)
+        self.ros.spin_once.assert_called_once()
+        self.resume.call_async.assert_called_once()
+
+    def test_unresolved_extra_writer_does_not_pass_ready_or_masquerade_as_conflict(self):
+        topic = STEREO_WORKFLOW['right_image']
+        self.pubs[topic].append(endpoint('_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_', 'sensor_msgs/msg/Image'))
+        with patch.dict('os.environ', {'ROS_DOMAIN_ID': '79', 'FASTDDS_DEFAULT_PROFILES_FILE': '/replay.xml'}):
+            with self.assertRaises(TimeoutError) as error:
+                wait_and_resume(self.node, self.player, timeout_s=0)
+        diagnostic = str(error.exception)
+        self.assertIn(f'{topic} の配信元を DDS 探索中（GID 10.20）', diagnostic)
+        self.assertIn(f'ROS_DOMAIN_ID=79 FASTDDS_DEFAULT_PROFILES_FILE=/replay.xml ros2 topic info --verbose {topic}',
+                      diagnostic)
+        self.assertNotIn('競合', diagnostic)
+        self.resume.call_async.assert_not_called()
+
+    def test_unresolved_clock_becomes_second_identified_publisher(self):
+        self.pubs['/clock'].append(endpoint('_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_', 'rosgraph_msgs/msg/Clock'))
+        self.ros.spin_once.side_effect = lambda *a, **k: self.pubs['/clock'].__setitem__(
+            1, endpoint('/gz_bridge', 'rosgraph_msgs/msg/Clock'))
+        with self.assertRaisesRegex(RuntimeError, '/clock.*競合.*gz_bridge'):
+            wait_and_resume(self.node, self.player)
+        self.resume.call_async.assert_not_called()
+
     def test_gazebo_overlay_needs_map_odometry_clock_and_matching_rviz_qos(self):
         overlay = '/' + GROUND_TRUTH_NODE
         self.pubs[SLAM_ODOMETRY] = [endpoint('/visual_slam', 'nav_msgs/msg/Odometry')]
@@ -100,6 +135,10 @@ class GateTests(unittest.TestCase):
         self.subs[SLAM_ODOMETRY] = [endpoint(overlay, 'nav_msgs/msg/Odometry')]
         self.subs[GROUND_TRUTH_PATH] = [endpoint(self.rviz, 'nav_msgs/msg/Path')]
         self.assertFalse(_missing_endpoints(self.node, self.player, self.rviz, ground_truth=True))
+        self.pubs[GROUND_TRUTH_PATH].append(endpoint('_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_', 'nav_msgs/msg/Path'))
+        self.assertTrue(any(GROUND_TRUTH_PATH in issue and 'DDS 探索中' in issue
+                            for issue in _missing_endpoints(self.node, self.player, self.rviz, ground_truth=True)))
+        self.pubs[GROUND_TRUTH_PATH].pop()
         self.pubs[GROUND_TRUTH_PATH].append(endpoint('/old_replay', 'nav_msgs/msg/Path'))
         with self.assertRaisesRegex(RuntimeError, GROUND_TRUTH_PATH):
             wait_and_resume(self.node, self.player, ground_truth=True)

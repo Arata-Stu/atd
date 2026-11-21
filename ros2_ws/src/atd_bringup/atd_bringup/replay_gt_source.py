@@ -18,7 +18,7 @@ def _sha256(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def store_ground_truth(bag: Path, trace: Path, mcap_sizes: dict):
+def store_ground_truth(bag: Path, trace: Path, mcap_sizes: dict, *, course=None):
     """公開直前の bag に Gazebo の post-update trace と照合用の記録を保存する。"""
     if trace.stat().st_size == 0:
         raise ValueError(f'Gazebo の走行軌跡が空です: {trace}')
@@ -31,6 +31,8 @@ def store_ground_truth(bag: Path, trace: Path, mcap_sizes: dict):
         'trace_sha256': _sha256(destination / TRACE),
         'file_bytes': mcap_sizes,
     }
+    if course is not None:
+        manifest['course'] = course
     (destination / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 
 
@@ -47,6 +49,25 @@ def _check_mcap_sizes(bag, expected):
         raise ValueError(f'記録時と MCAP のファイル名またはサイズが異なります: {bag}')
 
 
+def matching_run(bag, results_root):
+    match = LEGACY_NAME.fullmatch(bag.name)
+    if not match:
+        return None
+    circuit, run = match.group('circuit', 'run')
+    runs = results_root / 'runs'
+    directory = (runs / 'gazebo_monza' if circuit == 'monza' else runs / 'gazebo' / circuit) / run
+    if not directory.exists():
+        return None
+    report = _read_object(directory / 'run.json')
+    if (report.get('mode') != 'bag' or report.get('status') != 'complete'
+            or report.get('circuit') != circuit or report.get('scene') != 'scene/scene.json'
+            or report.get('bag_path') != f'/data/record/rosbags/{bag.name}'):
+        raise ValueError(f'Gazebo の記録結果と選択した bag が一致しません: {directory}')
+    audit = report.get('bag_audit')
+    _check_mcap_sizes(bag, audit.get('file_bytes') if isinstance(audit, dict) else None)
+    return directory, report
+
+
 def find_ground_truth(bag: Path, results_root: Path = Path('/data/results')) -> Path | None:
     """bag 内の GT を優先し、旧 bag はコースと記録 ID が示す単一の保存先を調べる。"""
     try:
@@ -61,21 +82,10 @@ def find_ground_truth(bag: Path, results_root: Path = Path('/data/results')) -> 
             _check_mcap_sizes(bag, manifest.get('file_bytes'))
             return trace
 
-        match = LEGACY_NAME.fullmatch(bag.name)
-        if not match:
+        match = matching_run(bag, results_root)
+        if match is None:
             return None
-        circuit, run = match.group('circuit', 'run')
-        runs = results_root / 'runs'
-        directory = (runs / 'gazebo_monza' if circuit == 'monza' else runs / 'gazebo' / circuit) / run
-        if not directory.exists():
-            return None
-        report = _read_object(directory / 'run.json')
-        if (report.get('mode') != 'bag' or report.get('status') != 'complete'
-                or report.get('circuit') != circuit or report.get('scene') != 'scene/scene.json'
-                or report.get('bag_path') != f'/data/record/rosbags/{bag.name}'):
-            raise ValueError(f'Gazebo の記録結果と選択した bag が一致しません: {directory}')
-        audit = report.get('bag_audit')
-        _check_mcap_sizes(bag, audit.get('file_bytes') if isinstance(audit, dict) else None)
+        directory, _ = match
         trace = directory / 'scene' / TRACE
         if not trace.is_file() or trace.stat().st_size == 0:
             raise ValueError(f'Gazebo の走行軌跡を読み取れません: {trace}')

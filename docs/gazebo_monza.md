@@ -152,6 +152,21 @@ ros2 topic info /visual_slam/tracking/odometry --verbose --no-daemon
 
 同じbagを別の空いているdomainで比較するには `ATD_REPLAY_ROS_DOMAIN_ID=76 atd replay` を使う。ログを照合する際は `ros2 launch` が表示した `component_container_mt` の PID とログファイル名の PID を合わせる。
 
+`_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_` は、DDS が配信を検出し、その配信元を ROS ノードとまだ対応付けられていない状態。再生開始時は名前の解決を待ち、実際に別の配信元を確認した場合は名前を表示して再生を止める。待機中に調べるには、端末に表示された診断コマンドを別の Notebook コンテナ端末で実行する。Gazebo の既定 domain は 74、replay は 75。終了後に通常のシェルで実行した `ros2 topic list` とは、探索する時刻や domain が異なる。[ROS 2 の配信元名の実装](https://github.com/ros2/rmw_dds_common/blob/lyrical/rmw_dds_common/src/graph_cache.cpp#L514-L533)
+
+### Notebook UI で区間別の誤差を見る
+
+Notebook の Isaac ROS コンテナで変更反映時に `atd build --packages-up-to atd_bringup` と `atd-web build` を実行する。Web 環境を初めて準備する場合は `atd-web prepare` を使う。GT のある bag を `atd replay` で再生すると、比較結果が自動で `/data/results/runs/replay/<実行ID>/` に保存される。再生ごとに新しい ID が付く。
+
+`atd-web` を起動し、**VSLAM 軌跡誤差** で結果を選ぶ。グラフ上で誤差が増え始める地点をクリックすると、コース図にもその地点の正解と推定が表示される。逆にコース図からグラフの地点を選ぶこともできる。
+
+- **進行方向 (m)** は同じ画像時刻の「推定位置 − 正解位置」を正解車体の前方に射影する。正なら実際より先に、負なら手前に推定している。
+- **横方向 (m)** は走行方向に対して左が正。**向き (°)** は正解に対して反時計回りが正で、±180°の範囲で表す。
+- Monza のアスカリ後は計時線から約 390–480 m、ホームは約 524 m から計時線を通って次の約 60 m まで。どちらもシミュレーターの 1/10 コース上で切り出した範囲。ホームはスタート直後、周回をまたぐ通過、最終ゴール手前を選べる。
+- GT は全走行を表示する。対応する推定が 0.25 秒を超えて途切れた箇所では誤差の線を分ける。中断した再生では未再生区間にも推定値がない。古い bag に周回情報を対応付けられない場合は、累積距離で表示する。
+
+保存物は `summary.json`（bag・再生速度・終了状態）、`reference.json`（時刻付き正解軌跡）、`samples.jsonl`（画像時刻・同時刻の正解と推定・符号付き誤差）。再生完了は bag の末尾に到達したことを表す。
+
 ### 手動で RViz または Foxglove を使う場合
 
 ビューアや再生の起動を個別に操作したい場合は、同じコンテナの3端末それぞれに次を設定する。

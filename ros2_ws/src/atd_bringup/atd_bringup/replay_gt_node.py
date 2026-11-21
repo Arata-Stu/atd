@@ -2,16 +2,19 @@
 
 import argparse
 from bisect import bisect_right
+from contextlib import contextmanager
 import math
 import sys
 
 from atd_mapping.frames import stamp_ns
 
 from .replay_gt_geometry import Alignment, Trace
+from .replay_result import ReplayRewound
 
 
 class GroundTruthPath:
-    def __init__(self, trace, make_pose):
+    def __init__(self, trace, make_pose, result=None):
+        self.result = result
         self.trace = trace
         self.make_pose = make_pose
         self.clock_ns = None
@@ -29,6 +32,8 @@ class GroundTruthPath:
     def set_clock(self, stamp_ns):
         rewind = self.clock_ns is not None and stamp_ns < self.clock_ns
         if rewind:
+            if self.result is not None and self.result.last_stamp is not None:
+                raise ReplayRewound('再生時計が戻ったため、直前までの比較結果を保存しました')
             self._reset()
         self.clock_ns = stamp_ns
         return rewind
@@ -39,7 +44,7 @@ class GroundTruthPath:
         stamp = stamp_ns(odom.header.stamp)
         # seek 前の推定値が遅着しても、未来の初期姿勢に固定しない。
         anchor = self.anchor_ns is None or (
-            stamp < self.anchor_ns and self.last_tip_ns is None
+            self.result is None and stamp < self.anchor_ns and self.last_tip_ns is None
             and (self.clock_ns is None or self.clock_ns < self.anchor_ns))
         if not anchor and stamp <= self.latest_estimate_ns:
             return False
@@ -50,11 +55,14 @@ class GroundTruthPath:
         position = (p.x, p.y, p.z)
         if not all(map(math.isfinite, position)):
             raise ValueError('cuVSLAM の推定位置に非有限値があります')
+        orientation = (q.x, q.y, q.z, q.w)
         if anchor:
-            self.alignment = Alignment.from_anchor(sample, position, (q.x, q.y, q.z, q.w))
+            self.alignment = Alignment.from_anchor(sample, position, orientation)
             self.anchor_ns = stamp
             self.history = [self.make_pose(stamp, *self.alignment.apply(sample))]
             self.next_index = bisect_right(self.trace.stamps, stamp)
+        if self.result is not None:
+            self.result.record(stamp, sample, self.alignment, position, orientation)
         self.pending_error = (stamp, position, sample)
         self.latest_estimate_ns = stamp
         return anchor
@@ -86,13 +94,14 @@ class GroundTruthPath:
         return tip, [*self.history, self.make_pose(tip, *current)]
 
 
-def _run(trace):
+@contextmanager
+def ground_truth_viewer(trace, result=None):
     import rclpy
     from geometry_msgs.msg import Point, PoseStamped
     from nav_msgs.msg import Odometry, Path
     from rclpy.clock import Clock as WallClock, ClockType
-    from rclpy.executors import ExternalShutdownException
-    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from rosgraph_msgs.msg import Clock
     from visualization_msgs.msg import Marker
 
@@ -110,8 +119,8 @@ def _run(trace):
         q.x, q.y, q.z, q.w = orientation
         return msg
 
-    path = GroundTruthPath(trace, make_pose)
-    rclpy.init(args=[])
+    path = GroundTruthPath(trace, make_pose, result)
+    executor = SingleThreadedExecutor()
     node = rclpy.create_node(GROUND_TRUTH_NODE)
     try:
         output_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -167,17 +176,34 @@ def _run(trace):
             error = path.take_error()
             if error is not None:
                 publish_error(*error)
+            if result is not None:
+                result.checkpoint()
 
-        node.create_subscription(Odometry, SLAM_ODOMETRY, on_odometry, qos_profile_sensor_data)
+        # RViz 用の長い Path の送信中も小さい姿勢メッセージをキューに残す。
+        node.create_subscription(Odometry, SLAM_ODOMETRY, on_odometry,
+                                 QoSProfile(depth=256, reliability=ReliabilityPolicy.BEST_EFFORT))
         node.create_subscription(Clock, '/clock', on_clock, QoSProfile(
             depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         # 一時停止や EOF 後にも、最後に受信した時計までの描画を反映する。
         node.create_timer(0.2, on_timer, clock=WallClock(clock_type=ClockType.STEADY_TIME))
-        rclpy.spin(node)
+        executor.add_node(node)
+        yield executor.spin_once
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+
+
+def _run(trace):
+    import rclpy
+    from rclpy.executors import ExternalShutdownException
+    rclpy.init(args=[])
+    try:
+        with ground_truth_viewer(trace) as spin:
+            while rclpy.ok():
+                spin(timeout_sec=0.2)
     except (ExternalShutdownException, KeyboardInterrupt):
         pass
     finally:
-        node.destroy_node()
         rclpy.try_shutdown()
 
 

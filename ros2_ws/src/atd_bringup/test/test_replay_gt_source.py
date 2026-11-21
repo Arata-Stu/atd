@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from atd_bringup.replay_gt_source import find_ground_truth, store_ground_truth
+from atd_bringup.replay_gt_course import load_course, recorded_course
 
 
 class ReplayGTSourceTests(unittest.TestCase):
@@ -86,3 +87,24 @@ class ReplayGTSourceTests(unittest.TestCase):
     def test_no_ground_truth_for_physical_bag_or_missing_legacy_run(self):
         for name in ['manual-drive', f'gazebo-monza-{self.run}']:
             self.assertIsNone(find_ground_truth(self.make_bag(name), self.results))
+
+    def test_legacy_two_lap_report_and_new_portable_course_metadata(self):
+        bag, trace = self.legacy('monza')
+        report_file = trace.parents[1] / 'run.json'
+        report = json.loads(report_file.read_text())
+        report.update(speed_mps=5, lap_duration_s=115.84, laps_requested=2)
+        report['bag_audit']['lap_start_sim_ns'] = 10**9
+        report_file.write_text(json.dumps(report))
+        expected = dict(circuit='monza', lap_length_m=579.2, lap_duration_s=115.84, laps=2, start_ns=10**9)
+        self.assertEqual(load_course(bag, trace, self.results), expected)
+        store_ground_truth(bag, trace, {'test.mcap': 4})
+        embedded = find_ground_truth(bag, self.results)
+        self.assertEqual(load_course(bag, embedded, self.results), expected)
+        trace.write_text('different Gazebo run')
+        self.assertIsNone(load_course(bag, embedded, self.results)['laps'])
+
+        report['lap_length_m'] = 579.2017
+        store_ground_truth(bag, trace, {'test.mcap': 4}, course=recorded_course(report))
+        moved = bag.rename(self.root / 'saved-drive')
+        result = load_course(moved, find_ground_truth(moved, self.results), self.results)
+        self.assertEqual(result, {**expected, 'lap_length_m': 579.2017})

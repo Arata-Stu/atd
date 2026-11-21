@@ -138,6 +138,7 @@ def resolve_capture(config_dir, job, inspect=None):
         inspect(engines, shape)
     components = component_configuration(config_dir, workflow, map_dir, map_root, model_dir, runtime_config,
         namespace='/atd_mapping', use_sim_time=True, capture_visualization=True)
+    components['parameters']['cuvslam']['slam_max_map_size'] = 0
     return dict(**components, workflow=workflow, capture=capture, input_shape=shape,
                 assets=dict(cuvslam_sha256={name: digest(path) for name, path in files.items()},
                             config_sha256={name: digest(path) for name, path in configs.items()},

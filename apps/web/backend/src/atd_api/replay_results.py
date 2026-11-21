@@ -54,6 +54,11 @@ def _summary(folder):
     keys = ('version', 'id', 'bag', 'created_at', 'status', 'sample_count', 'rate', 'circuit', 'laps',
             'lap_length_m', 'reason')
     summary = {key: value.get(key) for key in keys}
+    if 'slam_max_map_size' in value:
+        limit = value['slam_max_map_size']
+        if type(limit) is not int or limit < 0:
+            raise ValueError('replay の地図姿勢数の上限が不正です')
+        summary['slam_max_map_size'] = limit
     if 'gap_threshold_s' in value:
         if not _finite(value['gap_threshold_s']) or value['gap_threshold_s'] <= 0:
             raise ValueError('replay のサンプル間隔しきい値が不正です')

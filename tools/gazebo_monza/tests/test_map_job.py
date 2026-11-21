@@ -92,7 +92,8 @@ while not (p/'mapping.cancel').exists(): time.sleep(.01)
             db = out / "map-staging/nvidia/cuvslam_map"
             db.mkdir(parents=True)
             (db / "landmarks.mdb").write_bytes(b"map")
-            saved = {"status": "complete", "tracking": timing, "databases": {"landmarks.mdb": 3}}
+            saved = {"status": "complete", "tracking": timing, "databases": {"landmarks.mdb": 3},
+                     "slam_max_map_size": 0}
             (out / "mapping.saved.json").write_text(json.dumps(saved))
             motion = {"lap_completed": True, "laps_requested": 2, "laps_completed": 1}
             report = {"status": "complete", "circuit": "spa", "motion": motion}
@@ -105,3 +106,4 @@ while not (p/'mapping.cancel').exists(): time.sleep(.01)
             target = map_job.verify_and_publish(root, out, "spa")
             metadata = json.loads((target / "mapping.json").read_text())
             self.assertEqual(metadata["lap"], {**timing, "speed_mps": 3.0, "laps_completed": 2})
+            self.assertEqual(metadata["save"]["slam_max_map_size"], 0)

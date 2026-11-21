@@ -42,7 +42,7 @@
     localizer_horizontal_step: 0.5
     localizer_vertical_step: 0.25
     localizer_angular_step: 0.1745
-    slam_max_map_size: 300
+    slam_max_map_size: 300  # Runtime localization. Notebook point-cloud capture overrides this to 0 (unlimited).
     slam_throttling_time_ms: 500
     map_frame: map
     odom_frame: odom

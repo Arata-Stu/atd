@@ -37,6 +37,7 @@ class CaptureConfigTests(unittest.TestCase):
         self.assertEqual(slam['load_map_folder_path'], str(Path(self.job['map_dir']).resolve()))
         self.assertEqual(slam['save_map_folder_path'], '')
         self.assertFalse(slam['localize_on_startup'])
+        self.assertEqual(slam['slam_max_map_size'], 0)
         self.assertTrue(slam['enable_request_hint'])
         self.assertFalse(slam['enable_ground_constraint_in_odometry'])
         self.assertFalse(slam['enable_ground_constraint_in_slam'])

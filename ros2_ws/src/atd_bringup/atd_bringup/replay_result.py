@@ -94,7 +94,7 @@ def compare(alignment, truth, position, orientation):
 
 
 class ReplayResult:
-    def __init__(self, root, bag, rate, trace, course):
+    def __init__(self, root, bag, rate, trace, course, *, slam_max_map_size=0):
         now = datetime.now(timezone.utc)
         run_id = now.strftime('%Y%m%dT%H%M%SZ') + '-' + uuid4().hex[:12]
         self.directory = Path(root) / 'runs' / 'replay' / run_id
@@ -105,6 +105,7 @@ class ReplayResult:
         self.next_checkpoint = 0.
         self.committed = 0
         self.summary = dict(version=1, id=run_id, bag=str(bag), rate=rate, created_at=now.isoformat(),
+                            slam_max_map_size=slam_max_map_size,
                             status='running', reason=None, sample_count=0,
                             circuit=course.get('circuit'), laps=course.get('laps') if self.progress.boundaries else None,
                             lap_length_m=self.progress.lap_length, gap_threshold_s=GAP_NS / 1e9,

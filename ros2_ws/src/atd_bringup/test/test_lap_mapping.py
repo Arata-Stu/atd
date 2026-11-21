@@ -151,7 +151,12 @@ class LapMappingTests(unittest.TestCase):
                     target.mkdir(parents=True)
                     (target / 'existing.mdb').write_bytes(b'preserve')
                 if outcome in ('saved', 'regained'):
-                    result = run(node, folder, target)
+                    if outcome == 'saved':
+                        result = run(node, folder, target, slam_max_map_size=0)
+                        self.assertEqual(result['slam_max_map_size'], 0)
+                    else:
+                        result = run(node, folder, target)
+                        self.assertNotIn('slam_max_map_size', result)
                     self.assertEqual(result['databases'], {'data.mdb': 3})
                     self.assertEqual(result['tracking']['status_samples'], 4)
                     self.assertEqual(result['tracking']['coverage'],

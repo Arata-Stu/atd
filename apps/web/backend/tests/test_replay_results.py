@@ -53,6 +53,14 @@ def test_truncated_committed_data_is_rejected(saved):
     assert reply.status_code == 400 and 'サンプル数' in reply.json()['detail']
 
 
+@pytest.mark.parametrize('limit', [0, 300])
+def test_map_limit_in_run_list_and_detail(saved, limit):
+    folder, api, summary, _ = saved
+    atomic_json(folder / 'summary.json', dict(summary, slam_max_map_size=limit))
+    assert api.get('/api/replay/runs').json()['items'][0]['slam_max_map_size'] == limit
+    assert api.get('/api/replay/runs/' + folder.name).json()['slam_max_map_size'] == limit
+
+
 def test_interrupted_writer_keeps_last_committed_snapshot_without_modifying_archive(saved):
     folder, api, summary, rows = saved
     atomic_json(folder / 'summary.json', dict(summary, writer_lock='samples.jsonl'))

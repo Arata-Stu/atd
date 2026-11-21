@@ -1,4 +1,4 @@
-from contextlib import ExitStack, nullcontext, redirect_stdout
+from contextlib import ExitStack, nullcontext, redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -26,8 +26,8 @@ class ReplaySessionTests(unittest.TestCase):
         self.output = self.stack.enter_context(redirect_stdout(StringIO()))
         self.config = Path(__file__).resolve().parents[1] / 'config/bag_vslam.rviz'
 
-    def session(self, ground_truth=None, result=None):
-        replay.run_session(Mock(), 'two words/run', 0.5, self.config, 'qos.yaml', ground_truth, result)
+    def session(self, ground_truth=None, result=None, **options):
+        replay.run_session(Mock(), 'two words/run', 0.5, self.config, 'qos.yaml', ground_truth, result, **options)
 
     def test_eof_keeps_viewer_open_until_closed(self):
         def resume(node, *, player_name, check_running, ground_truth):
@@ -41,7 +41,7 @@ class ReplaySessionTests(unittest.TestCase):
         self.session()
         self.assertIn('末尾に到達', self.output.getvalue())
         launch, rviz, player = [call.args[0] for call in self.spawn.call_args_list]
-        self.assertEqual(launch[-1], 'bag_vslam.launch.py')
+        self.assertEqual(launch[-2:], ['bag_vslam.launch.py', 'slam_max_map_size:=0'])
         self.assertIn(str(self.config), rviz)
         self.assertIn('use_sim_time:=true', rviz)
         self.assertIn('two words/run', player)
@@ -107,9 +107,21 @@ class ReplaySessionTests(unittest.TestCase):
     def test_closing_viewer_during_startup_cleans_up_paused_player(self):
         self.rviz.returncode = 0
         self.ready.side_effect = lambda node, **kwargs: kwargs['check_running']()
-        self.session()
+        self.session(slam_max_map_size=300)
+        self.assertIn('slam_max_map_size:=300', self.spawn.call_args_list[0].args[0])
         self.assertNotIn('bag を再生しています', self.output.getvalue())
         self.assertEqual(self.stop.call_count, 3)
+
+    def test_cli_accepts_reproducible_limits_and_rejects_out_of_range_values_before_selecting_bag(self):
+        with patch.object(replay, 'select_bag', return_value='bag') as select, patch.object(replay, 'run') as run:
+            for options, limit in (([], 0), (['--slam-max-map-size', '300'], 300)):
+                self.assertEqual(replay.main(['bag', *options]), 0)
+                run.assert_called_with('bag', .5, slam_max_map_size=limit)
+            select.reset_mock()
+            for invalid in ('-1', '2147483648', '3.5'):
+                with self.subTest(invalid=invalid), self.assertRaises(SystemExit), redirect_stderr(StringIO()):
+                    replay.main(['bag', '--slam-max-map-size', invalid])
+            select.assert_not_called()
 
     def test_playback_failure_after_resume_is_reported(self):
         self.player.returncode = 2

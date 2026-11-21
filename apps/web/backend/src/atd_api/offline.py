@@ -18,6 +18,7 @@ from .transfers import inventory
 TOPIC = re.compile(r'/[A-Za-z_][A-Za-z_0-9/]*$')
 FRAME = re.compile(r'[A-Za-z_][A-Za-z_0-9/]*$')
 ODOM_POSES = Path('nvidia/poses/odom_poses.tum')
+OFFLINE_SLAM_MAX_MAP_SIZE = 0
 DEFAULT_INPUTS = dict(left_image='/camera/camera/infra1/image_rect_raw', right_image='/camera/camera/infra2/image_rect_raw',
     left_info='/camera/camera/infra1/camera_info', right_info='/camera/camera/infra2/camera_info',
     base_frame='base_link', left_frame='camera_infra1_optical_frame', right_frame='camera_infra2_optical_frame')
@@ -60,7 +61,9 @@ def map_build(store, task, payload, *, validate_source=None):
         command = ['ros2', 'run', 'isaac_mapping_ros', 'create_map_offline.py', f'--sensor_data_bag={bag}',
             f'--base_output_folder={nvidia}', f'--camera_topic_config={config}', f"--base_link_name={payload['base_frame']}",
             '--use_raw_image=False', '--use_cusfm=False', '--use_cuvslam_opencv_compat=True',
-            '--override', 'cuvslam.cfg_planar=false', '--steps_to_run', 'edex', 'compute_poses']
+            '--override', 'cuvslam.cfg_planar=false',
+            '--override', f'cuvslam.cfg_slam_max_map_size={OFFLINE_SLAM_MAX_MAP_SIZE}',
+            '--steps_to_run', 'edex', 'compute_poses']
         task.run(command, env=dict(os.environ, ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST', ROS_DOMAIN_ID='93'))
         candidates = sorted({p.resolve() for p in nvidia.rglob('cuvslam_map') if p.is_dir()})
         if len(candidates) != 1 or not candidates[0].is_relative_to(nvidia):
@@ -79,7 +82,7 @@ def map_build(store, task, payload, *, validate_source=None):
         document = blank(key)
         document['source'] = dict(kind='nvidia_offline', bag=payload['bag'], frame='map', pointcloud_status='pending',
                                  metadata_sha256=hashlib.sha256((bag / 'metadata.yaml').read_bytes()).hexdigest(), inputs=payload,
-                                 mapping_options=dict(ground_constraint=False))
+                                 mapping_options=dict(ground_constraint=False, slam_max_map_size=OFFLINE_SLAM_MAX_MAP_SIZE))
         # 標準 workflow の連続 VO は、指定した rig 基準の姿勢を ROS 軸で保存する。
         poses = files.get(ODOM_POSES.relative_to('nvidia').as_posix())
         if poses and poses['size'] > 0:

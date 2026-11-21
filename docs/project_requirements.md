@@ -119,6 +119,8 @@
 5. 作成した地図を Jetson へ転送する。
 
 地図作成は NVIDIA の公式 offline 処理を利用し、cuVSLAM / VGL で使う地図を準備する。保存地図への localize と点群 snapshot の取得、HDMap の作成・編集、centerline / raceline / 必要に応じた custom line の生成まで共通 Web アプリで扱う。駐車機能は対象に含めない。
+
+Notebook での cuVSLAM 地図作成、保存地図からの点群取得、Gazebo の周回地図作成、RViz での bag 再生には、姿勢グラフの保持数の上限を設けない（`slam_max_map_size=0`）。再生では同じ bag を上限指定でも評価できる。Jetson の走行とその構成を再現する自己位置検証の設定は 300 姿勢。
 bag の Jetson → ノート PC、作成地図のノート PC → Jetson の転送は、SCP を簡単に実行できる機能として提供する。転送画面には USB・Hotspot の接続先を用意し、よく使う Wi-Fi の IP も登録できるようにする。重いデータの転送には USB を基本とし、USB 用 IP 以外で bag 受信・地図送信を開始するときは接続先を示して実行を確認する。
 
 VGL モデルの準備・配備は、次の分担とする。

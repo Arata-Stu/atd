@@ -38,7 +38,7 @@ def estimated_only_config(preset, directory):
     return output
 
 
-def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=None):
+def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=None, *, slam_max_map_size=0):
     from .replay_readiness import wait_and_resume
 
     with ExitStack() as children:
@@ -47,7 +47,8 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
             children.callback(stop, process)
             return process
 
-        launch = start(['ros2', 'launch', 'atd_bringup', 'bag_vslam.launch.py'])
+        launch = start(['ros2', 'launch', 'atd_bringup', 'bag_vslam.launch.py',
+                        f'slam_max_map_size:={slam_max_map_size}'])
         rviz = start(['rviz2', '-d', str(rviz_config), '--ros-args',
                       '-p', 'use_sim_time:=true', '-r', '__node:=rviz2'])
         spin_overlay = None
@@ -72,7 +73,8 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
             if player.poll() is not None:
                 raise RuntimeError(f'再生開始前に rosbag2 が終了しました（exit {player.returncode}）')
 
-        print(f'{bag} ({rate:g} 倍速)\ncuVSLAM と RViz の購読準備を待っています。', flush=True)
+        print(f'{bag} ({rate:g} 倍速)  slam_max_map_size={slam_max_map_size}'
+              '\ncuVSLAM と RViz の購読準備を待っています。', flush=True)
         finished = False
         try:
             wait_and_resume(node, player_name=f'/{player_name}', check_running=check_startup,
@@ -99,7 +101,7 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                     spin_overlay(timeout_sec=.05)
 
 
-def run(bag, rate):
+def run(bag, rate, *, slam_max_map_size=0):
     from ament_index_python.packages import get_package_share_directory
     import rclpy
     from rclpy.signals import SignalHandlerOptions
@@ -149,22 +151,27 @@ def run(bag, rate):
         if trace is not None:
             root = Path('/data/results')
             course = load_course(bag, ground_truth, root)
-            result = stack.enter_context(ReplayResult(root, bag, rate, trace, course))
+            result = stack.enter_context(ReplayResult(root, bag, rate, trace, course,
+                                                     slam_max_map_size=slam_max_map_size))
             print(f'Gazebo 正解軌跡: {ground_truth}\n比較結果の保存先: {result.directory}', flush=True)
-        run_session(node, bag, rate, config, qos, trace, result)
+        run_session(node, bag, rate, config, qos, trace, result, slam_max_map_size=slam_max_map_size)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('bag', nargs='?', help='/data/record/rosbags からの相対パス、または絶対パス')
     parser.add_argument('--rate', type=float, default=0.5, help='再生倍率（既定 0.5）')
+    parser.add_argument('--slam-max-map-size', type=int, default=0,
+                        help='SLAM 地図の姿勢数上限（既定 0 は無制限）')
     args = parser.parse_args(argv)
     if not math.isfinite(args.rate) or args.rate <= 0:
         parser.error('--rate には正の有限値を指定してください')
+    if not 0 <= args.slam_max_map_size <= 2147483647:
+        parser.error('--slam-max-map-size には 0〜2147483647 の整数を指定してください')
     try:
         bag = select_bag(args.bag)
         if bag is not None:
-            run(bag, args.rate)
+            run(bag, args.rate, slam_max_map_size=args.slam_max_map_size)
         return 0
     except KeyboardInterrupt:
         return 130

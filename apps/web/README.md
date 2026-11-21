@@ -93,6 +93,8 @@ Notebook ホストで `atd gazebo bag --circuit monza` を実行して作成し�
 
 cuVSLAM 地図の内容 hash、VGL 地図・保存画像・モデルの対応情報、地図生成時の平面拘束設定がない旧資産は、開始前の検査で再生成を案内する。未記録値の推測や既存資産の自動移行は行わない。新規地図は平面拘束を無効と明示して記録し、点群取得もその記録と同じ設定を使う。
 
+Notebook の地図作成では `cuvslam.cfg_slam_max_map_size=0`、点群取得では `slam_max_map_size=0` を指定する。どちらも姿勢グラフの保持数が無制限になる。新規地図の作成値は `mapping.json` の `source.mapping_options.slam_max_map_size`、点群取得時の値は `snapshot.json` の `provenance.parameters.cuvslam.slam_max_map_size` で確認できる。すでに縮約された旧地図を全入力から比較し直すには、同じ bag を使って新しい地図 ID で作成する。[NVIDIA の release-5.0 地図作成設定](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_mapping_and_localization/blob/release-5.0/isaac_mapping_ros/configs/map_creation_config.yaml#L42-L46)
+
 ### ライン生成
 
 | ライン | 採用する方式 | 初期値・条件 |

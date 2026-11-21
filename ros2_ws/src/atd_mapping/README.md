@@ -18,6 +18,8 @@ ROS_DOMAIN_ID=94 ros2 run atd_mapping capture_snapshot --job /absolute/path/capt
 
 VGL hint を cuVSLAM の initial_pose へ接続し、`localized_in_exist_map=Yes` と `vo_status=OK` の診断を受信するまで点群を採用しない。localize 喪失時は cloud/path/TF を破棄し、次の成功区間から取り直す。元地図へ保存する parameter は空に固定する。原点 hint への fallback は行わない。
 
+Notebook の点群取得では `slam_max_map_size=0` を指定し、読み込んだ地図の作業コピーで姿勢グラフの保持数を無制限にする。点群取得時の値は `snapshot.json` の `provenance.parameters.cuvslam.slam_max_map_size` で確認できる。地図作成時に縮約された姿勢を復元するには、元の bag から地図を作り直す必要がある。
+
 成功時だけ `output/snapshot.json` を atomic 保存する。schema は `atd.snapshot.v1`、frame は `map`、`points`、`trajectory`、`raw_points`、`raw_path` と `provenance` を持つ。provenance は map_id/bag、採用した parameter、入力設定、初期VGL hint、最後のlocalize区間、diag/path/cloud/TF stamp、末尾画像stamp、適用TF、地図・config・ONNX・engine hash、publisher GID、点数を記録する。
 
 diag・SLAM path・map→odom の stamp が入力末尾許容範囲に到達し、更新が settle_s の間落ち着くことを要求する。可視化 cloud は更新駆動なので末尾stampとの一致を要求せず、**最後のlocalize成功区間の最新非空 cloud** を用いる。`cloud_tail_age_s` / `cloud_within_tail_tolerance` を残し、古い場合はログとUIで表示する。全地図の landmark 網羅性は保証しない。

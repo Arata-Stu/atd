@@ -20,8 +20,14 @@ class ReplayResultTests(unittest.TestCase):
                            tuple(PlanarPose(x, 8., 0.) for x in (1., 3., 1., 3., 1.)))
         self.course = dict(circuit='monza', laps=2, lap_length_m=4., lap_duration_s=1., start_ns=0)
 
-    def run_writer(self):
-        return ReplayResult(self.root, '/data/record/rosbags/bag', .5, self.trace, self.course)
+    def run_writer(self, **options):
+        return ReplayResult(self.root, '/data/record/rosbags/bag', .5, self.trace, self.course, **options)
+
+    def test_saves_map_size_for_each_comparison_run(self):
+        for options, expected in (({}, 0), (dict(slam_max_map_size=300), 300)):
+            with self.run_writer(**options) as run:
+                run.mark_eof()
+            self.assertEqual(json.loads((run.directory / 'summary.json').read_text())['slam_max_map_size'], expected)
 
     def test_signed_errors_in_world_plane_after_tilted_map_anchor_and_wrap(self):
         yaw = math.radians(179)

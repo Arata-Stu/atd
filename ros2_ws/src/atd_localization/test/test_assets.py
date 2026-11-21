@@ -87,6 +87,7 @@ def test_validated_target_and_tf_owner_for_both_clocks(deployment):
         slam, vgl = resolved['parameters']['cuvslam'], resolved['parameters']['vgl']
         assert slam['base_frame'] == vgl['base_frame'] == 'base_link'
         assert slam['use_sim_time'] is simulated and vgl['use_sim_time'] is simulated
+        assert slam['slam_max_map_size'] == 300
         assert slam['publish_map_to_odom_tf'] and slam['publish_odom_to_base_tf']
         assert not vgl['publish_map_to_base_tf'] and not vgl['publish_map_to_odom_tf']
         assert not slam['enable_slam_visualization'] and slam['save_map_folder_path'] == ''

@@ -81,6 +81,7 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(params['image_qos'], 'SENSOR_DATA')
         self.assertFalse(params['override_publishing_stamp'])
         self.assertFalse(params['enable_localization_n_mapping'])
+        self.assertNotIn('slam_max_map_size', params)
         self.assertEqual(params['base_frame'], 'base_link')
         self.assertEqual(params['camera_optical_frames'],
                          ['camera_infra1_optical_frame', 'camera_infra2_optical_frame'])
@@ -93,7 +94,7 @@ class CompositionTests(unittest.TestCase):
     def test_bag_vslam_loads_the_mapper_component_for_live_visualization(self):
         path = Path(__file__).resolve().parents[1] / 'launch/bag_vslam.launch.py'
         with fake_launch():
-            container, = runpy.run_path(str(path))['generate_launch_description']().entities
+            limit, container = runpy.run_path(str(path))['generate_launch_description']().entities
         tracker, = container.composable_node_descriptions
         self.assertEqual((container.package, container.executable), ('rclcpp_components', 'component_container_mt'))
         self.assertEqual((tracker.package, tracker.plugin),
@@ -105,6 +106,9 @@ class CompositionTests(unittest.TestCase):
                      'enable_landmarks_view', 'publish_map_to_odom_tf', 'publish_odom_to_base_tf'):
             self.assertIs(params[flag], True)
         self.assertEqual(params['path_max_size'], 50000)
+        self.assertEqual((limit.args[0], limit.default_value), ('slam_max_map_size', '0'))
+        self.assertEqual((params['slam_max_map_size'].args[0].name, params['slam_max_map_size'].value_type),
+                         (limit.args[0], int))
         self.assertEqual(params['base_frame'], 'base_link')
         remaps = dict(tracker.remappings)
         for i in (0, 1):
@@ -123,7 +127,9 @@ class CompositionTests(unittest.TestCase):
         self.assertTrue(params['use_sim_time'])
         self.assertFalse(params['override_publishing_stamp'])
         self.assertEqual(monitor.executable, 'gazebo_lap_map')
-        self.assertEqual([x.name for x in monitor.arguments[1::2]], ['run_dir', 'map_dir'])
+        self.assertEqual([x.name for x in monitor.arguments[1:4:2]], ['run_dir', 'map_dir'])
+        self.assertEqual(params['slam_max_map_size'], 0)
+        self.assertEqual(monitor.arguments[4:], ['--slam-max-map-size', str(params['slam_max_map_size'])])
         self.assertEqual(monitor.parameters, [{'use_sim_time': True}])
         self.assertIsInstance(monitor.on_exit[0], Shutdown)
         self.assertIsInstance(container.on_exit[0], Shutdown)

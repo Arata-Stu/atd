@@ -278,7 +278,8 @@ def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch, odom
         def log(self, text): pass
         def run(self, argv, env=None):
             assert argv[:4] == ['ros2', 'run', 'isaac_mapping_ros', 'create_map_offline.py']
-            assert argv[argv.index('--override') + 1] == 'cuvslam.cfg_planar=false'
+            assert [argv[i + 1] for i, arg in enumerate(argv) if arg == '--override'] == [
+                'cuvslam.cfg_planar=false', 'cuvslam.cfg_slam_max_map_size=0']
             assert '--base_link_name=camera_link' in argv
             assert '--use_cusfm=False' in argv and '--use_cuvslam_opencv_compat=True' in argv
             assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
@@ -298,8 +299,11 @@ def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch, odom
     assert result['cuvslam_ready'] is True and result['pointcloud_ready'] is False
     assert (store.maps_root / 'built/nvidia/cuvslam_map/map.mdb').read_bytes() == b'not-empty'
     assert store.load_map('built')['source']['pointcloud_status'] == 'pending'
-    assert store.load_map('built')['source']['mapping_options']['ground_constraint'] is False
-    source = json.loads((store.maps_root / 'built/mapping.json').read_text())['source']
+    recipe = json.loads((store.maps_root / 'built/mapping.json').read_text())
+    source = recipe['source']
+    assert source['mapping_options'] == dict(ground_constraint=False, slam_max_map_size=0)
+    assert store.load_map('built')['source']['mapping_options'] == source['mapping_options']
+    assert 'cuvslam.cfg_slam_max_map_size=0' in recipe['command']
     if odom:
         assert source['odom_poses'] == dict(path='nvidia/poses/odom_poses.tum', frame='camera_link',
                                             sha256=hashlib.sha256(odom).hexdigest())

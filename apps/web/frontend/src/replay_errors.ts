@@ -6,6 +6,7 @@ export interface ReplayRun {
   status: string;
   reason: string | null;
   sample_count: number;
+  slam_max_map_size?: number;
   laps: number | null;
 }
 

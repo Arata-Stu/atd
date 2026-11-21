@@ -8,6 +8,10 @@ import './replay_errors.css';
 
 const statuses: Record<string,string> = {running:'再生中', complete:'再生完了', partial:'途中終了', failed:'失敗'};
 function statusLabel(s: string) { return statuses[s] ?? s; }
+function mapLimitLabel(limit?: number) {
+  if (limit === undefined) return '地図上限 未記録';
+  return limit === 0 ? '地図上限なし' : `地図上限 ${limit.toLocaleString()} 姿勢`;
+}
 function dateLabel(iso: string) {
   const date = new Date(iso);
   return Number.isFinite(date.getTime()) ? date.toLocaleString('ja-JP', {hour12:false}) : iso;
@@ -112,7 +116,7 @@ export default function ReplayErrorsWorkspace() {
   },[selectedId,reload]);
   const picker = <div className="replay-picker"><Field label="保存した再生結果">
     <select aria-label="保存した再生結果" title={selected?.bag} value={selectedId} onChange={e => setId(e.target.value)}>
-      {runs?.map(item => <option value={item.id} key={item.id}>{item.bag} · {dateLabel(item.created_at)} · {statusLabel(item.status)}</option>)}
+      {runs?.map(item => <option value={item.id} key={item.id}>{mapLimitLabel(item.slam_max_map_size)} · {item.bag} · {dateLabel(item.created_at)} · {statusLabel(item.status)}</option>)}
     </select>
   </Field></div>;
   return <div className="content-page replay-errors-page">

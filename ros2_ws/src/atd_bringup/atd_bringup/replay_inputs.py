@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -11,7 +12,7 @@ import sys
 from typing import NamedTuple
 
 from atd_mapping.bag_inputs import inspect_bag, load_metadata
-from .replay_gt_source import LEGACY_NAME, matching_run
+from .replay_gt_source import BAG_NAME, LEGACY_NAME, matching_manifest, matching_run
 
 
 STEREO_WORKFLOW = {
@@ -29,20 +30,13 @@ GROUND_TRUTH_ERROR = '/atd/replay/position_error'
 GROUND_TRUTH_NODE = 'atd_replay_ground_truth'
 
 
-def _legacy_bag_label(relative, root, results_root):
-    match = LEGACY_NAME.fullmatch(relative.name)
-    if not match:
-        return relative.as_posix()
+def _legacy_sensor_label(relative, match, run):
     try:
         started = datetime.strptime(match['run'].split('-', 1)[0], '%Y%m%dT%H%M%SZ')
     except ValueError:
         return relative.as_posix()
     jst = started.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=9), 'JST'))
     label = relative.with_name(f"{match['circuit']}  {jst:%Y-%m-%d %H:%M:%S %Z}").as_posix()
-    try:
-        run = matching_run(root / relative, results_root)
-    except (OSError, ValueError):
-        run = None
     if run is None:
         return f'{label}  センサー設定不明'
 
@@ -73,6 +67,41 @@ def _legacy_bag_label(relative, root, results_root):
     if type(imu) is int and imu >= 0:
         inertial = 'IMU OFF' if imu == 0 else f'IMU {imu} Hz'
     return f'{label}  {size}  {rate}  {inertial}'
+
+
+def _positive_number(value):
+    return type(value) in (float, int) and math.isfinite(value) and value > 0
+
+
+def _legacy_bag_label(relative, root, results_root):
+    legacy = LEGACY_NAME.fullmatch(relative.name)
+    match = legacy or BAG_NAME.fullmatch(relative.name)
+    if not match or match.groupdict().get('laps'):
+        return relative.as_posix()
+    bag = root / relative
+    try:
+        run = matching_run(bag, results_root)
+    except (OSError, ValueError):
+        run = None
+    label = _legacy_sensor_label(relative, legacy, run) if legacy else relative.as_posix()
+    report = run[1] if run else {}
+    laps, speed = report.get('laps_requested'), report.get('speed_mps')
+    needs_laps = type(laps) is not int or laps <= 0
+    needs_speed = not _positive_number(speed)
+    if needs_laps or needs_speed:
+        try:
+            course = matching_manifest(bag).get('course')
+        except (OSError, ValueError):
+            course = None
+        if isinstance(course, dict) and course.get('circuit') == match['circuit']:
+            if needs_laps:
+                laps = course.get('laps')
+            length, duration = course.get('lap_length_m'), course.get('lap_duration_s')
+            if needs_speed and _positive_number(length) and _positive_number(duration):
+                speed = length / duration
+    lap_label = f'{laps}周' if type(laps) is int and laps > 0 else '周回数不明'
+    speed_label = f'{speed:.6g} m/s' if _positive_number(speed) else '速度不明'
+    return f'{label}  {lap_label}  {speed_label}'
 
 
 def select_bag(value, root=Path('/data/record/rosbags'), *, results_root=Path('/data/results')):

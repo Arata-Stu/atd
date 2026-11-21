@@ -1,4 +1,4 @@
-"""Notebook で記録済みステレオ bag の地図作成を RViz で見る。"""
+"""Notebook でステレオ bag を cuVSLAM 再生し、Gazebo の正解軌跡と比較する。"""
 import argparse
 from contextlib import ExitStack
 import fcntl
@@ -53,11 +53,13 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
             launch_args.extend(['tracking_mode:=1', f'imu_frame:={imu.frame}', f'imu_frequency:={imu.frequency}'])
             topics.append(IMU_TOPIC)
         launch = start(launch_args)
-        rviz = start(['rviz2', '-d', str(rviz_config), '--ros-args',
-                      '-p', 'use_sim_time:=true', '-r', '__node:=rviz2'])
+        rviz = None
+        if rviz_config is not None:
+            rviz = start(['rviz2', '-d', str(rviz_config), '--ros-args',
+                          '-p', 'use_sim_time:=true', '-r', '__node:=rviz2'])
         spin_overlay = None
         if ground_truth is not None:
-            spin_overlay = children.enter_context(ground_truth_viewer(ground_truth, result))
+            spin_overlay = children.enter_context(ground_truth_viewer(ground_truth, result, visualize=rviz is not None))
         player_name = f'atd_replay_player_{os.getpid()}'
         player = start(['ros2', 'bag', 'play', str(bag), '--start-paused', '--disable-keyboard-controls',
                         '--clock', '--rate', str(rate), '--qos-profile-overrides-path', str(qos),
@@ -67,7 +69,7 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
         def check_viewer():
             if launch.poll() is not None:
                 raise RuntimeError(f'cuVSLAM が終了しました（exit {launch.returncode}）。起動ログを確認してください')
-            if rviz.poll() is not None:
+            if rviz is not None and rviz.poll() is not None:
                 if rviz.returncode:
                     raise RuntimeError(f'RViz が終了しました（exit {rviz.returncode}）。画面接続と起動ログを確認してください')
                 raise ViewerClosed()
@@ -78,17 +80,35 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                 raise RuntimeError(f'再生開始前に rosbag2 が終了しました（exit {player.returncode}）')
 
         tracking = f'VIO (IMU {imu.frequency:g} Hz, {imu.frame})' if imu else 'VO'
+        consumers = 'cuVSLAM と RViz' if rviz is not None else 'cuVSLAM と GT 比較用ノード'
         print(f'{bag} ({rate:g} 倍速)  {tracking}  slam_max_map_size={slam_max_map_size}'
-              '\ncuVSLAM と RViz の購読準備を待っています。', flush=True)
+              f'\n{consumers} の購読準備を待っています。', flush=True)
         finished = False
         try:
             wait_and_resume(node, player_name=f'/{player_name}', check_running=check_startup,
-                            ground_truth=spin_overlay is not None, vio=imu is not None)
-            print('bag を再生しています。終了するには RViz を閉じるか Ctrl+C を押してください。', flush=True)
+                            ground_truth=spin_overlay is not None, vio=imu is not None,
+                            rviz_name='/rviz2' if rviz is not None else None)
+            print('bag を再生しています。' + ('終了するには RViz を閉じるか Ctrl+C を押してください。'
+                                           if rviz is not None else '末尾で比較結果を保存して終了します。'), flush=True)
             while True:
                 if not finished and player.poll() is not None:
                     if player.returncode:
                         raise RuntimeError(f'rosbag2 の再生に失敗しました（exit {player.returncode}）')
+                    if rviz is None:
+                        # rosbag2 の終了後も GPU から遅れて届く姿勢は比較に含める。
+                        stamp = result.last_stamp
+                        deadline = time.monotonic() + 2.
+                        while time.monotonic() < deadline:
+                            check_viewer()
+                            spin_overlay(timeout_sec=.05)
+                            if result.last_stamp != stamp:
+                                stamp = result.last_stamp
+                                deadline = time.monotonic() + 2.
+                        if stamp is None:
+                            raise RuntimeError('GT と時刻を照合できた cuVSLAM の推定姿勢が 0 件です')
+                        result.mark_eof()
+                        print(f'bag の末尾に到達しました。比較結果を保存しました: {result.directory}', flush=True)
+                        return
                     print('bag の末尾に到達しました。RViz で最終表示を確認できます。', flush=True)
                     finished = True
                     if result is not None:
@@ -106,19 +126,21 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                     spin_overlay(timeout_sec=.05)
 
 
-def run(bag, rate, *, slam_max_map_size=0, tracking='vo'):
+def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False):
     from ament_index_python.packages import get_package_share_directory
     import rclpy
     from rclpy.signals import SignalHandlerOptions
 
-    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
-        raise ValueError('RViz の画面出力先がありません。Notebook のデスクトップ端末で atd dev を起動してください')
-    if not shutil.which('rviz2'):
-        raise ValueError('コンテナに rviz2 がありません。Notebook の RViz 依存を準備してください')
-    config = Path(get_package_share_directory('atd_bringup')) / 'config/bag_vslam.rviz'
+    config = None
+    if not headless:
+        if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+            raise ValueError('RViz の画面出力先がありません。Notebook のデスクトップ端末で atd dev を起動してください')
+        if not shutil.which('rviz2'):
+            raise ValueError('コンテナに rviz2 がありません。Notebook の RViz 依存を準備してください')
+        config = Path(get_package_share_directory('atd_bringup')) / 'config/bag_vslam.rviz'
     qos = Path(get_package_share_directory('atd_mapping')) / 'config/replay_qos.yaml'
     for path in (config, qos):
-        if not path.is_file():
+        if path is not None and not path.is_file():
             raise ValueError(f'{path} がありません。atd build --packages-up-to atd_bringup を実行してください')
 
     def interrupt(*_):
@@ -140,11 +162,15 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo'):
             if ground_truth is not None:
                 trace = Trace.from_file(ground_truth)
         except (OSError, ValueError) as exc:
+            if headless:
+                raise ValueError(f'Gazebo 正解軌跡を照合できません: {exc}') from exc
             ground_truth = None
             print(f'Gazebo 正解軌跡を照合できません。cuVSLAM の推定軌跡のみ表示します。{exc}',
                   file=sys.stderr, flush=True)
         else:
             if ground_truth is None:
+                if headless:
+                    raise ValueError('--headless の比較には、この bag に対応する Gazebo 正解軌跡が必要です')
                 print('対応する Gazebo 正解軌跡が見つからないため、cuVSLAM の推定軌跡のみ表示します。', flush=True)
         if ground_truth is None:
             config = estimated_only_config(config, stack.enter_context(TemporaryDirectory(prefix='atd-replay-rviz-')))
@@ -166,6 +192,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('bag', nargs='?', help='/data/record/rosbags からの相対パス、または絶対パス')
     parser.add_argument('--rate', type=float, default=0.5, help='再生倍率（既定 0.5）')
+    parser.add_argument('--headless', action='store_true', help='RViz を開かずに GT と比較し、bag 末尾で保存して終了')
     parser.add_argument('--tracking', choices=('vo', 'vio'), default='vo',
                         help='vo はステレオのみ（既定）、vio は統合 IMU も使用')
     parser.add_argument('--slam-max-map-size', type=int, default=0,
@@ -178,7 +205,7 @@ def main(argv=None):
     try:
         bag = select_bag(args.bag)
         if bag is not None:
-            run(bag, args.rate, slam_max_map_size=args.slam_max_map_size, tracking=args.tracking)
+            run(bag, args.rate, slam_max_map_size=args.slam_max_map_size, tracking=args.tracking, headless=args.headless)
         return 0
     except KeyboardInterrupt:
         return 130

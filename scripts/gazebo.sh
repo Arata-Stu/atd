@@ -13,7 +13,7 @@ usage() {
   prepare     Gazebo 専用の Docker をビルドし、増分・ビルド中の最大ディスク使用量を記録
   run         動画を記録し、別セッションで配信を計測（スクリプトで操作を省略した場合の既定）
   video       左右の車載動画を保存（走行時間はコース・速度・周回数で決定）
-  bag         指定周回のステレオ rosbag を record/rosbags に保存（既定1周）。名前は開始日時（日本時間）と撮影設定
+  bag         指定周回のステレオ rosbag を record/rosbags に保存（既定1周）。名前に開始日時（日本時間）・撮影設定・周回数・RC速度を含む
   map         指定周回のステレオ画像で cuVSLAM 地図を保存（既定1周）。Notebook の起動済み atd_pc_dev を使用
   benchmark   録画を止めた状態で ROS 2 の受信を計測（既定 60 実時間秒）
   diagnose    同じ計測区間に Gazebo 側でも画像とシミュレーション時刻を観測（既定 20 実時間秒）
@@ -162,10 +162,14 @@ new_output() {
 # rosbag と対応する走行ログは同名。別の ROS domain で同時に開始しても、
 # ログディレクトリの mkdir で名前を確保してから記録を始める。
 new_bag_output() {
-    local stamp imu_label="$imu" base name number=1
+    local stamp imu_label="$imu" drive_label base name number=1
+    local -a timing_args=(--lap-label "$circuit" --laps "${laps:-1}")
+    if [[ -n "$speed" ]]; then timing_args+=(--speed "$speed"); fi
+    if [[ -n "$duration" ]]; then timing_args+=(--duration "$duration"); fi
+    drive_label="$(python3 "$catalog" "${timing_args[@]}")" || return 1
     stamp="$(TZ=Asia/Tokyo date +%Y-%m-%d_%H-%M-%S)"
     if [[ "$imu" != off ]]; then imu_label="${imu}Hz"; fi
-    base="gazebo-${circuit}-${stamp}_${resolution}-${camera_hz}Hz_imu-${imu_label}"
+    base="gazebo-${circuit}-${stamp}_${resolution}-${camera_hz}Hz_imu-${imu_label}_${drive_label}"
     name="$base"
     while true; do
         if [[ ! -e "$record/rosbags/$name" && ! -L "$record/rosbags/$name" &&

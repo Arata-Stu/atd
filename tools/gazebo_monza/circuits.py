@@ -1,11 +1,12 @@
 """Offline geographical inputs for full-lap Gazebo scenes."""
+import argparse
 from functools import lru_cache
 from hashlib import sha256
 import json
 from math import ceil, dist, hypot, isfinite, remainder, tau
 from pathlib import Path
 
-from geography import SCALE, closed_trajectory, local_projection
+from geography import SCALE, closed_trajectory, load_track, local_projection
 
 ROOT = Path(__file__).resolve().parent / "reference" / "circuits"
 
@@ -33,6 +34,31 @@ def resolve_route(circuit, route):
     if route != "lap" and not (route == "chicane" and circuit == "monza"):
         raise ValueError("The chicane section is available for Monza only")
     return route
+
+
+def default_travel_seconds(route, circuit="monza"):
+    if circuit == "monza":
+        return {"chicane": 10.0, "lap": 240.0}[route]
+    # Match Monza's approximate 2.4 m/s RC speed across different lap lengths.
+    return round(track_data(circuit)["official_length_m"] / 24.0)
+
+
+def route_timing(circuit, route, length, travel_seconds, speed_mps):
+    if speed_mps is None:
+        if travel_seconds is None:
+            travel_seconds = default_travel_seconds(route, circuit)
+        if not isfinite(travel_seconds) or travel_seconds <= 0:
+            raise ValueError("travel_seconds must be positive and finite")
+        speed_mps = length / travel_seconds
+    else:
+        if travel_seconds is not None:
+            raise ValueError("choose speed_mps or travel_seconds")
+        if not isfinite(speed_mps) or speed_mps <= 0:
+            raise ValueError("speed_mps must be positive and finite")
+        travel_seconds = length / speed_mps
+    if not isfinite(speed_mps) or not isfinite(travel_seconds):
+        raise ValueError("requested speed and run duration must be finite")
+    return travel_seconds, speed_mps
 
 
 def load_lap(circuit):
@@ -124,4 +150,22 @@ def metadata(circuit):
 
 
 if __name__ == "__main__":
-    print("\n".join(circuit_ids()))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--lap-label", metavar="CIRCUIT", choices=circuit_ids())
+    parser.add_argument("--laps", type=int, default=1)
+    timing = parser.add_mutually_exclusive_group()
+    timing.add_argument("--speed", type=float)
+    timing.add_argument("--duration", type=float)
+    args = parser.parse_args()
+    if args.lap_label is None:
+        print("\n".join(circuit_ids()))
+    else:
+        if args.laps < 1:
+            parser.error("--laps は1以上を指定してください")
+        points = load_track("lap")[1] if args.lap_label == "monza" else load_lap(args.lap_label)[1]
+        try:
+            _, speed = route_timing(args.lap_label, "lap", points[-1][0], args.duration, args.speed)
+        except ValueError as exc:
+            parser.error(str(exc))
+        label = format(speed, ".4g") if args.speed is None else str(speed).removesuffix(".0")
+        print(f"{args.laps}{'lap' if args.laps == 1 else 'laps'}_{label.replace('e+', 'e')}mps")

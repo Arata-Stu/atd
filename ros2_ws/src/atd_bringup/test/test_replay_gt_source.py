@@ -41,7 +41,9 @@ class ReplayGTSourceTests(unittest.TestCase):
         return self.bag_with_run(circuit, f'gazebo-{circuit}-{self.run}', self.run)
 
     def test_sensor_settings_in_name_locate_the_matching_run(self):
-        for circuit, imu in [('monza', 'off'), ('spa', '400Hz-2')]:
+        for circuit, imu in [('monza', 'off'), ('spa', '400Hz-2'), ('monza', '400Hz_2laps_5mps'),
+                             ('monza', '400Hz_1lap_2.413mps-2'), ('spa', 'off_2laps_2.4e-05mps-3'),
+                             ('spa', 'off_1lap_1e12mps')]:
             name = f'gazebo-{circuit}-2026-11-21_21-51-25_1280x720-60Hz_imu-{imu}'
             bag, trace = self.bag_with_run(circuit, name, name)
             self.assertEqual(find_ground_truth(bag, self.results), trace)

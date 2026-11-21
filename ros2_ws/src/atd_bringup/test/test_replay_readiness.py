@@ -152,6 +152,19 @@ class GateTests(unittest.TestCase):
             wait_and_resume(self.node, self.player, ground_truth=True)
         self.resume.call_async.assert_not_called()
 
+    def test_headless_resumes_only_after_gt_clock_and_odometry_are_ready(self):
+        overlay = '/' + GROUND_TRUTH_NODE
+        del self.subs['/visual_slam/tracking/slam_path'], self.subs['/visual_slam/vis/landmarks_cloud']
+        self.pubs[SLAM_ODOMETRY] = [endpoint('/visual_slam', 'nav_msgs/msg/Odometry')]
+        self.subs[SLAM_ODOMETRY] = []
+        self.assertEqual(_missing_endpoints(self.node, self.player, None, ground_truth=True), [
+            f'/clock の {overlay} subscriber', f'{SLAM_ODOMETRY} の {overlay} subscriber',
+        ])
+        self.subs['/clock'].append(endpoint(overlay, 'rosgraph_msgs/msg/Clock'))
+        self.subs[SLAM_ODOMETRY].append(endpoint(overlay, 'nav_msgs/msg/Odometry'))
+        wait_and_resume(self.node, self.player, rviz_name=None, ground_truth=True)
+        self.resume.call_async.assert_called_once()
+
     def test_conflicting_clock_discovered_during_pause_query_never_resumes(self):
         def another_clock():
             self.pubs['/clock'].append(endpoint('/other/bag', 'rosgraph_msgs/msg/Clock'))

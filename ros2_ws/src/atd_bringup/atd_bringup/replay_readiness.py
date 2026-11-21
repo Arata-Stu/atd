@@ -106,17 +106,18 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=Fal
             readers = _endpoints(infos, kind, overlay)
             missing.extend(_connection_issues(topic, publishers, readers, player_name, overlay))
 
-    # RViz creates both display subscriptions while loading the preset, before the first TF.
-    for topic, kind in (('/visual_slam/tracking/slam_path', 'nav_msgs/msg/Path'),
-                        ('/visual_slam/vis/landmarks_cloud', 'sensor_msgs/msg/PointCloud2')):
-        if not _endpoints(node.get_subscriptions_info_by_topic(topic), kind, rviz_name):
-            missing.append(f'{topic} の {rviz_name} subscriber')
+    if rviz_name:
+        # RViz creates both display subscriptions while loading the preset, before the first TF.
+        for topic, kind in (('/visual_slam/tracking/slam_path', 'nav_msgs/msg/Path'),
+                            ('/visual_slam/vis/landmarks_cloud', 'sensor_msgs/msg/PointCloud2')):
+            if not _endpoints(node.get_subscriptions_info_by_topic(topic), kind, rviz_name):
+                missing.append(f'{topic} の {rviz_name} subscriber')
     if ground_truth:
-        for topic, kind, producer, consumer in (
-            (SLAM_ODOMETRY, 'nav_msgs/msg/Odometry', '/visual_slam', overlay),
-            (GROUND_TRUTH_PATH, 'nav_msgs/msg/Path', overlay, rviz_name),
-            (GROUND_TRUTH_ERROR, 'visualization_msgs/msg/Marker', overlay, rviz_name),
-        ):
+        links = [(SLAM_ODOMETRY, 'nav_msgs/msg/Odometry', '/visual_slam', overlay)]
+        if rviz_name:
+            links.extend([(GROUND_TRUTH_PATH, 'nav_msgs/msg/Path', overlay, rviz_name),
+                          (GROUND_TRUTH_ERROR, 'visualization_msgs/msg/Marker', overlay, rviz_name)])
+        for topic, kind, producer, consumer in links:
             publishers = _check_publishers(node, topic, kind, producer, missing)
             missing.extend(_connection_issues(
                 topic, publishers,
@@ -131,7 +132,8 @@ def wait_and_resume(node, player_name='/rosbag2_player', timeout_s=90.0, *,
     from rosbag2_interfaces.srv import IsPaused, Resume
 
     player_name = '/' + player_name.strip('/')
-    rviz_name = '/' + rviz_name.strip('/')
+    if rviz_name:
+        rviz_name = '/' + rviz_name.strip('/')
     start = monotonic()
     deadline = start + timeout_s
     notified = False

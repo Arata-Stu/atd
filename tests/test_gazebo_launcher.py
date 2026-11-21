@@ -41,7 +41,9 @@ class GazeboHostTests(unittest.TestCase):
                     self.assertEqual(args[args.index(flag) + 1], expected)
                 bag = Path(args[args.index("--bag-output") + 1])
                 self.assertEqual(bag.parent, Path("/data/record/rosbags"))
-                self.assertRegex(bag.name, rf"^gazebo-{circuit}-\d{{4}}-\d{{2}}-\d{{2}}_\d{{2}}-\d{{2}}-\d{{2}}_640x480-90Hz_imu-off$")
+                stamp = r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}"
+                expected_speed = r"2\.413" if circuit == "monza" else r"2\.917"
+                self.assertRegex(bag.name, rf"^gazebo-{circuit}-{stamp}_640x480-90Hz_imu-off_1lap_{expected_speed}mps$")
                 self.assertTrue(any(arg.endswith(f"/{bag.name},dst=/output") for arg in args))
                 self.assertNotIn("gazebo_mapping.launch.py", output)
                 self.assertEqual(list(root.iterdir()), [config])
@@ -56,6 +58,7 @@ class GazeboHostTests(unittest.TestCase):
             scripts = root / "scripts"
             (scripts / "lib").mkdir(parents=True)
             shutil.copy2(ROOT / "scripts/gazebo.sh", scripts / "gazebo.sh")
+            (root / "tools").symlink_to(ROOT / "tools", target_is_directory=True)
             (scripts / "lib/detect_host.sh").write_text("detect_atd_host() { echo pc; }\natd_in_container() { return 1; }\n")
             bin_dir = root / "bin"
             bin_dir.mkdir()
@@ -71,19 +74,11 @@ print(time.strftime(sys.argv[-1].removeprefix('+'), time.localtime(1795284245)))
                 "uname": '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; *) exit 1;; esac\n',
                 "flock": "#!/bin/sh\nexit 0\n",
                 "docker": """#!/bin/sh
-case "$1" in
-    image) test "$2" = inspect ;;
-    run)
-        while [ "$#" -gt 1 ]; do
-            if [ "$1" = --bag-output ]; then
-                mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
-                exit $?
-            fi
-            shift
-        done
-        exit 1 ;;
-    *) exit 1 ;;
-esac
+set -eu
+if [ "$1" = image ]; then test "$2" = inspect; exit; fi
+test "$1" = run
+while [ "$1" != --bag-output ]; do shift; done
+mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
 """,
             }
             for name, content in fixtures.items():
@@ -92,13 +87,15 @@ esac
                 shim.chmod(0o755)
             records = root / "record"
             results = root / "results"
-            env = {**os.environ, "TZ": "UTC", "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            env = {"HOME": str(root), "TZ": "UTC", "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
                    "DOCKER_HOST": "unix:///unused", "ATD_RECORD_DIR": str(records), "ATD_RESULT_DIR": str(results)}
             command = ["bash", str(scripts / "gazebo.sh"), "bag"]
             prefix = "gazebo-monza-2026-11-22_03-04-05"
-            for settings, profile in (([], "640x480-90Hz_imu-off"),
-                                      (["--resolution", "848x480", "--camera-hz", "60", "--imu", "200"], "848x480-60Hz_imu-200Hz"),
-                                      (["--resolution", "1280x720", "--camera-hz", "30", "--imu", "400"], "1280x720-30Hz_imu-400Hz")):
+            for settings, profile in (([], "640x480-90Hz_imu-off_1lap_2.413mps"),
+                                      (["--resolution", "848x480", "--camera-hz", "60", "--imu", "200",
+                                        "--speed", "5.0", "--laps", "2"], "848x480-60Hz_imu-200Hz_2laps_5mps"),
+                                      (["--resolution", "1280x720", "--camera-hz", "30", "--imu", "400",
+                                        "--duration", "120", "--laps", "3"], "1280x720-30Hz_imu-400Hz_3laps_4.827mps")):
                 with self.subTest(profile=profile):
                     output = subprocess.check_output([*command, *settings, "--dry-run"], env=env, text=True)
                     self.assertIn(f"--bag-output /data/record/rosbags/{prefix}_{profile} ", output)
@@ -107,7 +104,7 @@ esac
 
             bag_root = records / "rosbags"
             run_root = results / "runs/gazebo_monza"
-            base = f"{prefix}_640x480-90Hz_imu-off"
+            base = f"{prefix}_640x480-90Hz_imu-off_1lap_2.413mps"
             # A previously transferred bag may exist without its original run log.
             (bag_root / base).mkdir(parents=True)
             for suffix in ("-2", "-3"):

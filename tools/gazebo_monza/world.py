@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 
 from geography import ascari_entry_kerb, cross_sections, kerb_intervals, load_track, reference_metadata
 import circuits
+from circuits import default_travel_seconds
 import monza_ascari
 import monza_lesmo
 import monza_start_grid
@@ -32,13 +33,6 @@ CAMERA_FAR_M = 45
 MONZA_LAP_FAR_M = 100
 # The two Lesmo traps and three Ascari traps in the Monza lap OSM snapshot.
 LESMO_ASCARI_GRAVEL = {231025694, 231025696, 231026023, 231026026, 231026028}
-
-
-def default_travel_seconds(route, circuit="monza"):
-    if circuit == "monza":
-        return {"chicane": 10.0, "lap": 240.0}[route]
-    # Match Monza's approximate 2.4 m/s RC speed across different lap lengths.
-    return round(circuits.track_data(circuit)["official_length_m"] / 24.0)
 
 
 def field(parent, name, value):
@@ -345,17 +339,8 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
         raise ValueError("multiple laps require a finite full-circuit run")
     if wait_for_capture and (route != "lap" or repeat):
         raise ValueError("wait_for_capture requires a finite full-circuit run")
-    if speed_mps is not None:
-        if travel_seconds is not None:
-            raise ValueError("choose speed_mps or travel_seconds")
-        if not isfinite(speed_mps) or speed_mps <= 0:
-            raise ValueError("speed_mps must be positive and finite")
-    elif travel_seconds is None:
-        travel_seconds = default_travel_seconds(route, circuit)
     if not .02 <= height <= 1.0 or not -45 <= pitch_deg <= 45:
         raise ValueError("camera height must be 0.02–1.0 m and pitch −45…+45 degrees")
-    if travel_seconds is not None and (not isfinite(travel_seconds) or travel_seconds <= 0):
-        raise ValueError("travel_seconds must be positive and finite")
     output = Path(output).resolve()
     lap = route == "lap"
     far = MONZA_LAP_FAR_M if lap and circuit == "monza" else CAMERA_FAR_M
@@ -399,15 +384,12 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
         data = scenery.Features([circuits.ROOT / circuit / "scenery.geojson"], project)
         geography = circuits.metadata(circuit)
     length = points[-1][0]
-    if speed_mps is None:
-        speed_mps = length / travel_seconds
-    else:
-        travel_seconds = length / speed_mps
+    travel_seconds, speed_mps = circuits.route_timing(circuit, route, length, travel_seconds, speed_mps)
     try:
         total_seconds = travel_seconds * laps
     except OverflowError as exc:
         raise ValueError("requested run duration is too large") from exc
-    if not isfinite(total_seconds) or not isfinite(speed_mps):
+    if not isfinite(total_seconds):
         raise ValueError("requested speed and run duration must be finite")
     focal = width / (2 * tan(HFOV/2))
     scene = {

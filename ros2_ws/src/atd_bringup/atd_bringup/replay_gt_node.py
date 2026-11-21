@@ -95,7 +95,7 @@ class GroundTruthPath:
 
 
 @contextmanager
-def ground_truth_viewer(trace, result=None):
+def ground_truth_viewer(trace, result=None, *, visualize=True):
     import rclpy
     from geometry_msgs.msg import Point, PoseStamped
     from nav_msgs.msg import Odometry, Path
@@ -123,10 +123,11 @@ def ground_truth_viewer(trace, result=None):
     executor = SingleThreadedExecutor()
     node = rclpy.create_node(GROUND_TRUTH_NODE)
     try:
-        output_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                                reliability=ReliabilityPolicy.RELIABLE)
-        publisher = node.create_publisher(Path, GROUND_TRUTH_PATH, output_qos)
-        errors = node.create_publisher(Marker, GROUND_TRUTH_ERROR, output_qos)
+        if visualize:
+            output_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                                    reliability=ReliabilityPolicy.RELIABLE)
+            publisher = node.create_publisher(Path, GROUND_TRUTH_PATH, output_qos)
+            errors = node.create_publisher(Marker, GROUND_TRUTH_ERROR, output_qos)
 
         def publish(stamp, poses):
             msg = Path()
@@ -162,20 +163,22 @@ def ground_truth_viewer(trace, result=None):
             stamp = stamp_ns(msg.clock)
             if path.set_clock(stamp):
                 warned = False
-                publish(stamp, [])
-                publish_error(stamp)
+                if visualize:
+                    publish(stamp, [])
+                    publish_error(stamp)
             if not warned and path.anchor_ns is None and stamp >= trace.stamps[-1]:
                 node.get_logger().warning('Gazebo 軌跡の末尾に到達しましたが、走行区間内の '
                                           'cuVSLAM の map → base_link 姿勢がまだ届いていません')
                 warned = True
 
         def on_timer():
-            update = path.update()
-            if update is not None:
-                publish(*update)
-            error = path.take_error()
-            if error is not None:
-                publish_error(*error)
+            if visualize:
+                update = path.update()
+                if update is not None:
+                    publish(*update)
+                error = path.take_error()
+                if error is not None:
+                    publish_error(*error)
             if result is not None:
                 result.checkpoint()
 

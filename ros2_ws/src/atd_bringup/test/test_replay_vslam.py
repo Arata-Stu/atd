@@ -31,9 +31,10 @@ class ReplaySessionTests(unittest.TestCase):
         replay.run_session(Mock(), 'two words/run', 0.5, self.config, 'qos.yaml', ground_truth, result, **options)
 
     def test_eof_keeps_viewer_open_until_closed(self):
-        def resume(node, *, player_name, check_running, ground_truth, vio):
+        def resume(node, *, player_name, check_running, ground_truth, vio, rviz_name):
             self.assertFalse(vio)
             self.assertFalse(ground_truth)
+            self.assertEqual(rviz_name, '/rviz2')
             check_running()
             cmd = self.spawn.call_args.args[0]
             self.assertEqual(cmd[cmd.index('--remap') + 1], '__node:=' + player_name.lstrip('/'))
@@ -77,10 +78,10 @@ class ReplaySessionTests(unittest.TestCase):
         trace, result, spin = Mock(), Mock(), Mock()
         overlay = self.stack.enter_context(patch.object(replay, 'ground_truth_viewer', return_value=nullcontext(spin)))
 
-        def resume(node, *, player_name, check_running, ground_truth, vio):
+        def resume(node, *, player_name, check_running, ground_truth, vio, rviz_name):
             check_running()
             self.assertTrue(ground_truth)
-            overlay.assert_called_once_with(trace, result)
+            overlay.assert_called_once_with(trace, result, visualize=True)
             self.player.returncode = 0
 
         def close(**_):
@@ -96,6 +97,44 @@ class ReplaySessionTests(unittest.TestCase):
         self.assertEqual(spin.call_count, 2)
         self.assertEqual([c.args[0] for c in self.stop.call_args_list],
                          [self.player, self.rviz, self.launch])
+
+    def test_headless_reaches_eof_and_collects_delayed_odometry_without_rviz(self):
+        self.config = None
+        self.spawn.side_effect = [self.launch, self.player]
+        self.ready.side_effect = lambda *args, **kwargs: setattr(self.player, 'returncode', 0)
+        clock = [0.]
+        trace, result = Mock(), Mock(last_stamp=None)
+
+        def spin(timeout_sec):
+            result.mark_eof.assert_not_called()
+            clock[0] += timeout_sec
+            if clock[0] >= 3.:
+                result.last_stamp = 200
+            elif clock[0] >= 1.5:
+                result.last_stamp = 100
+
+        with patch.object(replay.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(
+                replay, 'ground_truth_viewer', return_value=nullcontext(spin)) as overlay:
+            self.session(trace, result)
+        self.assertEqual(result.last_stamp, 200)
+        self.assertTrue(self.ready.call_args.kwargs['ground_truth'])
+        self.assertIsNone(self.ready.call_args.kwargs['rviz_name'])
+        overlay.assert_called_once_with(trace, result, visualize=False)
+        self.assertEqual([call.args[0][0] for call in self.spawn.call_args_list], ['ros2', 'ros2'])
+        self.assertEqual([call.args[0] for call in self.stop.call_args_list], [self.player, self.launch])
+        result.mark_eof.assert_called_once_with()
+
+    def test_headless_empty_comparison_is_a_failure(self):
+        self.config = None
+        self.spawn.side_effect = [self.launch, self.player]
+        self.player.returncode = 0
+        result = Mock(last_stamp=None)
+        with patch.object(replay.time, 'monotonic', side_effect=[0., 0., 2.]), patch.object(
+                replay, 'ground_truth_viewer', return_value=nullcontext(Mock())):
+            with self.assertRaisesRegex(RuntimeError, '0 件'):
+                self.session(Mock(), result)
+        result.mark_eof.assert_not_called()
+        self.assertEqual(self.stop.call_count, 2)
 
     def test_bag_without_ground_truth_only_subscribes_to_its_estimate_and_sensors(self):
         with TemporaryDirectory() as directory:
@@ -118,9 +157,9 @@ class ReplaySessionTests(unittest.TestCase):
         with patch.object(replay, 'select_bag', return_value='bag') as select, patch.object(replay, 'run') as run:
             for options, limit in (([], 0), (['--slam-max-map-size', '300'], 300)):
                 self.assertEqual(replay.main(['bag', *options]), 0)
-                run.assert_called_with('bag', .5, slam_max_map_size=limit, tracking='vo')
-            self.assertEqual(replay.main(['bag', '--tracking', 'vio']), 0)
-            run.assert_called_with('bag', .5, slam_max_map_size=0, tracking='vio')
+                run.assert_called_with('bag', .5, slam_max_map_size=limit, tracking='vo', headless=False)
+            self.assertEqual(replay.main(['bag', '--tracking', 'vio', '--headless']), 0)
+            run.assert_called_with('bag', .5, slam_max_map_size=0, tracking='vio', headless=True)
             select.reset_mock()
             for invalid in ('-1', '2147483648', '3.5'):
                 with self.subTest(invalid=invalid), self.assertRaises(SystemExit), redirect_stderr(StringIO()):

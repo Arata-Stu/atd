@@ -13,7 +13,8 @@ LEGACY_NAME = re.compile(
     r'gazebo-(?P<circuit>[a-z0-9_]+)-(?P<run>[0-9]{8}T[0-9]{6}Z-bag-(?:shm|udp)-[A-Za-z0-9]{6})')
 BAG_NAME = re.compile(
     r'gazebo-(?P<circuit>[a-z0-9_]+)-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_'
-    r'\d+x\d+-\d+Hz_imu-(?:off|\d+Hz)(?:-\d+)?')
+    r'\d+x\d+-\d+Hz_imu-(?:off|\d+Hz)'
+    r'(?:_(?P<laps>[1-9]\d*)laps?_\d+(?:\.\d+)?(?:e-?\d+)?mps)?(?:-\d+)?')
 
 
 def _sha256(path):
@@ -52,6 +53,15 @@ def _check_mcap_sizes(bag, expected):
         raise ValueError(f'記録時と MCAP のファイル名またはサイズが異なります: {bag}')
 
 
+def matching_manifest(bag):
+    """同梱した小さな管理情報を bag と照合する。画像・走行軌跡は読み込まない。"""
+    manifest = _read_object(bag / SIDECAR / 'manifest.json')
+    if manifest.get('version') != 1 or manifest.get('metadata_sha256') != _sha256(bag / 'metadata.yaml'):
+        raise ValueError(f'bag と同梱した Gazebo 記録情報の照合に失敗しました: {bag}')
+    _check_mcap_sizes(bag, manifest.get('file_bytes'))
+    return manifest
+
+
 def matching_run(bag, results_root):
     match = BAG_NAME.fullmatch(bag.name) or LEGACY_NAME.fullmatch(bag.name)
     if not match:
@@ -77,13 +87,10 @@ def find_ground_truth(bag: Path, results_root: Path = Path('/data/results')) -> 
     try:
         sidecar = bag / SIDECAR
         if sidecar.exists():
-            manifest = _read_object(sidecar / 'manifest.json')
+            manifest = matching_manifest(bag)
             trace = sidecar / TRACE
-            if (manifest.get('version') != 1
-                    or manifest.get('metadata_sha256') != _sha256(bag / 'metadata.yaml')
-                    or manifest.get('trace_sha256') != _sha256(trace)):
-                raise ValueError(f'bag または同梱した Gazebo 軌跡の照合に失敗しました: {sidecar}')
-            _check_mcap_sizes(bag, manifest.get('file_bytes'))
+            if manifest.get('trace_sha256') != _sha256(trace):
+                raise ValueError(f'同梱した Gazebo 軌跡の照合に失敗しました: {trace}')
             return trace
 
         match = matching_run(bag, results_root)

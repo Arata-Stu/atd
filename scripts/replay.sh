@@ -14,7 +14,7 @@ while (($#)); do
     case "$1" in
         --help|-h)
             cat <<'EOF'
-使い方: atd replay [BAG] [--tracking vo|vio] [--rate RATE] [--slam-max-map-size N] [--dry-run]
+使い方: atd replay [BAG] [--tracking vo|vio] [--headless] [--rate RATE] [--slam-max-map-size N] [--dry-run]
 
 Linux Notebook の Isaac ROS コンテナで cuVSLAM と RViz を起動し、rosbag を再生します。
 対話端末で引数なしの atd replay を実行すると、VO（左右画像）・VIO（左右画像＋統合 IMU）を選んでから bag を選びます。
@@ -23,6 +23,7 @@ Gazebo の正解軌跡がある記録では、青の正解と橙の cuVSLAM 推�
 画像時刻ごとの誤差は /data/results/runs/replay/ に保存し、Notebook UI の「VSLAM 軌跡誤差」で確認できます。
 --rate 0.5 は半速再生、--dry-run は起動コマンドの表示です。
 --tracking vio は左右画像と /camera/camera/imu を使用します。既定の vo はステレオ画像で追跡します。
+--headless は RViz を開かずに Gazebo の正解軌跡との誤差を保存し、再生の末尾で終了します。
 --slam-max-map-size は SLAM 地図の姿勢数上限です。既定の 0 は無制限で、300 を指定すると従来の条件で比較できます。
 再生専用の ROS_DOMAIN_ID は 75 です。ATD_REPLAY_ROS_DOMAIN_ID で変更できます。
 ホストから使う場合は、先に atd dev で開発コンテナを起動してください。

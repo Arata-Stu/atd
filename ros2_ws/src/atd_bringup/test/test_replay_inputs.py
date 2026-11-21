@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from atd_bringup.replay_gt_source import store_ground_truth
 from atd_bringup.replay_inputs import IMU_TOPIC, ImuProfile, select_bag, validate_bag
 
 
@@ -87,6 +88,38 @@ class ReplaySelectionTests(unittest.TestCase):
                 with patch.object(sys.stdin, 'isatty', return_value=True), \
                         patch('shutil.which', return_value='fzf'), patch('subprocess.run', side_effect=choose):
                     self.assertEqual(select_bag(None, self.root, results_root=results), folder)
+
+    def test_sensor_only_bag_menu_uses_matching_run_or_portable_course(self):
+        name = 'gazebo-monza-2026-11-21_22-24-38_640x480-30Hz_imu-400Hz'
+        bag = self.root / name
+        bag.mkdir()
+        (bag / 'metadata.yaml').write_text('metadata')
+        (bag / 'image.mcap').write_bytes(b'data')
+        results = self.root / 'results'
+        directory = results / 'runs/gazebo_monza' / name
+        directory.mkdir(parents=True)
+        report = dict(mode='bag', status='complete', circuit='monza', scene='scene/scene.json',
+                      bag_path=f'/data/record/rosbags/{name}', bag_audit={'file_bytes': {'image.mcap': 4}},
+                      laps_requested=3, speed_mps=2.413)
+        log = directory / 'run.json'
+        log.write_text(json.dumps(report))
+
+        def check(label):
+            with patch.object(sys.stdin, 'isatty', return_value=True), patch('shutil.which', return_value=None), \
+                    patch('builtins.input', return_value='3'), redirect_stdout(StringIO()) as menu:
+                self.assertEqual(select_bag(None, self.root, results_root=results), bag)
+                self.assertIn(f'{name}  {label}', menu.getvalue())
+
+        check('3周  2.413 m/s')
+        log.unlink()
+        check('周回数不明  速度不明')
+        trace = self.root / 'trace.jsonl'
+        trace.write_text('{}\n')
+        store_ground_truth(bag, trace, {'image.mcap': 4}, course=dict(
+            circuit='monza', laps=2, lap_length_m=579.2, lap_duration_s=115.84, start_ns=1))
+        check('2周  5 m/s')
+        (bag / 'metadata.yaml').write_text('別の記録')
+        check('周回数不明  速度不明')
 
 
 class ReplayInputValidationTests(unittest.TestCase):

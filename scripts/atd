@@ -80,7 +80,8 @@ usage() {
     atd bluetooth status
     atd hotspot on --band 5
     atd web prepare
-    atd gazebo bag --circuit monza
+    atd gazebo
+    atd gazebo bag --course monza --speed 1.5 --laps 2
     atd gazebo video --route lap
     atd gazebo video --circuit spa
     atd gazebo serve
@@ -129,6 +130,46 @@ choose() {
     done
 }
 
+gazebo_from_menu() {
+    local title="$1" action catalog circuit route speed laps
+    shift
+    action="$(choose "$title" bag 'ステレオ rosbag を記録' map '走行中に cuVSLAM 地図を作成' \
+        video '左右の車載動画を保存' serve 'ステレオ画像と /clock を配信' \
+        run '動画を保存し、別の試行で受信速度を測定' benchmark '90 Hz 配信を測定' \
+        diagnose 'Gazebo と ROS の画像受信を比較' prepare '専用イメージを準備・容量を測定' \
+        back '前のメニューへ')" || return 0
+    case "$action" in
+        back) return 0 ;;
+        prepare) "$@" prepare; return ;;
+    esac
+    catalog="$("$@" list)" || return
+    local -a options=(monza 'Monza')
+    while IFS= read -r circuit; do
+        if [[ -n "$circuit" && "$circuit" != monza ]]; then options+=("$circuit" 'GP コース'); fi
+    done <<< "$catalog"
+    circuit="$(choose "$title / コース" "${options[@]}" back '前のメニューへ')" || return 0
+    [[ "$circuit" != back ]] || return 0
+    route=lap
+    if [[ "$circuit" = monza && "$action" != bag && "$action" != map ]]; then
+        route="$(choose "$title / 走行区間" lap 'GP コース全周' chicane '第1シケインのみ' back '前のメニューへ')" || return 0
+        [[ "$route" != back ]] || return 0
+    fi
+    local -a args=("$action" --route "$route" --circuit "$circuit")
+    printf '走行速度 [RC m/s]（Enter でコース既定、q で戻る）> ' >&2
+    IFS= read -r speed || return 0
+    [[ "$speed" != q ]] || return 0
+    if [[ -n "$speed" ]]; then args+=(--speed "$speed"); fi
+    if [[ "$route" = lap && "$action" != benchmark && "$action" != diagnose ]]; then
+        local default_laps='1周'
+        if [[ "$action" = serve ]]; then default_laps='連続配信'; fi
+        printf '周回数（Enter で%s、q で戻る）> ' "$default_laps" >&2
+        IFS= read -r laps || return 0
+        [[ "$laps" != q ]] || return 0
+        if [[ -n "$laps" ]]; then args+=(--laps "$laps"); fi
+    fi
+    "$@" "${args[@]}"
+}
+
 run_from_menu() {
     local key="$1" title="$device $location / $1" action manifest package
     shift
@@ -149,11 +190,7 @@ run_from_menu() {
                      5 '5 GHz で起動・切替' off 'アクセスポイントを停止') ;;
         web)
             options=(serve 'Web UI を起動' prepare '初回・更新時のオンライン準備' check '準備状態を確認') ;;
-        gazebo)
-            options=(bag 'コースを選び、1周を rosbag に記録（後で地図を作成）' map 'コースを選び、走行中に cuVSLAM 地図を作成' video-lap 'コースを選び、1周の左右動画を保存' serve-lap 'コースを選び、周回してステレオ画像と /clock を連続配信'
-                     serve 'Monza 第1シケインのステレオ画像と /clock を連続配信' run 'Monza 第1シケインの動画を保存して受信速度を測定' video 'Monza 第1シケインの左右動画を保存'
-                     benchmark '90 Hz 配信を測定' diagnose 'Gazebo と ROS の画像受信を比較'
-                     prepare '専用イメージを準備・容量を測定') ;;
+        gazebo) gazebo_from_menu "$title" "$@"; return ;;
         display)
             options=(status '現在の設定を表示' cui '次回起動を CUI に設定' gui '次回起動を GUI に設定') ;;
         performance)
@@ -167,14 +204,6 @@ run_from_menu() {
     case "$key/$action" in
         build/all|performance/apply|cache/prune) "$@" ;;
         build/*) "$@" --packages-up-to "$action" ;;
-        gazebo/bag|gazebo/map|gazebo/video-lap|gazebo/serve-lap)
-            local catalog circuit
-            catalog="$("$@" list)" || return
-            options=()
-            while IFS= read -r circuit; do options+=("$circuit" 'GP 1周'); done <<< "$catalog"
-            circuit="$(choose "$title / コース" "${options[@]}" back '前のメニューへ')" || return 0
-            [[ "$circuit" != back ]] || return 0
-            "$@" "${action%-lap}" --route lap --circuit "$circuit" ;;
         hotspot/2.4|hotspot/5) "$@" on --band "$action" ;;
         performance/check) "$@" --check ;;
         cache/inspect) "$@" --dry-run ;;
@@ -190,6 +219,10 @@ if (($#)); then
             exit 0 ;;
     esac
     if resolve_command "$1"; then
+        if [[ "$1" = gazebo && $# = 1 && -t 0 && -t 1 ]]; then
+            gazebo_from_menu "$device $location / gazebo" "${runner[@]}"
+            exit
+        fi
         shift
         exec "${runner[@]}" "$@"
     fi

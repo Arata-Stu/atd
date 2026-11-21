@@ -5,6 +5,7 @@ Heights tagged by OSM are preserved. Other height, span and section details are
 indicative. All faces with a common material share one visual per lap.
 """
 
+from bisect import bisect_right
 from collections import defaultdict
 from math import ceil, cos, dist, pi, sin
 from pathlib import Path
@@ -16,7 +17,10 @@ REFERENCE = Path(__file__).resolve().parent / 'reference' / 'monza_trackside.geo
 # Laterale, Centrale and Piscina stands. The catch fence behind the Armco is
 # apparent in the track-level reference; its offset and section are estimates.
 SPECTATOR_RAILS = {243090144, 243090146, 243090151, 1569594729, 243090145}
+# Two more mapped Armco runs continue south past the podium to pit entry.
+HOME_RAILS = SPECTATOR_RAILS | {243090139, 243090143}
 COLORS = {
+    'lap_steel': (.51, .55, .56), 'refuge_orange': (.94, .29, .045),
     'guardrail': (.58, .62, .63), 'posts': (.27, .29, .29),
     'jointed_concrete': (.57, .57, .54), 'weathered_concrete': (.45, .46, .44),
     'pit_wall_green': (.10, .27, .18),
@@ -84,6 +88,64 @@ def _grandstand_fence(batches, rail, *, setback=.13):
                 (-.007, .32), (.007, .32), (-.048, .38), (-.062, .38)]))
             next_post += .42
         next_post -= length
+
+
+def _rail_splices(batches, points, side, *, height=.11, bolts=True, exit_band=0.):
+    """Galvanized overlap and visible fasteners on both levels of a track-facing rail."""
+    stations = [0.]
+    for a, b in zip(points, points[1:]):
+        stations.append(stations[-1] + dist(a, b))
+    # Marcegaglia's two-wave product is 4316 mm for a 4000 mm installed pitch.
+    # The lap is drawn at 1:10, following the folded section of the existing
+    # model. The surveyed rail product and fastener pattern at Monza are unknown.
+    toward_track = -1 if side == 'left' else 1
+
+    def vertex(station, depth, z):
+        index = min(bisect_right(stations, station) - 1, len(points) - 2)
+        a, b = points[index:index + 2]
+        span = stations[index + 1] - stations[index]
+        dx, dy = (b[0] - a[0]) / span, (b[1] - a[1]) / span
+        along = station - stations[index]
+        return (a[0] + dx * along - toward_track * dy * depth,
+                a[1] + dy * along + toward_track * dx * depth, z)
+
+    def facing(face):
+        return face if side == 'left' else face[::-1]
+
+    thickness = .0003
+    def plate(start, end, batch, draw_bolts):
+        for mid in (height * .43, height * .82):
+            # Match the two folded blades of the underlying barrier.
+            half_height = height * .16
+            ridge = half_height - .006
+            profile = [(mid - half_height, .008), (mid - ridge, .012), (mid, .006),
+                       (mid + ridge, .012), (mid + half_height, .008)]
+            for (z0, d0), (z1, d1) in zip(profile, profile[1:]):
+                face = [
+                    vertex(start, d0 + thickness, z0), vertex(end, d0 + thickness, z0),
+                    vertex(end, d1 + thickness, z1), vertex(start, d1 + thickness, z1),
+                ]
+                batches[batch].append(facing(face))
+            if not draw_bolts:
+                continue
+            # Small stamped heads (roughly 30 mm across at full scale). Put each
+            # low-poly head against a single slope so it never sinks into a crest.
+            for station in (start + .007, end - .007):
+                for fold in (-1, 1):
+                    radius = .0015
+                    z = mid + fold * ridge * .65
+                    head = []
+                    for along, rise in ((-radius, 0), (0, -radius), (radius, 0), (0, radius)):
+                        depth = .006 + .006 * abs(z + rise - mid) / ridge
+                        head.append(vertex(station + along, depth + thickness + .00045, z + rise))
+                    batches['bolt_heads'].append(facing(head))
+
+    limit = stations[-1] - exit_band
+    for n in range(1, int(limit / .4) + 1):
+        end = n * .4
+        plate(end - .0316, end, 'lap_steel', bolts)
+    if exit_band:
+        plate(limit, stations[-1], 'refuge_orange', False)
 
 
 def _barrier(batches, kind, points, props):
@@ -226,16 +288,40 @@ def geometry(source, data, *, lap=True):
     """Yield named colored meshes. Short-section runs retain their small scenery set."""
     if not lap:
         return
+    from monza_start_grid import PitStraight
+    import monza_pit_wall
+
     features = Features([REFERENCE], data.project)
     batches = defaultdict(list)
+    straight = PitStraight(source)
+    pit_sections = []
     for kind in ('guard_rail', 'wall', 'fence'):
         for props, points in features.lines(kind):
+            if kind == 'wall' and props.get('osm_way') == monza_pit_wall.WALL_WAY:
+                height = .1 * float(props['tags']['height'])
+                for gate, a, b in monza_pit_wall.sections(straight, points):
+                    pit_sections.append((gate, a, b, height))
+                    if not gate:
+                        _barrier(batches, kind, [a, b], props)
+                continue
             _barrier(batches, kind, points, props)
-            if kind == 'guard_rail' and props.get('osm_way') in SPECTATOR_RAILS:
-                _grandstand_fence(batches, points)
+            if kind == 'guard_rail':
+                way, sector = props.get('osm_way'), props.get('sector_rc_m')
+                if way in HOME_RAILS or sector in ([0, 58], [27, 59]):
+                    # The mapped left rails run north. The estimated right lines
+                    # follow the opposite boundary direction; present their folded
+                    # driving face to the track and leave the pit exit open.
+                    side = props.get('side', 'left')
+                    forward = points if side == 'left' else points[::-1]
+                    height = .1 * float(props.get('tags', {}).get('height', 1.1))
+                    _rail_splices(batches, forward, side, height=height, bolts=False,
+                                  exit_band=props.get('vehicle_exit_band_rc_m', 0.))
+                if way in SPECTATOR_RAILS:
+                    _grandstand_fence(batches, points)
     sand = [rings for _, rings in data.polygons('sand')]
     for props, points in features.lines('overpass'):
         _bridge(batches, points, props, source, sand)
     yield 'monza_radio_masts', (.59, .61, .62), _radio_masts(features)
+    yield from monza_pit_wall.fittings(straight, pit_sections)
     for name, faces in batches.items():
         yield 'monza_' + name, COLORS[name], faces

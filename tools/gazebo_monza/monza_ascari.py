@@ -1,11 +1,10 @@
 """Ascari and Alboreto approaches, modelled at 1:10 from OSM and FIA references."""
 
-from bisect import bisect_right
 from collections import defaultdict
 from math import cos, dist, sin
 
 from monza_marshal import PANEL_FACE_COLOR, PANEL_FRAME_COLOR, panel
-from monza_trackside import COLORS, REFERENCE as BARRIERS, _beam, _grandstand_fence, _post
+from monza_trackside import COLORS, REFERENCE as BARRIERS, _beam, _grandstand_fence, _post, _rail_splices
 from scenery import Features, MONZA_ASCARI as REFERENCE
 
 MATERIALS = {
@@ -13,58 +12,8 @@ MATERIALS = {
     'metal': PANEL_FRAME_COLOR, 'panel_face': PANEL_FACE_COLOR,
     'pale': (.82, .83, .81), 'black': (.035, .04, .048), 'blue': (.055, .14, .34),
     'marshal_base': (.58, .56, .53), 'marshal_orange': (.81, .26, .055),
-    'lap_steel': (.51, .55, .56), 'bolt_heads': (.35, .38, .39),
+    'lap_steel': COLORS['lap_steel'], 'bolt_heads': (.35, .38, .39),
 }
-
-
-def _rail_splices(batches, points, side):
-    """Galvanized overlap and visible fasteners on both levels of a track-facing rail."""
-    stations = [0.]
-    for a, b in zip(points, points[1:]):
-        stations.append(stations[-1] + dist(a, b))
-    # Marcegaglia's two-wave product is 4316 mm for a 4000 mm installed pitch.
-    # The lap is drawn at 1:10, following the folded section of the existing
-    # model. The surveyed rail product and fastener pattern at Monza are unknown.
-    toward_track = -1 if side == 'left' else 1
-
-    def vertex(station, depth, z):
-        index = min(bisect_right(stations, station) - 1, len(points) - 2)
-        a, b = points[index:index + 2]
-        span = stations[index + 1] - stations[index]
-        dx, dy = (b[0] - a[0]) / span, (b[1] - a[1]) / span
-        along = station - stations[index]
-        return (a[0] + dx * along - toward_track * dy * depth,
-                a[1] + dy * along + toward_track * dx * depth, z)
-
-    def facing(face):
-        return face if side == 'left' else face[::-1]
-
-    thickness = .0003
-    for n in range(1, int(stations[-1] / .4) + 1):
-        end = n * .4
-        start = end - .0316
-        for mid in (.11 * .43, .11 * .82):
-            # The slopes exactly match _barrier's two folded blades of height 1.1 m.
-            ridge = .0176 - .006
-            profile = [(mid - .0176, .008), (mid - ridge, .012), (mid, .006),
-                       (mid + ridge, .012), (mid + .0176, .008)]
-            for (z0, d0), (z1, d1) in zip(profile, profile[1:]):
-                face = [
-                    vertex(start, d0 + thickness, z0), vertex(end, d0 + thickness, z0),
-                    vertex(end, d1 + thickness, z1), vertex(start, d1 + thickness, z1),
-                ]
-                batches['lap_steel'].append(facing(face))
-            # Small stamped heads (roughly 30 mm across at full scale). Put each
-            # low-poly head against a single slope so it never sinks into a crest.
-            for station in (start + .007, end - .007):
-                for fold in (-1, 1):
-                    radius = .0015
-                    z = mid + fold * ridge * .65
-                    head = []
-                    for along, rise in ((-radius, 0), (0, -radius), (radius, 0), (0, radius)):
-                        depth = .006 + .006 * abs(z + rise - mid) / ridge
-                        head.append(vertex(station + along, depth + thickness + .00045, z + rise))
-                    batches['bolt_heads'].append(facing(head))
 
 
 def _stairs(batch, bottom, top, steps):

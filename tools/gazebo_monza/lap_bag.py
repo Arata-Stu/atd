@@ -1,4 +1,4 @@
-"""Record and publish a single closed Gazebo lap for offline stereo mapping."""
+"""Record Gazebo laps and publish the audited bag for offline stereo mapping."""
 from functools import partial
 from importlib import import_module
 import os
@@ -118,8 +118,10 @@ def close_recorder(proc):
 def audit_and_publish(pending, final, timing, report):
     from bag_audit import audit_bag
 
-    print("1周分のステレオ入力と固定TFを保存済み MCAP で検査しています。", flush=True)
-    audit = audit_bag(pending, timing["start_sim_ns"], timing["finish_sim_ns"])
+    laps = report["laps_requested"]
+    print(f"{laps}周分のステレオ入力と固定TFを保存済み MCAP で検査しています。", flush=True)
+    audit = audit_bag(pending, timing["start_sim_ns"], timing["finish_sim_ns"],
+                      laps=laps, lap_duration_s=report["lap_duration_s"])
     report["bag_audit"] = audit
     check_destination(final)
     pending.rename(final)
@@ -129,7 +131,7 @@ def audit_and_publish(pending, final, timing, report):
         pending.parent.rmdir()
     except OSError as exc:
         print(f"bag は保存済みです。作業ディレクトリが残っています: {exc}", file=sys.stderr)
-    print(f"1周のステレオ {audit['complete_stereo_samples']} 組、最大間隔 "
+    print(f"{laps}周のステレオ {audit['complete_stereo_samples']} 組、最大間隔 "
           f"{audit['largest_gap_sim_s'] * 1000:.1f} ms、MCAP {sum(audit['file_bytes'].values()) / 1e9:.2f} GB",
           flush=True)
     if audit["coverage"] == "gaps_detected":

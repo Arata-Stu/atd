@@ -1,4 +1,4 @@
-"""カメラ台の1周に合わせて、Notebook でシミュレーションの cuVSLAM 地図を保存する。"""
+"""カメラ台の指定周回に合わせて、Notebook でシミュレーションの cuVSLAM 地図を保存する。"""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, Shutdown
 from launch.substitutions import LaunchConfiguration
@@ -15,5 +15,5 @@ def generate_launch_description():
         Node(package='atd_bringup', executable='gazebo_lap_map', output='screen',
              arguments=['--run-dir', LaunchConfiguration('run_dir'), '--map-dir', LaunchConfiguration('map_dir')],
              parameters=[{'use_sim_time': True}],
-             on_exit=[Shutdown(reason='Gazebo 1周の地図作成を終了しました')]),
+             on_exit=[Shutdown(reason='Gazebo の周回地図作成を終了しました')]),
     ])

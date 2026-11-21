@@ -196,6 +196,7 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
                 for a, b, c, d in zip(left, right, right[1:] + right[:1], left[1:] + left[:1])]
     surface(link, output, "floor", road, (1, 1, 1), asphalt_span, texture_name=asphalt_texture)
     paint = []
+    pit_straight = monza_start_grid.PitStraight(source) if circuit == "monza" and lap else None
     kerbs = [[], []]
     recessed_faces = []
     for side, spans in kerb_intervals.items():
@@ -218,8 +219,11 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
                 y = (a[1] + offset*ny)*(1-t) + (b[1] + offset*my)*t
                 return x, y, z
 
-            paint.append([border(distance, -.022, .0007), border(end, -.022, .0007),
-                          border(end, -.002, .0007), border(distance, -.002, .0007)])
+            paint_spans = pit_straight.right_paint_spans(a, b) if pit_straight and side == "right" else [(0., 1.)]
+            for f0, f1 in paint_spans:
+                lo, hi = distance + f0*length, distance + f1*length
+                paint.append([border(lo, -.022, .0007), border(hi, -.022, .0007),
+                              border(hi, -.002, .0007), border(lo, -.002, .0007)])
             if recessed_span:
                 start = max(distance, recessed_span[0])
                 stop = min(end, recessed_span[1])
@@ -266,7 +270,7 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
         for name, color, faces in chain(monza_trackside.geometry(source, data),
                                         monza_lesmo.details(source, data),
                                         monza_ascari.details(source, data)):
-            if name in ("monza_catch_mesh", "ascari_catch_mesh"):
+            if name in ("monza_catch_mesh", "ascari_catch_mesh", "pit_wall_board_mesh"):
                 surface(trackside, output, name, faces, color, .10, face_up=False,
                         cutout=True, texture_name="monza_catch_mesh.png")
             elif name in ("monza_weathered_concrete", "monza_jointed_concrete", "monza_historic_wall"):
@@ -318,18 +322,28 @@ def cameras(link, height, pitch, circuit, far):
 
 
 def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
-          circuit="monza", route=None, wait_for_capture=False):
+          circuit="monza", route=None, wait_for_capture=False, speed_mps=None, laps=1):
+    if type(laps) is not int or laps < 1:
+        raise ValueError("laps must be a positive integer")
+    if route is None and laps > 1:
+        route = "lap"
     route = circuits.resolve_route(circuit, route)
+    if laps > 1 and (route != "lap" or repeat):
+        raise ValueError("multiple laps require a finite full-circuit run")
     if wait_for_capture and (route != "lap" or repeat):
-        raise ValueError("wait_for_capture requires a single lap")
-    if travel_seconds is None:
+        raise ValueError("wait_for_capture requires a finite full-circuit run")
+    if speed_mps is not None:
+        if travel_seconds is not None:
+            raise ValueError("choose speed_mps or travel_seconds")
+        if not isfinite(speed_mps) or speed_mps <= 0:
+            raise ValueError("speed_mps must be positive and finite")
+    elif travel_seconds is None:
         travel_seconds = default_travel_seconds(route, circuit)
     if not .02 <= height <= 1.0 or not -45 <= pitch_deg <= 45:
         raise ValueError("camera height must be 0.02–1.0 m and pitch −45…+45 degrees")
-    if not isfinite(travel_seconds) or travel_seconds <= 0:
+    if travel_seconds is not None and (not isfinite(travel_seconds) or travel_seconds <= 0):
         raise ValueError("travel_seconds must be positive and finite")
     output = Path(output).resolve()
-    output.mkdir(exist_ok=True, parents=True)
     lap = route == "lap"
     far = MONZA_LAP_FAR_M if lap and circuit == "monza" else CAMERA_FAR_M
     if circuit == "monza":
@@ -359,6 +373,8 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                                          "asphalt tone at RC scale", "grandstand catch fencing",
                                          "podium elevations and railings", "radio mast profiles",
                                          "barrier sections and bridge elevations",
+                                         "home straight rail overlaps, refuge and pit wall gates",
+                                         "pit access markings, bollard and speed limit signs",
                                          "Lesmo and Ascari kerb extents and gravel appearance",
                                          "Lesmo tyre banks and marshal light positions",
                                          "Ascari and back-straight trackside equipment",
@@ -369,6 +385,17 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
         kerbs = circuits.estimated_kerbs(source, points)
         data = scenery.Features([circuits.ROOT / circuit / "scenery.geojson"], project)
         geography = circuits.metadata(circuit)
+    length = points[-1][0]
+    if speed_mps is None:
+        speed_mps = length / travel_seconds
+    else:
+        travel_seconds = length / speed_mps
+    try:
+        total_seconds = travel_seconds * laps
+    except OverflowError as exc:
+        raise ValueError("requested run duration is too large") from exc
+    if not isfinite(total_seconds) or not isfinite(speed_mps):
+        raise ValueError("requested speed and run duration must be finite")
     focal = 320 / tan(HFOV/2)
     scene = {
         "course": circuit, "environment": "outdoor_circuit",
@@ -376,8 +403,10 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
         "geography": geography,
         "trajectory": {"route": route, "wait_for_capture": wait_for_capture,
                        "reference": "Motorcar course, rear axle in local east/north map, metres and radians",
-                       "samples_s_x_y_yaw": points, "end_s_m": points[-1][0],
-                       "travel_seconds": travel_seconds, "repeat": repeat},
+                       "samples_s_x_y_yaw": points, "end_s_m": length, "speed_mps": speed_mps,
+                       "travel_seconds": travel_seconds, "repeat": repeat,
+                       "laps": None if repeat else laps,
+                       "total_travel_seconds": None if repeat else total_seconds},
         "camera": {"height_above_floor_m": height, "pitch_down_deg": pitch_deg,
                    "far_clip_m": far,
                    "midpoint_forward_from_rear_axle_m": FORWARD_M, "baseline_m": BASELINE_M,
@@ -385,6 +414,7 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                    "width": 640, "height": 480, "rate_hz": 90, "optical_frames": OPTICAL_FRAMES,
                    "mount_source": "Simulation assumption; actual lens height, pose and intrinsics unmeasured."},
     }
+    output.mkdir(exist_ok=True, parents=True)
     scene_file = output / "scene.json"
     scene_file.write_text(json.dumps(scene, indent=2) + "\n")
     root = ET.Element("sdf", version="1.12")
@@ -432,7 +462,17 @@ if __name__ == "__main__":
     parser.add_argument("--camera-pitch-deg", type=float, default=0, help="Positive pitches down")
     parser.add_argument("--circuit", choices=circuits.circuit_ids(), default="monza")
     parser.add_argument("--route", choices=("chicane", "lap"))
-    parser.add_argument("--travel-seconds", type=float, help="Simulation seconds per pass (chicane 10, lap 240)")
+    timing = parser.add_mutually_exclusive_group()
+    timing.add_argument("--travel-seconds", type=float, help="Simulation seconds per pass")
+    timing.add_argument("--speed", type=float, help="Speed along the mapped route in RC metres per simulation second")
+    parser.add_argument("--laps", type=int, help="Drive this many complete forward laps")
     parser.add_argument("--repeat", action="store_true", help="Repeat the chicane out and back or continue lapping forwards")
     args = parser.parse_args()
-    build(args.output, args.camera_height, args.camera_pitch_deg, args.travel_seconds, args.repeat, circuit=args.circuit, route=args.route)
+    if args.laps is not None and (args.repeat or args.route == "chicane"):
+        parser.error("--laps requires a finite lap route")
+    route = "lap" if args.laps is not None and args.route is None else args.route
+    try:
+        build(args.output, args.camera_height, args.camera_pitch_deg, args.travel_seconds, args.repeat,
+              circuit=args.circuit, route=route, speed_mps=args.speed, laps=1 if args.laps is None else args.laps)
+    except ValueError as exc:
+        parser.error(str(exc))

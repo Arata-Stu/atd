@@ -6,17 +6,23 @@ source "$project/scripts/lib/detect_host.sh"
 
 usage() {
     cat <<'HELP'
-使い方: ./scripts/gazebo.sh list|prepare|run|video|bag|map|benchmark|diagnose|serve [--circuit ID] [--route chicane|lap] [--duration 秒] [--dds shm|udp] [--wait-for-stereo] [--camera-height m] [--camera-pitch-deg 度] [--dry-run]
+使い方: atd gazebo                        走行設定のメニューを開く
+        atd gazebo 操作 [--course ID] [--speed m/s] [--laps 周回数] [オプション]
+        ./scripts/gazebo.sh 操作 [オプション]
   list        選択できるコース ID を表示
   prepare     Gazebo 専用の Docker をビルドし、増分・ビルド中の最大ディスク使用量を記録
-  run         動画を記録し、別セッションで配信を計測（引数なしの既定）
-  video       左右の車載動画を保存（シミュレーション時刻。1周はコース長に応じた時間）
-  bag         選んだコースを1周し、後から Web UI で地図を作るためのステレオ rosbag を record/rosbags に保存
-  map         1周のステレオ画像で cuVSLAM 地図を保存。Notebook の起動済み atd_pc_dev を使用
+  run         動画を記録し、別セッションで配信を計測（スクリプトで操作を省略した場合の既定）
+  video       左右の車載動画を保存（走行時間はコース・速度・周回数で決定）
+  bag         指定周回のステレオ rosbag を record/rosbags に保存（既定1周）
+  map         指定周回のステレオ画像で cuVSLAM 地図を保存（既定1周）。Notebook の起動済み atd_pc_dev を使用
   benchmark   録画を止めた状態で ROS 2 の受信を計測（既定 60 実時間秒）
   diagnose    同じ計測区間に Gazebo 側でも画像とシミュレーション時刻を観測（既定 20 実時間秒）
-  serve       /clock・ステレオ画像・CameraInfo・固定 TF を Ctrl+C まで配信
-  --circuit ID        コースを選択（既定 monza）
+  serve       /clock・ステレオ画像・CameraInfo・固定 TF を配信（既定 Ctrl+C まで）
+  --course ID         コースを選択（既定 monza、--circuit ID も使用可）
+  --speed m/s         RC スケールの走行速度（シミュレーション時間）。省略時はコース既定
+  --laps N            全周を N 周走行（正の整数）。run では動画が対象。serve は指定周回で終了
+  --duration 秒       video・bag・map は1周または1区間の走行時間（--speed と排他）
+                      benchmark・diagnose は実時間の計測時間（--speed と併用可）
   --route chicane|lap   Monza は既定で第1シケイン。他のコースは既定で1周。lap の連続配信は同方向に周回
   --wait-for-stereo   serve を一時停止状態で起動し、左右の画像と CameraInfo の購読を待って走行開始
   --dds shm|udp   Gazebo コンテナ内に Fast DDS 共有メモリを追加（shm、既定）、または従来の UDP のみ（udp）
@@ -45,14 +51,24 @@ dry_run=false
 circuit=monza
 route=
 dds=shm
+speed=
+laps=
+duration=
 sim_args=()
 while (( $# )); do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --dry-run) dry_run=true; shift ;;
-        --circuit)
-            [[ "$action" != prepare && -n "${2:-}" ]] || fail "走行時に --circuit とコース ID を指定してください"
+        --course|--circuit)
+            [[ "$action" != prepare && -n "${2:-}" ]] || fail "走行時に $1 とコース ID を指定してください"
             circuit="$2"; shift 2 ;;
+        --speed)
+            [[ "$action" != prepare && -n "${2:-}" ]] || fail "走行時に --speed と速度（m/s）を指定してください"
+            speed="$2"; shift 2 ;;
+        --laps)
+            case "$action" in run|video|bag|map|serve) ;; *) fail "--laps は run・video・bag・map・serve で指定してください" ;; esac
+            [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || fail "--laps は1以上の整数で指定してください"
+            laps="$2"; shift 2 ;;
         --wait-for-stereo)
             [[ "$action" = serve ]] || fail "$1 は serve で指定してください"
             sim_args+=("$1"); shift ;;
@@ -64,22 +80,34 @@ while (( $# )); do
             dds="$2"; shift 2 ;;
         --duration|--camera-height|--camera-pitch-deg)
             [[ "$action" != prepare ]] || fail "$1 は走行時に指定してください"
-            [[ "$1" != --duration || "$action" != serve ]] || fail "serve は Ctrl+C まで配信します。--duration は計測時に指定してください"
-            [[ $# -ge 2 ]] || fail "$1 の値が必要です"
+            [[ "$1" != --duration || "$action" != serve ]] || fail "serve の終了条件は --laps または Ctrl+C で指定してください"
+            [[ -n "${2:-}" ]] || fail "$1 の値が必要です"
+            if [[ "$1" = --duration ]]; then duration="$2"; fi
             sim_args+=("$1" "$2"); shift 2 ;;
         *) fail "不明な引数: $1";;
     esac
 done
+if [[ -n "$speed" ]]; then
+    python3 -c 'import math, sys
+try:
+    speed = float(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+sys.exit(not (math.isfinite(speed) and speed > 0))' "$speed" || fail "--speed は有限の正の数（m/s）で指定してください"
+    [[ -z "$duration" || "$action" = benchmark || "$action" = diagnose ]] ||
+        fail "$action の走行時間は --speed または --duration の一方で指定してください"
+fi
 if [[ "$circuit" != monza ]]; then
     list="$(python3 "$catalog")"
     [[ $'\n'"$list"$'\n' = *$'\n'"$circuit"$'\n'* && "$circuit" =~ ^[a-z0-9]+$ ]] || fail "不明なコース: $circuit（atd gazebo list で一覧）"
     [[ "$route" != chicane ]] || fail "chicane は Monza 専用です"
 fi
-if [[ "$action" = map || "$action" = bag ]]; then
-    [[ "$route" != chicane ]] || fail "$action はコースを1周するため --route lap を使用します"
+if [[ -n "$laps" || "$action" = map || "$action" = bag ]]; then
+    [[ "$route" != chicane ]] || fail "周回走行では --route lap を使用してください"
     route=lap
 fi
 if [[ -n "$route" ]]; then sim_args+=(--route "$route"); fi
+if [[ -n "$speed" ]]; then sim_args+=(--speed "$speed"); fi
 storage="${ATD_STORAGE_CONFIG:-$project/config/storage.env}"
 if [[ -f "$storage" ]]; then
     source "$storage"
@@ -165,6 +193,7 @@ run_mode() {
     fi
     command+=("$image" python3 /workspaces/atd/tools/gazebo_monza/run.py --mode "$mode" --output /output --circuit "$circuit")
     if (( ${#sim_args[@]} )); then command+=("${sim_args[@]}"); fi
+    if [[ -n "$laps" && "$mode" != benchmark ]]; then command+=(--laps "$laps"); fi
     if [[ "$mode" = bag ]]; then
         bag_name="gazebo-$circuit-${out##*/}"
         command+=(--bag-output "/data/record/rosbags/$bag_name")

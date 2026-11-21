@@ -71,7 +71,7 @@ class AtdMenuTests(unittest.TestCase):
         self.assertEqual(self.calls.read_bytes().split(b'\0'), [arg.encode() for arg in args] + [b''])
         self.calls.unlink()
 
-    def menu(self, *, picks=None, keys=b'', **env):
+    def menu(self, *args, picks=None, keys=b'', **env):
         if picks is not None:
             fzf = self.bin / 'fzf'
             fzf.write_text('''#!/bin/bash
@@ -94,7 +94,7 @@ exit 130
                 os.write(master, keys)
             # 子のシェルが PTY からの入力待ちでも stderr の EOF を待たない。
             with tempfile.TemporaryFile() as errors:
-                result = subprocess.run([str(self.atd)], cwd=self.root, stdin=slave, stdout=slave,
+                result = subprocess.run([str(self.atd), *args], cwd=self.root, stdin=slave, stdout=slave,
                                         stderr=errors, env={**self.env, **env}, timeout=5)
                 errors.seek(0)
                 self.assertEqual(result.returncode, 0, errors.read().decode())
@@ -161,13 +161,21 @@ exit 130
         self.assertFalse(self.ssh_args.exists())
 
     def test_notebook_can_launch_simulation_and_ros_bringup(self):
-        self.menu(picks=['gazebo', 'serve', 'quit'])
-        self.assert_call('gazebo.sh', 'serve')
-        for entry, args in [('bag', ['bag', '--route', 'lap']), ('map', ['map', '--route', 'lap']),
-                            ('video-lap', ['video', '--route', 'lap']),
-                            ('serve-lap', ['serve', '--route', 'lap'])]:
-            self.menu(picks=['gazebo', entry, 'spa', 'quit'])
-            self.assert_call('gazebo.sh', *args, '--circuit', 'spa')
+        self.menu(picks=['gazebo', 'serve', 'monza', 'chicane', 'quit'], keys=b'1.25\n')
+        self.assert_call('gazebo.sh', 'serve', '--route', 'chicane', '--circuit', 'monza', '--speed', '1.25')
+        for mode in ['bag', 'map', 'video', 'serve', 'run']:
+            self.menu('gazebo', picks=[mode, 'spa'], keys=b'1.75\n3\n')
+            self.assert_call('gazebo.sh', mode, '--route', 'lap', '--circuit', 'spa',
+                             '--speed', '1.75', '--laps', '3')
+        self.menu('gazebo', picks=['video', 'monza', 'lap'], keys=b'\n\n')
+        self.assert_call('gazebo.sh', 'video', '--route', 'lap', '--circuit', 'monza')
+        self.menu('gazebo', picks=['diagnose', 'monza', 'lap'], keys=b'\n')
+        self.assert_call('gazebo.sh', 'diagnose', '--route', 'lap', '--circuit', 'monza')
+        self.menu('gazebo', picks=['map', 'spa'], keys=b'1.25\nq\n')
+        self.assertFalse(self.calls.exists())
+        result = self.invoke('gazebo', 'bag', '--course', 'spa', '--speed', '.9', '--laps', '4')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_call('gazebo.sh', 'bag', '--course', 'spa', '--speed', '.9', '--laps', '4')
         for container in ('0', '1'):
             result = self.invoke('bringup', 'gazebo', MENU_TEST_CONTAINER=container)
             self.assertEqual(result.returncode, 0, result.stderr)

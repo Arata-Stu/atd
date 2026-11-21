@@ -1,4 +1,4 @@
-"""Notebook の Gazebo と Isaac ROS を1周だけ動かし、検証済みの地図を公開する。"""
+"""Notebook の Gazebo と Isaac ROS で指定周回を走り、検証済みの地図を公開する。"""
 import argparse
 import json
 import os
@@ -70,11 +70,19 @@ def verify_and_publish(results, out, circuit):
     report = read_json(out / "run.json")
     lap = read_json(out / "lap.complete.json")
     saved = read_json(out / "mapping.saved.json")
+    scene = read_json(out / "scene/scene.json")
+    trajectory = scene.get("trajectory", {})
+    motion = report["motion"]
+    laps = trajectory.get("laps", 1)
     if ((out / "mapping.failed.json").exists() or saved["status"] != "complete" or report["status"] != "complete"
-            or report["circuit"] != circuit or not report["motion"]["lap_completed"]
+            or report["circuit"] != circuit or not motion["lap_completed"]
+            or motion.get("laps_requested", 1) != laps or motion.get("laps_completed", 1) != laps
             or not 0 < lap["start_sim_ns"] < lap["finish_sim_ns"]
             or any(saved["tracking"][key] != lap[key] for key in ("start_sim_ns", "finish_sim_ns"))):
         raise RuntimeError("全周の走行・保存を確認できません。run.json と mapping.*.json を確認してください")
+    lap["laps_completed"] = laps
+    if "speed_mps" in trajectory:
+        lap["speed_mps"] = trajectory["speed_mps"]
     stage = out / "map-staging"
     db = stage / "nvidia/cuvslam_map"
     files = {p.name: p.stat().st_size for p in db.glob("*.mdb")
@@ -84,7 +92,7 @@ def verify_and_publish(results, out, circuit):
     key = f"gazebo-{circuit}-{out.name}"
     manifest = {"map_id": key, "source": "gazebo_live_cuvslam", "circuit": circuit,
                 "run": out.relative_to(results).as_posix(), "lap": lap, "save": saved,
-                "geography": read_json(out / "scene/scene.json")["geography"]}
+                "geography": scene["geography"]}
     with (stage / "mapping.json").open("x") as stream:
         json.dump(manifest, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
@@ -134,7 +142,7 @@ def coordinate(out, gazebo, mapper, stop_gazebo):
                     print("ゴールに到達しました。地図を保存しています。", flush=True)
                     phase = "saving"
                 elif phase is None and (out / "mapping.ready").is_file():
-                    print("追跡を開始しました。コースを1周します。", flush=True)
+                    print("追跡を開始しました。指定した周回数で走行します。", flush=True)
                     phase = "driving"
                 time.sleep(.25)
     finally:

@@ -72,7 +72,7 @@ def run(node, run_dir, map_dir):
             raise TimeoutError('開始位置で有効な cuVSLAM 追跡・VO・地図保存サービスを確認できませんでした')
     check_publishers()
     write_json(run_dir / 'mapping.ready', {'tracking_sim_ns': tracking.status_times[-1]})
-    node.get_logger().info('cuVSLAM の初期追跡を確認。カメラ台の1周を待ちます。')
+    node.get_logger().info('cuVSLAM の初期追跡を確認。カメラ台が最終周のゴールに到達するのを待ちます。')
 
     finish_file = run_dir / 'lap.complete.json'
     clock = node.get_clock().now().nanoseconds

@@ -1,5 +1,7 @@
 """配信ブリッジと走行判定を、実際のシーン・ROS受信設定と突き合わせる。"""
 import json
+import io
+from contextlib import redirect_stderr
 from math import pi
 from pathlib import Path
 import sys
@@ -66,6 +68,26 @@ class RunContractTests(unittest.TestCase):
                 self.assertEqual((args.route, args.duration), ("lap", world.default_travel_seconds("lap", circuit)))
                 self.assertEqual(report["status"], "complete")
 
+    def test_speed_course_laps_and_measurement_duration_have_distinct_meanings(self):
+        cases = [("video", ["--course", "spa", "--speed", "3.5", "--laps", "2"], ("spa", "lap", 3.5, 2, None)),
+                 ("serve", ["--laps", "1"], ("monza", "lap", None, 1, None)),
+                 ("diagnose", ["--speed", "1", "--duration", "4"], ("monza", "chicane", 1., None, 4.))]
+        for mode, flags, expected in cases:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, \
+                    patch.object(sys, "argv", ["run.py", "--mode", mode, "--output", tmp, *flags]), \
+                    patch.object(run, "run", return_value=0) as simulate:
+                self.assertEqual(run.main(), 0)
+                args, _ = simulate.call_args.args
+                self.assertEqual((args.circuit, args.route, args.speed, args.laps, args.duration), expected)
+        invalid = [("video", ["--speed", "nan"]), ("serve", ["--speed", "-2"]),
+                   ("video", ["--laps", "2", "--route", "chicane"]), ("serve", ["--laps", "0"]),
+                   ("map", ["--speed", "1", "--duration", "2"]), ("benchmark", ["--laps", "2"])]
+        for mode, flags in invalid:
+            with self.subTest(mode=mode, flags=flags), tempfile.TemporaryDirectory() as tmp, \
+                    patch.object(sys, "argv", ["run.py", "--mode", mode, "--output", tmp, *flags]), \
+                    redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                run.main()
+
     def test_mapping_waits_for_tracking_then_measured_finish_then_acknowledgment(self):
         points = [[0, 0, 0, 0], [1, 1, 0, 0], [2, 0, 0, 0]]
         scene = {"trajectory": {"route": "lap", "travel_seconds": 8, "end_s_m": 2,
@@ -98,12 +120,12 @@ class RunContractTests(unittest.TestCase):
 
                 with patch.object(run, "start_stream") as stream, patch.object(run, "wait_for", next_phase):
                     if valid:
-                        self.assertEqual(run.map_one_lap({}, out, "spa", scene, report), 0)
+                        self.assertEqual(run.map_laps({}, out, "spa", scene, report), 0)
                         self.assertTrue(report["motion"]["lap_completed"])
                         self.assertEqual(report["mapping"]["map_id"], "map-a")
                     else:
                         with self.assertRaisesRegex(RuntimeError, "全周"):
-                            run.map_one_lap({}, out, "spa", scene, report)
+                            run.map_laps({}, out, "spa", scene, report)
                         self.assertFalse((out / "lap.complete.json").exists())
                     stream.assert_called_once()
 
@@ -113,7 +135,7 @@ class RunContractTests(unittest.TestCase):
                 out = Path(tmp)
                 (out / signal).write_text(payload)
                 with self.assertRaisesRegex(RuntimeError, "tracking lost|中断"):
-                    run.map_one_lap({}, out, "monza", {}, {})
+                    run.map_laps({}, out, "monza", {}, {})
                 self.assertFalse((out / "scene/lap_capture.ready").exists())
                 self.assertFalse((out / "lap.complete.json").exists())
 
@@ -227,6 +249,62 @@ class RunContractTests(unittest.TestCase):
                 rejected = run.inspect_motion(out, scene, metrics)
                 self.assertFalse(rejected["lap_completed"])
                 self.assertTrue(rejected["video_endpoints_covered"])
+
+    def test_multiple_laps_verify_every_traversal_and_final_video_frame(self):
+        points = [[0, 0, 0, 0], [1, 1, 0, 0], [2, 0, 0, 0]]
+        trajectory = {"samples_s_x_y_yaw": points, "end_s_m": 2, "travel_seconds": 4, "laps": 3}
+        metrics = {"mode": "video", "lap_start_sim_ns": 0, "first_encoded_pair_sim_ns": 0,
+                   "last_encoded_pair_sim_ns": 12_000_000_000}
+        trace = [{"sim_time_s": i * .25, "x_m": min(i % 16, 16 - i % 16) / 8, "y_m": 0}
+                 for i in range(49)]
+        with tempfile.TemporaryDirectory() as tmp:
+            def inspect(samples, video=metrics):
+                return run.inspect_lap(Path(tmp), trajectory, samples, video)
+
+            finished = inspect(trace)
+            self.assertTrue(finished["lap_completed"])
+            self.assertTrue(finished["video_endpoints_covered"])
+            self.assertEqual((finished["laps_completed"], finished["laps_requested"]), (3, 3))
+            partial = inspect(trace[:17], dict(metrics, last_encoded_pair_sim_ns=4_000_000_000))
+            self.assertFalse(partial["lap_completed"])
+            self.assertFalse(partial["video_endpoints_covered"])
+            self.assertEqual(partial["laps_completed"], 1)
+            # Correct times at the three crossings cannot mask a stationary middle lap.
+            trace[17:32] = [dict(p, x_m=0.) for p in trace[17:32]]
+            self.assertEqual(inspect(trace)["laps_completed"], 1)
+
+    def test_capture_duration_and_finite_serve_use_the_requested_course_speed_and_laps(self):
+        for mode in ("video", "serve"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp)
+                args = SimpleNamespace(mode=mode, route="lap", circuit="spa", output=out,
+                                       speed=3., laps=2, duration=None, wait_for_stereo=True,
+                                       camera_height=.12, camera_pitch_deg=0.)
+                if mode == "video":
+                    metrics = {"mode": mode, "status": "complete", "largest_sim_gap_ms": 12,
+                               "held_video_frames": 0, "video_frames": 4000, "paired_wall_hz": 45.}
+                    (out / "video.json").write_text(json.dumps(metrics))
+                motion = {"lap_completed": True, "video_endpoints_covered": True}
+                report = {"mode": mode}
+                with patch.object(run.shutil, "which", return_value=None), \
+                        patch.object(run.subprocess, "Popen", return_value=MagicMock(returncode=0)) as start, \
+                        patch.object(run, "stop_group"), patch.object(run.subprocess, "run"), \
+                        patch.object(run, "start_stream") as stream, patch.object(run, "wait_for"), \
+                        patch.object(run, "drive_laps") as drive, patch.object(run, "inspect_motion", return_value=motion):
+                    self.assertEqual(run.run(args, report), 0)
+                trajectory = json.loads((out / "scene/scene.json").read_text())["trajectory"]
+                distance = trajectory["end_s_m"]
+                self.assertAlmostEqual(report["total_travel_seconds"], 2 * distance / 3.)
+                self.assertFalse(trajectory["repeat"])
+                self.assertTrue(trajectory["wait_for_capture"])
+                if mode == "video":
+                    capture_cmd, = [call.args[0] for call in start.call_args_list
+                                    if str(run.HERE / "capture.py") in call.args[0]]
+                    self.assertAlmostEqual(float(capture_cmd[capture_cmd.index("--duration") + 1]),
+                                           report["total_travel_seconds"])
+                else:
+                    stream.assert_called_once()
+                    drive.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ import time
 
 import world
 import lap_bag
-from monza_motion import interpolate
+from monza_motion import interpolate, travel_fraction
 
 HERE = Path(__file__).resolve().parent
 
@@ -142,18 +142,20 @@ def transforms(camera):
 
 
 def inspect_lap(scene_dir, trajectory, samples, metrics):
-    """Check the measured post-physics poses against one traversal of the closed path."""
+    """Check the post-physics trace from release through the final requested finish."""
     video = metrics.get("mode", "video") == "video"
+    laps = trajectory.get("laps", 1)
     release_file = scene_dir / "lap_start.json"
     start = 0.0
     if release_file.is_file():
         start = json.loads(release_file.read_text())["sim_time_s"]
     elif trajectory.get("wait_for_capture"):
-        incomplete = {"lap_completed": False, "lap_start_sim_s": None}
+        incomplete = {"lap_completed": False, "lap_start_sim_s": None, "laps_requested": laps, "laps_completed": 0}
         if video:
             incomplete["video_endpoints_covered"] = False
         return incomplete
-    duration = trajectory["travel_seconds"]
+    lap_seconds = trajectory["travel_seconds"]
+    duration = lap_seconds * laps
     end = start + duration
     profile = trajectory["samples_s_x_y_yaw"]
     length = trajectory["end_s_m"]
@@ -164,26 +166,32 @@ def inspect_lap(scene_dir, trajectory, samples, metrics):
     finish_error = None
     # The transform can be applied one physics step after the pre-update command.
     step_s = 1 / 90
+    max_allowed_gap = min(.5, lap_seconds / 8) + 2 * step_s
+    verified = True
+    completed_laps = 0
     for sample in samples:
         t = sample["sim_time_s"]
         if t < start - 1e-6:
             continue
         xy = (sample["x_m"], sample["y_m"])
-        expected = [interpolate(profile, distances, min(1., max(0., (t - start - lag) / duration)) * length)
-                    for lag in (0., step_s)]
+        expected = [interpolate(profile, distances, length * travel_fraction(
+            t - start - lag, lap_seconds, False, closed=True, laps=laps)) for lag in (0., step_s)]
         errors.append(min(math.dist(xy, p[:2]) for p in expected))
+        interval_valid = (0 < t - times[-1] <= max_allowed_gap) if times else t - start <= step_s * 2
+        verified = verified and interval_valid and errors[-1] <= .05
         times.append(t)
+        if verified:
+            # An intermediate crossing may fall between two trace samples.
+            completed_laps = min(laps - 1, int((t - start + 1e-6) / lap_seconds))
         if t >= end - 1e-6:
             finish_error = math.dist(xy, endpoint)
             if finish_error <= .05:
                 break
     max_gap = max((b - a for a, b in zip(times, times[1:])), default=None)
     max_error = max(errors, default=None)
-    complete = (len(times) >= 3 and times[0] - start <= step_s * 2
-                and all(b > a for a, b in zip(times, times[1:]))
-                and max_gap <= min(.5, duration / 8) + 2 * step_s
-                and max_error <= .05 and finish_error is not None and finish_error <= .05)
-    result = {"lap_completed": complete, "lap_start_sim_s": start, "lap_finish_sim_s": end,
+    complete = verified and len(times) >= 3 and finish_error is not None and finish_error <= .05
+    result = {"lap_completed": complete, "laps_completed": laps if complete else completed_laps,
+              "laps_requested": laps, "lap_start_sim_s": start, "lap_finish_sim_s": end,
               "lap_trace_samples": len(times), "observed_finish_sim_s": times[-1] if complete else None,
               "maximum_trace_gap_s": max_gap, "maximum_path_error_m": max_error,
               "finish_position_error_m": finish_error}
@@ -206,7 +214,7 @@ def inspect_motion(scene_dir, scene, metrics):
     travelled = sum(math.dist(a, b) for a, b in zip(xy, xy[1:]))
     observation = {"pose_samples": len(xy), "sampled_distance_m": travelled}
     trajectory = scene["trajectory"]
-    if metrics["mode"] in ("bag", "map", "video") and trajectory.get("route") == "lap":
+    if metrics["mode"] in ("bag", "map", "video", "serve") and trajectory.get("route") == "lap":
         observation.update(inspect_lap(scene_dir, trajectory, samples, metrics))
         return observation
     complete = None
@@ -222,10 +230,10 @@ def inspect_motion(scene_dir, scene, metrics):
     return {**observation, "reached_corner_exit": complete}
 
 
-def drive_one_lap(children, out, scene, report, check_external=None):
+def drive_laps(children, out, scene, report, check_external=None):
     scene_dir = out / "scene"
     (scene_dir / "lap_capture.ready").touch(exist_ok=False)
-    print("スタート位置から1周走行します。", flush=True)
+    print(f"スタート位置から{scene['trajectory'].get('laps', 1)}周走行します。", flush=True)
 
     trace = scene_dir / "rig_motion.jsonl"
     finished = scene_dir / "lap_finished.ready"
@@ -254,7 +262,7 @@ def drive_one_lap(children, out, scene, report, check_external=None):
             "finish_sim_ns": round(1e9 * motion["observed_finish_sim_s"])}
 
 
-def map_one_lap(children, out, circuit, scene, report):
+def map_laps(children, out, circuit, scene, report):
     def check_mapper():
         if (out / "mapping.cancel").exists():
             raise RuntimeError("地図作成を中断しました")
@@ -269,7 +277,7 @@ def map_one_lap(children, out, circuit, scene, report):
     (out / "gazebo.ready").touch(exist_ok=False)
     print("スタート位置で cuVSLAM の初期追跡を待っています。", flush=True)
     wait_for((out / "mapping.ready").is_file, children, 240, "cuVSLAM の初期追跡", check_mapper)
-    timing = drive_one_lap(children, out, scene, report, check_mapper)
+    timing = drive_laps(children, out, scene, report, check_mapper)
     marker = out / "lap.complete.json"
     pending = marker.with_suffix(".tmp")
     pending.write_text(json.dumps(timing) + "\n")
@@ -281,7 +289,7 @@ def map_one_lap(children, out, circuit, scene, report):
     return 0
 
 
-def record_one_lap(children, out, circuit, scene, report, final):
+def record_laps(children, out, circuit, scene, report, final):
     # Advance the clock with the rig parked. The Lyrical recorder waits for
     # /clock before it starts discovering the five requested topics.
     start_stream(children, False, circuit)
@@ -295,7 +303,7 @@ def record_one_lap(children, out, circuit, scene, report, final):
         try:
             edges = {(p, c) for p, c, *_ in transforms(scene["camera"])}
             lap_bag.wait_for_sample(children, wait_for, required_edges=edges)
-            timing = drive_one_lap(children, out, scene, report)
+            timing = drive_laps(children, out, scene, report)
             # Keep recording on the stationary finishing pose through the last exposure.
             lap_bag.wait_for_sample(children, wait_for, min_stamp=timing["finish_sim_ns"] + 250_000_000)
         finally:
@@ -310,16 +318,31 @@ def run(args, report):
     out = args.output
     scene_dir = out / "scene"
     lap_video = mode == "video" and args.route == "lap"
-    single_pass = mode in ("video", "map", "bag")
+    finite_serve = mode == "serve" and args.laps is not None
+    finite_run = mode in ("video", "map", "bag") or finite_serve
     if mode == "bag":
         lap_bag.check_recorder()
         lap_bag.check_destination(args.bag_output)
-        image_bytes = 2 * lap_bag.WIDTH * lap_bag.HEIGHT * lap_bag.TARGET_HZ * args.duration
-        print(f"1周の左右画像の容量目安 {image_bytes / 1e9:.2f} GB", flush=True)
     scene = world.build(scene_dir, height=args.camera_height, pitch_deg=args.camera_pitch_deg,
-                        travel_seconds=args.duration if single_pass else world.default_travel_seconds(args.route, args.circuit),
-                        repeat=not single_pass, circuit=args.circuit, route=args.route,
-                        wait_for_capture=(lap_video or mode in ("map", "bag")))
+                        travel_seconds=args.duration if finite_run else None, speed_mps=args.speed,
+                        laps=args.laps or 1, repeat=not finite_run, circuit=args.circuit, route=args.route,
+                        wait_for_capture=(lap_video or finite_serve or mode in ("map", "bag")))
+    trajectory = scene["trajectory"]
+    total_seconds = trajectory["total_travel_seconds"]
+    duration = total_seconds if finite_run else args.duration
+    report.update(requested_duration_s=duration, speed_mps=trajectory["speed_mps"],
+                  laps_requested=trajectory["laps"] if args.route == "lap" else None,
+                  lap_duration_s=trajectory["travel_seconds"] if args.route == "lap" else None,
+                  total_travel_seconds=total_seconds)
+    if finite_run:
+        extent = f"{trajectory['laps']}周" if args.route == "lap" else "シケイン区間"
+        schedule = f"{extent}  走行時間 {duration:.2f} シミュレーション秒"
+    else:
+        schedule = "繰り返し走行"
+    print(f"{args.circuit} / {args.route}  RC速度 {trajectory['speed_mps']:.3g} m/s  {schedule}", flush=True)
+    if mode == "bag":
+        image_bytes = 2 * lap_bag.WIDTH * lap_bag.HEIGHT * lap_bag.TARGET_HZ * duration
+        print(f"{trajectory['laps']}周の左右画像の容量目安 {image_bytes / 1e9:.2f} GB", flush=True)
     config = out / "bridge.yaml"
     config.write_text(json.dumps(bridge_topics(args.circuit), indent=2) + "\n")
     report.update(ros_domain_id=os.environ.get("ROS_DOMAIN_ID", "0"),
@@ -351,14 +374,18 @@ def run(args, report):
                                   "--roll", str(roll), "--pitch", str(pitch), "--yaw", str(yaw),
                                   "--ros-args", "-p", clock_param])
         if mode == "map":
-            return map_one_lap(children, out, args.circuit, scene, report)
+            return map_laps(children, out, args.circuit, scene, report)
         if mode == "bag":
-            pending, timing = record_one_lap(children, out, args.circuit, scene, report, args.bag_output)
+            pending, timing = record_laps(children, out, args.circuit, scene, report, args.bag_output)
             stack.close()  # Release the renderer and bridge before reading the full MCAP back.
             lap_bag.audit_and_publish(pending, args.bag_output, timing, report)
             return 0
         if mode == "serve":
             start_stream(children, args.wait_for_stereo, args.circuit)
+            if finite_serve:
+                drive_laps(children, out, scene, report)
+                print(f"{args.laps}周のゴールを確認しました。配信を終了します。", flush=True)
+                return 0
             print("配信中。/clock は Gazebo 時刻で進みます。Ctrl+C で終了します。", flush=True)
             while True:
                 check_children(children)
@@ -368,11 +395,11 @@ def run(args, report):
             probe = start("gz_probe", [sys.executable, str(HERE / "gz_probe.py"), "--output", str(out), "--circuit", args.circuit])
             wait_for((out / "gz_probe.ready").is_file, children, 30, "Gazebo 側の診断購読の準備")
         receiver = start("capture", [sys.executable, str(HERE / "capture.py"), "--output", str(out),
-                                     "--mode", mode, "--route", args.route, "--duration", str(args.duration)])
+                                     "--mode", mode, "--route", args.route, "--duration", str(duration)])
         wait_for((out / f"{mode}.ready").is_file, children, 70, "左右カメラの ROS publisher と subscriber の接続")
         wait_for(lambda: unpause(args.circuit), children, 45, "Gazebo の再生開始")
         servers = {k: v for k, v in children.items() if v is not receiver and v is not probe}
-        timeout = None if lap_video else max(150, args.duration * (11 if mode == "video" else 1) + 120)
+        timeout = None if lap_video else max(150, duration * (11 if mode == "video" else 1) + 120)
         wait_for(lambda: receiver.poll() is not None, servers, timeout, "ステレオ計測の完了")
         exit_code = receiver.returncode
         if lap_video and exit_code == 0:
@@ -426,7 +453,7 @@ def run(args, report):
             raise RuntimeError("実際のカメラ台の姿勢から全周の走行とゴール到達を確認できません")
         if not report["motion"]["video_endpoints_covered"]:
             raise RuntimeError("左右動画でスタート・ゴール両地点の撮影時刻を確認できません")
-        print(f"カメラ台の1周を確認  軌道長 {scene['trajectory']['end_s_m']:.2f} m", flush=True)
+        print(f"カメラ台の{trajectory['laps']}周を確認  走行距離 {trajectory['end_s_m'] * trajectory['laps']:.2f} m", flush=True)
         print(f"左右動画でスタートとゴールを撮影  受信ペア間の最大間隔 "
               f"{metrics['largest_sim_gap_ms']:.1f} ms（シミュレーション時刻）", flush=True)
     if mode == "video":
@@ -435,7 +462,7 @@ def run(args, report):
                         "-i", str(out / "left.mp4"), "-i", str(out / "right.mp4"),
                         "-filter_complex", "hstack=inputs=2", "-c:v", "libx264", "-crf", "19",
                         "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out / "stereo.mp4")],
-                       check=True, timeout=max(60, args.duration * 4))
+                       check=True, timeout=max(60, duration * 4))
         print(f"動画 {metrics['video_frames']} フレーム中、前の画像を再表示 {metrics['held_video_frames']} フレーム")
     print(f"ROS 実時間 {metrics['paired_wall_hz']:.2f} 組/秒", flush=True)
     if mode == "benchmark":
@@ -451,18 +478,25 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mode", choices=("benchmark", "video", "diagnose", "serve", "map", "bag"), required=True)
     parser.add_argument("--bag-output", type=Path, help="bag の確定保存先（rosbags/直下の新規ディレクトリ）")
-    parser.add_argument("--circuit", choices=world.circuits.circuit_ids(), default="monza")
+    parser.add_argument("--circuit", "--course", choices=world.circuits.circuit_ids(), default="monza")
     parser.add_argument("--route", choices=("chicane", "lap"))
     parser.add_argument("--duration", type=float)
+    parser.add_argument("--speed", type=float, help="RC スケールの走行速度（m/s、シミュレーション時刻）")
+    parser.add_argument("--laps", type=int, help="走行する周回数（正の整数）")
     parser.add_argument("--wait-for-stereo", action="store_true")
     parser.add_argument("--camera-height", type=float, default=.12)
     parser.add_argument("--camera-pitch-deg", type=float, default=0)
     args = parser.parse_args()
     if (args.mode == "bag") != (args.bag_output is not None):
         parser.error("--bag-output は --mode bag で指定してください")
-    if args.mode in ("map", "bag"):
+    if args.laps is not None:
+        if args.laps < 1:
+            parser.error("--laps は1以上の整数を指定してください")
+        if args.mode in ("benchmark", "diagnose"):
+            parser.error("実時間計測の benchmark / diagnose では --duration で計測秒数を指定してください")
+    if args.mode in ("map", "bag") or args.laps is not None:
         if args.route == "chicane":
-            parser.error(f"{args.mode} は1周走行します。--route lap を指定してください")
+            parser.error("周回走行では --route lap を指定してください")
         args.route = "lap"
     try:
         args.route = world.circuits.resolve_route(args.circuit, args.route)
@@ -471,13 +505,18 @@ def main():
     if args.wait_for_stereo and args.mode != "serve":
         parser.error("--wait-for-stereo requires --mode serve")
     if args.mode == "serve" and args.duration is not None:
-        parser.error("--mode serve runs until stopped; omit --duration")
+        parser.error("serve では --speed と、終了する周回数を指定する場合は --laps を使ってください")
+    if args.speed is not None:
+        if not math.isfinite(args.speed) or args.speed <= 0:
+            parser.error("--speed は有限の正数を m/s で指定してください")
+        if args.duration is not None and args.mode in ("video", "bag", "map"):
+            parser.error("--speed と1周あたりの --duration は同時に指定できません")
     if args.mode != "serve" and args.duration is None:
         if args.mode == "benchmark":
             args.duration = 60.
         elif args.mode == "diagnose":
             args.duration = 20.
-        else:
+        elif args.speed is None:
             args.duration = world.default_travel_seconds(args.route, args.circuit)
     if args.duration is not None and (not math.isfinite(args.duration) or args.duration <= 0):
         parser.error("duration must be finite and positive")
@@ -495,7 +534,7 @@ def main():
         report["status"] = "complete" if result == 0 else "below_target"
     except KeyboardInterrupt:
         report.update(status="stopped")
-        result = 0 if args.mode == "serve" else 130
+        result = 0 if args.mode == "serve" and args.laps is None else 130
     except (OSError, ValueError, RuntimeError, TimeoutError, subprocess.SubprocessError) as exc:
         report.update(status="error", error=str(exc))
         result = 1

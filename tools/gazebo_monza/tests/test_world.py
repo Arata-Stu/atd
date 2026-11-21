@@ -165,6 +165,57 @@ class MonzaWorldTest(unittest.TestCase):
             self.assertAlmostEqual(travel_fraction(t, 10, True, closed=True), phase)
         self.assertEqual(travel_fraction(11, 10, False, closed=True), 1)
 
+    def test_speed_and_laps_use_the_actual_route_length(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scene = world.build(tmp, circuit="spa", speed_mps=3.5, laps=3, wait_for_capture=True)
+            route = scene["trajectory"]
+            self.assertEqual(route["route"], "lap")
+            self.assertEqual(route["laps"], 3)
+            self.assertEqual(route["speed_mps"], 3.5)
+            samples = route["samples_s_x_y_yaw"]
+            length = sum(dist(a[1:3], b[1:3]) for a, b in zip(samples, samples[1:]))
+            self.assertAlmostEqual(route["end_s_m"], length)
+            self.assertAlmostEqual(route["travel_seconds"], length / 3.5)
+            self.assertAlmostEqual(route["total_travel_seconds"], 3 * length / 3.5)
+            self.assertEqual(samples[0][1:], samples[-1][1:])
+
+    def test_invalid_motion_settings_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "scene"
+            for options in ({"speed_mps": 0}, {"speed_mps": float("inf")},
+                            {"speed_mps": 2, "travel_seconds": 10}, {"laps": -1},
+                            {"laps": 1.5}, {"laps": 2, "repeat": True},
+                            {"laps": 2, "route": "chicane"}):
+                with self.subTest(options=options), self.assertRaises(ValueError):
+                    world.build(output, **options)
+            self.assertFalse(output.exists())
+
+    def test_gated_run_crosses_intermediate_finish_and_stops_on_the_last_lap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            motion = MonzaMotion()
+            motion.closed, motion.repeat, motion.laps, motion.duration = True, False, 3, 4.
+            motion.start_s = None
+            motion.distances = [0, 2, 4]
+            motion.samples = [[0, 0, 0, 0], [2, 2, 0, 0], [4, 0, 0, 0]]
+            motion.capture_ready, motion.lap_start = root / "ready", root / "start"
+            motion.trace, motion.capture_finish = root / "trace", root / "finished"
+            motion.pose_type = lambda *pose: pose
+            positions = []
+            motion.model = SimpleNamespace(set_world_pose_cmd=lambda _, pose: positions.append(pose[0]))
+            motion.link = SimpleNamespace(world_pose=lambda _: SimpleNamespace(
+                x=lambda: positions[-1], y=lambda: 0, yaw=lambda: 0))
+            for t in range(16):
+                if t == 2:
+                    motion.capture_ready.touch()
+                tick = SimpleNamespace(sim_time=timedelta(seconds=t), paused=False)
+                motion.pre_update(tick, None)
+                motion.post_update(tick, None)
+                self.assertEqual(motion.capture_finish.exists(), t >= 14)
+            self.assertEqual(positions, [0, 1, 2, 1] * 3 + [0, 0])
+            trace = [json.loads(line) for line in motion.trace.read_text().splitlines()]
+            self.assertEqual(trace[-1]["sim_time_s"], 14.)
+
     def test_lap_video_waits_for_first_stereo_pair_before_moving(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

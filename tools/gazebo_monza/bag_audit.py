@@ -131,10 +131,14 @@ def check_extrinsics(edges):
     return {child: parent for child, (parent, _, _) in edges.items()}
 
 
-def audit_bag(path, start_sim_ns, finish_sim_ns):
+def audit_bag(path, start_sim_ns, finish_sim_ns, *, laps=1, lap_duration_s=None):
     """ROS の画像ヘッダ時刻を使う。成功時は JSON に保存可能な検査結果を返す。"""
     if start_sim_ns <= 0 or finish_sim_ns <= start_sim_ns:
         raise ValueError("周回の発着時刻が不正です")
+    if type(laps) is not int or laps < 1:
+        raise ValueError("監査対象の周回数が不正です")
+    if laps > 1 and (lap_duration_s is None or not math.isfinite(lap_duration_s) or lap_duration_s <= 0):
+        raise ValueError("監査対象の周回時間が不正です")
     bag = Path(path)
     expected, files = inspect_metadata(bag)
     counts = Counter()
@@ -197,8 +201,16 @@ def audit_bag(path, start_sim_ns, finish_sim_ns):
     if before < 0 or after == len(common):
         raise ValueError("左右画像と両 CameraInfo の同時刻の組が周回の両端を含んでいません")
     lap = common[before:after + 1]
-    if not any(start_sim_ns < stamp < finish_sim_ns for stamp in lap):
-        raise ValueError("周回の移動区間内に左右画像と両 CameraInfo の同時刻の組がありません")
+    lap_sample_counts = []
+    lap_start = start_sim_ns
+    for lap_index in range(1, laps + 1):
+        lap_finish = (finish_sim_ns if lap_index == laps else
+                      start_sim_ns + round(lap_index * lap_duration_s * NANO))
+        count = bisect_left(common, lap_finish) - bisect_right(common, lap_start)
+        if count <= 0:
+            raise ValueError(f"{lap_index}周目の移動区間内に左右画像と両 CameraInfo の同時刻の組がありません")
+        lap_sample_counts.append(count)
+        lap_start = lap_finish
     for name, (first, last) in receive_spans.items():
         if first > finish_sim_ns or last < start_sim_ns:
             raise ValueError(f"{name} の bag 記録時刻の区間がシミュレーションの周回時刻と重なりません")
@@ -220,6 +232,7 @@ def audit_bag(path, start_sim_ns, finish_sim_ns):
                          "missing_at_observed_stamps": len(observed) - len(stamps),
                          "missing_slots_estimate": missing_slots(stamp_intervals(stamps))}
     return {"storage_id": "mcap", "file_bytes": files, "message_counts": dict(counts),
+            "laps_requested": laps, "interior_stereo_samples_per_lap": lap_sample_counts,
             "lap_start_sim_ns": start_sim_ns, "lap_finish_sim_ns": finish_sim_ns,
             "first_covering_sim_ns": lap[0], "last_covering_sim_ns": lap[-1],
             "complete_stereo_samples": len(lap), "nominal_sim_hz": TARGET_HZ,

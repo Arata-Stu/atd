@@ -110,13 +110,13 @@ class LapBagTests(unittest.TestCase):
                         patch.object(run, "transforms", return_value=[("base_link", "camera_link", 0)]), \
                         patch.object(subprocess, "Popen", return_value=proc), \
                         patch.object(lap_bag, "wait_for_sample", side_effect=gate), \
-                        patch.object(run, "drive_one_lap", side_effect=drive), \
+                        patch.object(run, "drive_laps", side_effect=drive), \
                         patch.object(lap_bag, "close_recorder", side_effect=lambda p: events.append("close")):
                     if interrupted:
                         with self.assertRaises(KeyboardInterrupt):
-                            run.record_one_lap(children, root, "monza", {"camera": {}}, report, final)
+                            run.record_laps(children, root, "monza", {"camera": {}}, report, final)
                     else:
-                        pending, actual = run.record_one_lap(children, root, "monza", {"camera": {}}, report, final)
+                        pending, actual = run.record_laps(children, root, "monza", {"camera": {}}, report, final)
                         self.assertEqual(actual, timing)
                         self.assertEqual(pending, Path(report["partial_bag"]))
                 self.assertEqual(events[:3], ["clock", ("sample", {"required_edges": {("base_link", "camera_link")}}),
@@ -132,9 +132,11 @@ class LapBagTests(unittest.TestCase):
             final = root / "rosbags/gazebo-spa"
             final.parent.mkdir()
             args = SimpleNamespace(mode="bag", route="lap", circuit="spa", output=root,
-                                   bag_output=final, duration=17., camera_height=.12, camera_pitch_deg=0.)
+                                   bag_output=final, duration=17., speed=None, laps=2,
+                                   camera_height=.12, camera_pitch_deg=0.)
             scene = {"camera": {"height_above_floor_m": .12, "midpoint_forward_from_rear_axle_m": .1,
-                                "pitch_down_deg": 0., "baseline_m": .095, "optical_frames": lap_bag.FRAMES}}
+                                "pitch_down_deg": 0., "baseline_m": .095, "optical_frames": lap_bag.FRAMES},
+                     "trajectory": {"travel_seconds": 17., "laps": 2, "speed_mps": 1.2, "total_travel_seconds": 34.}}
             timing = {"start_sim_ns": 10, "finish_sim_ns": 20}
             processes = []
             def start(command, **kwargs):
@@ -146,13 +148,15 @@ class LapBagTests(unittest.TestCase):
             with patch.object(lap_bag, "check_recorder"), patch.object(run.world, "build", return_value=scene) as build, \
                     patch.object(run.shutil, "which", return_value=None), patch.object(subprocess, "Popen", start), \
                     patch.object(run, "stop_group", side_effect=lambda p: setattr(p, "stopped", True)), \
-                    patch.object(run, "record_one_lap", return_value=(root / ".gazebo123", timing)) as record, \
+                    patch.object(run, "record_laps", return_value=(root / ".gazebo123", timing)) as record, \
                     patch.object(lap_bag, "audit_and_publish", side_effect=audit) as publish:
                 report = {"mode": "bag"}
                 self.assertEqual(run.run(args, report), 0)
             self.assertEqual(len(processes), 5)  # Gazebo, bridge and three static TF publishers.
             self.assertTrue(all("use_sim_time:=true" in p.command for p in processes[1:]))
             self.assertEqual(build.call_args.kwargs["travel_seconds"], 17.)
+            self.assertEqual(build.call_args.kwargs["laps"], 2)
+            self.assertEqual(report["total_travel_seconds"], 34.)
             self.assertFalse(build.call_args.kwargs["repeat"])
             self.assertTrue(build.call_args.kwargs["wait_for_capture"])
             record.assert_called_once()
@@ -167,7 +171,7 @@ class LapBagTests(unittest.TestCase):
             pending = lap_bag.staging_path(final)
             pending.mkdir()
             (pending / "metadata.yaml").write_text("partial")
-            report = {"partial_bag": str(pending)}
+            report = {"partial_bag": str(pending), "laps_requested": 1, "lap_duration_s": 1e-7}
             timing = {"start_sim_ns": 10, "finish_sim_ns": 123}
             audit = MagicMock(side_effect=ValueError("missing right image"))
             with patch.dict(sys.modules, {"bag_audit": SimpleNamespace(audit_bag=audit)}):
@@ -175,7 +179,7 @@ class LapBagTests(unittest.TestCase):
                     lap_bag.audit_and_publish(pending, final, timing, report)
                 self.assertEqual(list(rosbags.rglob("metadata.yaml")), [])
                 self.assertTrue((Path(report["partial_bag"]) / "metadata.yaml").is_file())
-                audit.assert_called_once_with(pending, 10, 123)
+                audit.assert_called_once_with(pending, 10, 123, laps=1, lap_duration_s=1e-7)
                 audit.side_effect = None
                 audit.return_value = {"coverage": "gaps_detected", "complete_stereo_samples": 2, "largest_gap_sim_s": .3,
                                       "file_bytes": {"test.mcap": 1234}}
@@ -185,7 +189,8 @@ class LapBagTests(unittest.TestCase):
                     lap_bag.audit_and_publish(pending, final, timing, report)
                 final.rmdir()
                 lap_bag.audit_and_publish(pending, final, timing, report)
-                self.assertEqual(report, {"bag_audit": audit.return_value, "bag_path": str(final)})
+                self.assertEqual(report, {"bag_audit": audit.return_value, "bag_path": str(final),
+                                          "laps_requested": 1, "lap_duration_s": 1e-7})
                 self.assertEqual(list(rosbags.rglob("metadata.yaml")), [final / "metadata.yaml"])
                 self.assertFalse(pending.parent.exists())
 

@@ -25,6 +25,17 @@ Visualization Manager:
       Size (Pixels): 3
       Color Transformer: FlatColor
       Color: 118; 215; 170
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Loop closure landmarks
+      Enabled: true
+      Topic:
+        Value: /visual_slam/vis/loop_closure_cloud
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 5
+      Color Transformer: FlatColor
+      Color: 255; 100; 218
     - Class: rviz_default_plugins/Path
       Name: SLAM trajectory
       Enabled: true

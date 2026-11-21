@@ -87,6 +87,40 @@ class GazeboHostTests(unittest.TestCase):
             result = subprocess.run([*command, action, "--dry-run", "--route", *args], capture_output=True)
             self.assertNotEqual(result.returncode, 0)
 
+    def test_drive_settings_reach_supported_modes_and_run_measurement(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh")]
+        for mode in ("run", "bag", "map", "video", "serve"):
+            with self.subTest(mode=mode):
+                out = subprocess.check_output([*command, mode, "--dry-run", "--course", "spa",
+                                               "--speed", "1.5", "--laps", "3"], text=True)
+                drives = [shlex.split(line) for line in out.splitlines()
+                          if line.startswith("docker ") and "gazebo_monza/run.py" in line]
+                self.assertEqual(len(drives), 2 if mode == "run" else 1)
+                for args in drives:
+                    for flag, expected in (("--circuit", "spa"), ("--route", "lap"), ("--speed", "1.5")):
+                        self.assertEqual(args[args.index(flag) + 1], expected)
+                    if args[args.index("--mode") + 1] == "benchmark":
+                        self.assertNotIn("--laps", args)
+                    else:
+                        self.assertEqual(args[args.index("--laps") + 1], "3")
+
+    def test_invalid_drive_settings_fail_before_start_and_diagnostics_accept_speed(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh")]
+        cases = [("prepare", "--speed", "2"), ("video", "--speed", "nan"),
+                 ("bag", "--speed", "-1"), ("video", "--speed", "1e500"),
+                 ("map", "--laps", "0"), ("video", "--laps", "1.2"), ("bag", "--laps"),
+                 ("run", "--duration", "2", "--speed", "1"), ("serve", "--route", "chicane", "--laps", "1"),
+                 ("benchmark", "--laps", "2"), ("diagnose", "--laps", "2"), ("video", "--course", "../spa")]
+        for mode, *settings in cases:
+            with self.subTest(mode=mode, settings=settings):
+                result = subprocess.run([*command, mode, "--dry-run", *settings], capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b"docker run", result.stdout)
+        out = subprocess.check_output([*command, "diagnose", "--speed", "3", "--duration", "10", "--dry-run"],
+                                      text=True)
+        self.assertIn("--duration 10", out)
+        self.assertIn("--speed 3", out)
+
     def test_server_uses_same_ipc_as_isaac_ros(self):
         shell = """
             set -eu

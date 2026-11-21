@@ -79,3 +79,29 @@ while not (p/'mapping.cancel').exists(): time.sleep(.01)
                 map_job.coordinate(out, sim, [sys.executable, "-c", "pass"], lambda: None)
             self.assertTrue((out / "mapping.cancel").is_file())
             self.assertFalse((Path(tmp) / "maps").exists())
+
+    def test_two_lap_map_requires_both_laps_and_records_the_drive_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out = self.make_output(root)
+            (out / "scene").mkdir()
+            scene = {"geography": {}, "trajectory": {"laps": 2, "speed_mps": 3.0}}
+            (out / "scene/scene.json").write_text(json.dumps(scene))
+            timing = {"start_sim_ns": 10, "finish_sim_ns": 1000}
+            (out / "lap.complete.json").write_text(json.dumps(timing))
+            db = out / "map-staging/nvidia/cuvslam_map"
+            db.mkdir(parents=True)
+            (db / "landmarks.mdb").write_bytes(b"map")
+            saved = {"status": "complete", "tracking": timing, "databases": {"landmarks.mdb": 3}}
+            (out / "mapping.saved.json").write_text(json.dumps(saved))
+            motion = {"lap_completed": True, "laps_requested": 2, "laps_completed": 1}
+            report = {"status": "complete", "circuit": "spa", "motion": motion}
+            (out / "run.json").write_text(json.dumps(report))
+            with self.assertRaisesRegex(RuntimeError, "全周"):
+                map_job.verify_and_publish(root, out, "spa")
+            self.assertFalse((root / "maps").exists())
+            motion["laps_completed"] = 2
+            (out / "run.json").write_text(json.dumps(report))
+            target = map_job.verify_and_publish(root, out, "spa")
+            metadata = json.loads((target / "mapping.json").read_text())
+            self.assertEqual(metadata["lap"], {**timing, "speed_mps": 3.0, "laps_completed": 2})

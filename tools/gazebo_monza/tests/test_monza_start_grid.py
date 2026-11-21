@@ -59,8 +59,55 @@ class MonzaStartGridTest(unittest.TestCase):
                     lateral = sum((p-o)*v for p, o, v in zip((x, y), self.straight.origin,
                                                             self.straight.left))
                     self.assertGreater(lateral if name.startswith('pit_stands') else -lateral, 1.3)
-        self.assertLessEqual(len(self.batches), 18)
-        self.assertLess(sum(map(len, self.batches.values())), 2500)
+        self.assertLessEqual(len(self.batches), 23)
+        self.assertLess(sum(map(len, self.batches.values())), 2750)
+
+    def test_pit_entry_island_and_bollard_end_at_the_mapped_wall(self):
+        road = [self.edges['left'], self.edges['right']]
+        island, = self.batches['pit_access_blue']
+        start, end = min(map(self.straight.station, island)), max(map(self.straight.station, island))
+        self.assertAlmostEqual(start, monza_start_grid.PIT_ENTRY_DASHES[1])
+        self.assertAlmostEqual(end, self.straight.station(geography.project(*monza_start_grid.PIT_WALL_TIP)))
+        self.assertTrue(all(not scenery._inside(x, y, road) for x,y,z in island))
+        post = self.batches['pit_entry_bollard']
+        self.assertTrue(all(abs(self.straight.station(p)-start) < .018 for face in post for p in face))
+        self.assertTrue(.10 < max(p[2] for face in post for p in face) < .11)
+        self.assertTrue(all(not scenery._inside(x, y, road) for face in post for x,y,z in face))
+
+    def test_track_edge_switches_to_dashes_only_at_both_pit_accesses(self):
+        right = self.edges['right']
+        holes = []
+        for a, b in zip(right, right[1:] + right[:1]):
+            s0, s1 = self.straight.station(a), self.straight.station(b)
+            spans = list(self.straight.right_paint_spans(a, b))
+            covered_to = 0.
+            for begin, end in [*spans, (1., 1.)]:
+                if begin > covered_to + 1e-8:
+                    holes.append(tuple(s0+f*(s1-s0) for f in (covered_to,begin)))
+                covered_to = end
+        for lo, hi in holes:
+            self.assertTrue(any(a-1e-8 <= lo < hi <= b+1e-8 for a,b in
+                                (monza_start_grid.PIT_ENTRY_DASHES, monza_start_grid.PIT_EXIT_DASHES)))
+        for a,b in (monza_start_grid.PIT_ENTRY_DASHES, monza_start_grid.PIT_EXIT_DASHES):
+            missing = sum(hi-lo for lo,hi in holes if a-1e-8 <= lo < hi <= b+1e-8)
+            self.assertAlmostEqual(missing/(b-a), .5, delta=.02)
+
+    def test_both_speed_limit_boards_face_oncoming_pit_traffic(self):
+        rings = self.batches['pit_speed_limit_red']
+        centers = []
+        for board in (rings[:16], rings[16:]):
+            centers.append(centroid([p for face in board for p in face]))
+            for face in board:
+                a,b,c = face[:3]
+                nx = (b[1]-a[1])*(c[2]-a[2]) - (b[2]-a[2])*(c[1]-a[1])
+                ny = (b[2]-a[2])*(c[0]-a[0]) - (b[0]-a[0])*(c[2]-a[2])
+                self.assertLess(nx*self.straight.forward[0]+ny*self.straight.forward[1], 0)
+                self.assertTrue(all(not scenery._inside(x,y,[self.edges['left'],self.edges['right']])
+                                    for x,y,z in face))
+        for center in centers:
+            self.assertAlmostEqual(self.straight.station(center), monza_start_grid.PIT_SPEED_LIMIT_STATION,
+                                   delta=.03)
+        self.assertAlmostEqual(sum((a-b)*n for a,b,n in zip(*centers,self.straight.left)), .81, delta=.01)
 
     def test_podium_is_raised_over_pit_wall_and_footbridge_reaches_garages(self):
         concrete = self.batches['pit_podium_concrete']

@@ -6,9 +6,10 @@ lane drawing: pole on the driver's left. Individual paint, repairs, garage and
 grandstand construction details are approximations based on the reference view.
 """
 from bisect import bisect_right
-from math import cos, dist, pi, sin
+from math import ceil, cos, dist, floor, pi, sin
 
 from geography import LAP_START_LON_LAT, project
+from monza_pit_wall import grid_station
 from monza_trackside import _beam, _post
 from scenery import _box
 
@@ -40,6 +41,20 @@ PODIUM_LON_LAT = (
 )
 PODIUM_GARAGE_ENTRANCE = (9.2811574, 45.6164842)
 
+# FIA 2026 Italian GP pit-lane drawing p.3 and F3 competition notes §§12,16
+# show the dotted track edge, blue entry island, yellow bollard at SC1, and
+# the exit line ending at SC2 by the 200 m boards. Stations are RC metres
+# from the starting lights along the home straight. The points where way
+# 38168747 (7 m assumed width) splits from/rejoins the GP edge locate the
+# dotted lines. The mapped upstream pit-wall endpoint fixes the island tail.
+# https://www.fia.com/system/files/decision-document/2026_italian_grand_prix_-_competition_notes_-_circuit_map_pit_lane_drawing_emergency_exits_map_and_red_zone.pdf
+# https://www.fia.com/system/files/documents/doc_10_-_2026_monza_event_-_f3_monaco_competition_notes_2026_v2.pdf
+PIT_ENTRY_DASHES = (-53.0, -45.35)
+PIT_EXIT_DASHES = (7.7, 18.4)
+PIT_WALL_TIP = (9.2808511, 45.6153406)  # OSM node 2505270990 on way 243090150 v2
+PIT_EXIT_SC2 = 41.2  # 200 m before T1 (~61.2 RC m)
+PIT_SPEED_LIMIT_STATION = -38.7  # Between SC1 and control line in the FIA pit plan
+
 
 class PitStraight:
     """Stations along the grid and pit frontage, spanning the seam in both OSM rings."""
@@ -54,10 +69,13 @@ class PitStraight:
         self.left = (-dy / length, dx / length)
         self.sides = []
         for edge in (left, right):
-            points = [edge[-1]]
+            back = -1
+            while self.station(edge[back]) > -56.:
+                back -= 1
+            points = edge[back:]
             for point in edge:
                 points.append(point)
-                if self.station(point) > 4:  # northern end of the Hospitality Building
+                if self.station(point) > PIT_EXIT_SC2:
                     break
             self.sides.append(([self.station(point) for point in points], points))
 
@@ -75,6 +93,123 @@ class PitStraight:
         left, right = self.sides_at(s)
         return (*(0.5 * (x + y) + offset * n for x, y, n in zip(left, right, self.left)), z)
 
+    def right_paint_spans(self, a, b):
+        """Painted fractions of a right GP edge, including the gaps at pit accesses."""
+        s0, s1 = self.station(a), self.station(b)
+        lateral = sum((p-o)*v for p, o, v in zip(a, self.origin, self.left))
+        if s1 <= s0 or abs(lateral) > 4.:
+            yield 0., 1.
+            return
+        for start, end in (PIT_ENTRY_DASHES, PIT_EXIT_DASHES):
+            low, high = max(start, s0), min(end, s1)
+            if high <= low:
+                continue
+            span = s1 - s0
+            if s0 < low:
+                yield 0., (low-s0)/span
+            # Dash dimensions estimated from the pit entry and exit photographs.
+            for i in range(floor((low-start)/.36), ceil((high-start)/.36)):
+                lo = max(low, start + i*.36)
+                hi = min(high, start + i*.36 + .18)
+                if hi > lo:
+                    yield (lo-s0)/span, (hi-s0)/span
+            if s1 > high:
+                yield (high-s0)/span, 1.
+            return
+        yield 0., 1.
+
+
+def _speed_limit_signs(straight, faces, ink, red):
+    """Two freestanding 80 boards face the approach on opposite pit-lane edges."""
+    # Locate the sign pair on the same centreline as the rendered pit road.
+    lane = [project(*xy) for xy in PIT_LANE_LON_LAT]
+    stations = [straight.station(p) for p in lane]
+    i = bisect_right(stations, PIT_SPEED_LIMIT_STATION) - 1
+    a, b = lane[i:i+2]
+    f = (PIT_SPEED_LIMIT_STATION - stations[i]) / (stations[i+1] - stations[i])
+    x, y = (p + f*(q-p) for p, q in zip(a, b))
+    dx, dy = ((q-p)/dist(a, b) for p,q in zip(a, b))
+    # The two boards in the FIA pit-lane photo stand beside the transverse
+    # line at the beginning of the limit. The line spans the 7 m pit road.
+    faces.append([(x+u*dy+t*dx, y-u*dx+t*dy, .0007)
+                  for u,t in ((.35, -.008), (.35, .008), (-.35, .008), (-.35, -.008))])
+    for side in (-1, 1):
+        cx, cy = x + side*.405*dy, y - side*.405*dx
+        def point(u, z, ahead):
+            return cx + u*dy + ahead*dx, cy - u*dx + ahead*dy, z
+        faces.extend(_beam(point(-.052, 0, 0)[:2], point(.052, 0, 0)[:2], .008, .001, .108))
+        # Faceted ring and digits are visible from the pit-entry approach only.
+        for batch, u, z, rx, rz, width in (
+                (red, 0., .055, .041, .041, .006),
+                (ink, -.012, .064, .008, .009, .0026),
+                (ink, -.012, .046, .009, .011, .0026),
+                (ink, .011, .055, .009, .019, .0028)):
+            def loop(t, r):
+                return point(u+(rx-r)*cos(t), z+(rz-r)*sin(t), -.0046)
+            for index in range(16):
+                t0, t1 = index*pi/8, (index+1)*pi/8
+                batch.append([loop(t0,width), loop(t0,0), loop(t1,0), loop(t1,width)])
+
+
+def _pit_access(straight):
+    """Trackside evidence from FIA photographs; widths, tapers and height estimated."""
+    white, blue, dark, yellow, red = [], [], [], [], []
+    def edge(s, offset=0., z=.0010):
+        right = list(straight.sides_at(s))[1]
+        return (*(p + n*offset for p, n in zip(right, straight.left)), z)
+
+    def band(first, last, width=.015):
+        # Input in driving order. The normal points towards the driver's left.
+        dx, dy = last[0]-first[0], last[1]-first[1]
+        scale = width/(2*dist(first[:2], last[:2]))
+        return [(x+side*dy*scale, y-side*dx*scale, z) for (x,y,z), side
+                in ((first,1), (last,1), (last,-1), (first,-1))]
+
+    tip = project(*PIT_WALL_TIP)
+    start, stop = PIT_ENTRY_DASHES[1], straight.station(tip)
+    nose = edge(start, -.020)
+    # Outside the GP road. End the blue at the crash cushion in front of
+    # the wall, leaving the pit lane itself clear for a car to pass.
+    left, right = edge(stop, -.04), edge(stop, -.53)
+    blue.append([(x, y, .0003) for x, y, _ in (nose, right, left)])
+    white.extend((band(nose, right), band(nose, left)))
+
+    def cross_line(s, past_edge=0.):
+        inside = list(straight.sides_at(s))[0]
+        near, far = edge(s, -past_edge, .0014), (*inside, .0014)
+        white.append(band(near, far, .014))
+    cross_line(start, .70)  # SC1 crosses both the GP road and pit entry.
+    cross_line(PIT_EXIT_SC2)
+
+    # The FIA photo shows a second, continuous line on the GP side of the
+    # dashed edge; in 2026 it ends at SC2. Blend onto the road from the pit wall.
+    exit_offsets = ((2.12, -.62), (6.53, -.21), (10.5, .11), (14.43, .32),
+                    (18.4, .34), (PIT_EXIT_SC2, .34))
+    points = [edge(s, d) for s,d in exit_offsets]
+    white.extend(band(a, b) for a,b in zip(points, points[1:]))
+
+    # Ribbed flexible yellow post on the tip of the island. The dark covered
+    # crash cushion behind it is visible in the F1 pit-lane photograph.
+    x, y = nose[:2]
+    rings = []
+    for r, z in ((.017,.001),(.017,.008),(.012,.009),(.012,.035),(.014,.037),
+                 (.014,.042),(.012,.044),(.012,.075),(.014,.077),(.014,.082),
+                 (.012,.084),(.012,.102),(.010,.107)):
+        rings.append([(x+r*cos(j*pi/4), y+r*sin(j*pi/4), z) for j in range(8)])
+    for lower, upper in zip(rings, rings[1:]):
+        yellow.extend([lower[i],lower[(i+1)%8],upper[(i+1)%8],upper[i]] for i in range(8))
+    yellow.append(rings[-1])
+    dx, dy = straight.forward
+    for d in (-.085, .085):
+        x, y = (p+n*d for p,n in zip(tip, straight.left))
+        _post(dark, x-.09*dx, y-.09*dy, dx, dy, .166, .25, .001, .155)
+    _speed_limit_signs(straight, white, dark, red)
+    yield 'pit_access_white', (.85,.86,.82), white
+    yield 'pit_access_blue', (.055,.36,.66), blue
+    yield 'pit_entry_bollard', (.94,.72,.09), yellow
+    yield 'pit_access_dark', (.085,.085,.085), dark
+    yield 'pit_speed_limit_red', (.73,.035,.030), red
+
 
 def _road_details(straight):
     white, yellow, repairs = [], [], []
@@ -91,7 +226,7 @@ def _road_details(straight):
     # 22 staggered slots, full-scale front-to-front pitch 8 m. The white
     # line turns back on both sides. Yellow guides extend to the driver's right.
     for slot in range(22):
-        s = -.24 - slot * .8
+        s = grid_station(slot + 1)
         u = .30 if slot % 2 == 0 else -.30
         white.append(stripe(s - .009, s, u - .125, u + .125))
         for side in (u - .125, u + .116):
@@ -307,6 +442,7 @@ def details(edges, data):
     """Yield named material batches for the Monza GP lap in the existing world frame."""
     straight = PitStraight(edges)
     yield from _road_details(straight)
+    yield from _pit_access(straight)
     yield from _pit_details(straight, data)
     yield from _podium(data)
     yield from _stand_details(data)

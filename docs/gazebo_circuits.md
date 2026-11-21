@@ -10,14 +10,24 @@ Notebook ホストの `atd gazebo` から、F1TENTH の [2D ベンチマーク](
 
 NVIDIA GPU を備えた Ubuntu Notebook のホストで実行する。Gazebo 専用イメージの初回準備と、録画・実時間レート診断の詳細は [Gazebo セットアップ・操作手順](gazebo_monza.md) を参照する。
 
-走行時は checkout 内の地理データと素材からシーンを生成する。オフラインで地図を作る場合は、下記の[1周の rosbag 記録](#1周でcuvslam地図を作る)から始める。車載動画を確認する場合は `atd` → `gazebo` → `video-lap`、連続配信では `serve-lap` でコースを選べる。
+走行時は checkout 内の地理データと素材からシーンを生成する。対話端末で `atd gazebo` を開き、bag 記録、動画、地図作成、配信などの操作を選ぶ。全周の操作ではコース・速度・周回数を設定できる。コマンドで直接指定する場合も同じ設定を使える。
 
 ```bash
 atd gazebo list
-atd gazebo video --circuit spa
+atd gazebo bag --course monza --speed 2.5 --laps 2
+atd gazebo video --course spa --speed 3 --laps 3
 ```
 
-Spa を一周し、`data/results/runs/gazebo/spa/<run-id>/` に `stereo.mp4`、`left.mp4`、`right.mp4` を保存する。Notebook 用の results 保存先を変更した場合は、その下の `runs/gazebo/<コースID>/` が保存先になる。Monza は従来の `runs/gazebo_monza/` を使用し、動画では既定で第1シケインを走る。全周動画は `atd gazebo video --circuit monza --route lap` で作成する。
+Monza の例は 1/10 コース上の **2.5 m/s（シミュレーション時刻）で2周**して、1本の bag に記録する。約579.2 m の経路なので1周は約232秒、2周は約463秒。Spa の例は3周を通した `stereo.mp4`、`left.mp4`、`right.mp4` を `data/results/runs/gazebo/spa/<run-id>/` に保存する。Notebook 用の results 保存先を変更した場合はその下の `runs/gazebo/<コースID>/`、Monza は `runs/gazebo_monza/` を使用する。
+
+| 引数 | 指定方法と既定の動作 |
+|---|---|
+| `--course ID` | `atd gazebo list` に表示される20コースから選ぶ。既定は `monza`。既存の `--circuit ID` も使える。 |
+| `--speed m/s` | カメラ台が走行軌跡に沿って進む速さ。省略時は従来のコース別設定を使う。Monza 全周の既定は1周240シミュレーション秒、約2.41 m/s。 |
+| `--laps N` | 正の整数。指定すると Monza でも自動で全周を選ぶ。動画・bag・地図は最終周のゴールで完了する。全周の `serve` は省略すると連続周回、指定するとその周回数で配信を終了する。 |
+| `--duration 秒` | 動画・bag・地図では1周または選択区間を走るシミュレーション秒数。速さを決めるには `--speed` とどちらか一方を使う。`benchmark`・`diagnose` では実時間の計測窓を表し、走行速度と別々に指定できる。 |
+
+`video`・`run`・`serve` で Monza を選び、ルート・周回数を省略すると、従来どおり第1シケインの区間になる。`run` は動画の後にベンチマークを別途実行する。周回数は動画に適用され、ベンチマークは実時間の計測窓で終わる。
 
 Montreal で cuVSLAM を試すときは、下記を別々の端末から起動する。最初の端末は左右の画像と CameraInfo の購読がそろうまでスタートで待つ。2 番目の端末は準備済みの Notebook 側 Isaac ROS 開発環境を使用する。
 
@@ -45,7 +55,7 @@ done
 
 ### 1周を rosbag に記録して後で処理する
 
-**Ubuntu Notebook ホスト**で Gazebo を1周だけ走らせ、左右の生画像（640 × 480、mono8）、左右の CameraInfo、車体とカメラの固定 TF（`/tf_static`）の5トピックを MCAP に記録する。記録時刻は Gazebo の `/clock` に従う。初めて `bag` を使うときは、既存の Gazebo イメージがある場合も、オンラインで一度 `prepare` して rosbag2 と MCAP の依存を用意する。
+**Ubuntu Notebook ホスト**で Gazebo を指定周回（既定1周）走らせ、左右の生画像（640 × 480、mono8）、左右の CameraInfo、車体とカメラの固定 TF（`/tf_static`）の5トピックを MCAP に記録する。記録時刻は Gazebo の `/clock` に従う。初めて `bag` を使うときは、既存の Gazebo イメージがある場合も、オンラインで一度 `prepare` して rosbag2 と MCAP の依存を用意する。
 
 ```bash
 atd gazebo prepare
@@ -54,7 +64,7 @@ atd gazebo bag --circuit monza
 
 Monza の既定は240シミュレーション秒。左右の画像本体だけで約13.27 GBになるので、記録先の SSD に余裕を確保する。他のコースは `atd gazebo list` に表示される ID を指定する。記録と検査が完了すると、標準配置では `data/record/rosbags/gazebo-<コースID>-<run-id>/` に bag が現れる。Notebook の記録先を変えている場合は、その直下の `rosbags/` に入る。
 
-検査ではカメラ台の1周を実測姿勢で確認し、保存済みの左右画像と両 CameraInfo が同じ時刻で発着を覆うこと、固定 TF の基線と向きが正しいことを確認する。途中で同時刻の組が0.25シミュレーション秒を超えて途切れた場合は、その bag を保持し、端末と run ディレクトリの `run.json` に欠落を表示する。記録を中断した場合や必須入力が欠けていた場合は、`run.json` の `partial_bag` から未完成のデータを確認できる。
+検査ではカメラ台が指定した回数だけ周回したことを実測姿勢で確認し、保存済みの左右画像と両 CameraInfo が同じ時刻で発着を覆うこと、固定 TF の基線と向きが正しいことを確認する。途中で同時刻の組が0.25シミュレーション秒を超えて途切れた場合は、その bag を保持し、端末と run ディレクトリの `run.json` に欠落を表示する。記録を中断した場合や必須入力が欠けていた場合は、`run.json` の `partial_bag` から未完成のデータを確認できる。
 
 **後処理は Notebook の Isaac ROS 開発コンテナ**で行う。ホストで `atd dev` を実行して入室し、準備済みなら次を実行する。Web UI の初回準備には `atd-web prepare` を使う。[Web と ROS パッケージの準備](../apps/web/README.md#起動)
 
@@ -80,7 +90,7 @@ atd dev
 atd build --packages-up-to atd_bringup
 ```
 
-**別端末の Notebook ホスト**で次を実行する。Gazebo とマッピング用の cuVSLAM が連携し、コースを1周して地図を保存する。Monza も `map` では既定で GP コースを1周する。対話操作では `atd` → `gazebo` → `map` でコースを選べる。
+**別端末の Notebook ホスト**で次を実行する。Gazebo とマッピング用の cuVSLAM が連携し、コースを1周して地図を保存する。Monza も `map` では既定で GP コースを1周する。対話操作では `atd gazebo` → `map` でコース・速度・周回数を選べる。複数周でも最終周のゴールで地図を1回保存する。
 
 ```bash
 atd gazebo map --circuit monza
@@ -97,7 +107,7 @@ atd gazebo map --circuit monza
 | 目的 | Gazebo のステレオ描画に加わる処理 | 保存する内容 |
 |---|---|---|
 | 景観を見比べる | `video` は同時刻の左右ペアを30 fpsにそろえ、CPUで左右をH.264圧縮する。録画後に横並び動画もエンコードする | 左・右・横並びのMP4 |
-| 同じ観測で設定を変えて再解析する | `bag` は ROS メッセージを MCAP に書き込み、cuVSLAM の GPU 処理は記録後に実行する | 左右の生画像・CameraInfo・固定 TF をシミュレーション時刻で収録した1周の rosbag |
+| 同じ観測で設定を変えて再解析する | `bag` は ROS メッセージを MCAP に書き込み、cuVSLAM の GPU 処理は記録後に実行する | 左右の生画像・CameraInfo・固定 TF をシミュレーション時刻で収録した指定周回分の rosbag |
 | 1周分の地図を得る | `map` は描画と cuVSLAM の特徴追跡・地図更新を並行して実行し、ゴールで地図を保存する | cuVSLAM 地図と検証記録。動画生成・bag記録は省く |
 
 640 × 480、1画素1 byte、左右2枚、90組/シミュレーション秒を全数記録すると、**画像本体だけで55.3 MB/シミュレーション秒、Monza の240秒で約13.27 GB（12.36 GiB）**。シリアライズや索引・TFは別途加わる。実時間の書き込み速度はシミュレーションの進行率に比例する。同じ Notebook で3経路の CPU・GPU 使用率や処理時間を比較した値は未計測。

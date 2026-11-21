@@ -53,6 +53,7 @@ class ReplaySessionTests(unittest.TestCase):
         displays = yaml.safe_load(self.config.read_text())['Visualization Manager']['Displays']
         self.assertEqual({d['Topic']['Value'] for d in displays if d['Enabled'] and 'Topic' in d},
                          {'/visual_slam/tracking/slam_path', '/visual_slam/vis/landmarks_cloud',
+                          '/visual_slam/vis/loop_closure_cloud',
                           '/camera/camera/infra1/image_rect_raw', '/camera/camera/infra2/image_rect_raw'})
         eyes = [d['Topic'] for d in displays if d['Class'] == 'rviz_default_plugins/Image']
         self.assertEqual(len(eyes), 2)

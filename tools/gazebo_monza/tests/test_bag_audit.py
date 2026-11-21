@@ -69,11 +69,18 @@ class AuditTests(unittest.TestCase):
         return {"storage_identifier": "mcap", "relative_file_paths": [self.file.name],
                 "message_count": len(messages), "topics_with_message_count": rows}
 
-    def audit(self, messages, start=2 * STEP, finish=6 * STEP, meta=None, clock=receipt_time):
+    def audit(self, messages, start=2 * STEP, finish=6 * STEP, meta=None, clock=receipt_time, **options):
         stored = ((name, msg, clock(name, msg)) for name, msg in messages)
         with patch.object(audit, "load_bag_metadata", return_value=self.metadata(messages) if meta is None else meta), \
              patch.object(audit, "read_messages", return_value=stored):
-            return audit.audit_bag(self.bag, start, finish)
+            return audit.audit_bag(self.bag, start, finish, **options)
+
+    def test_requires_stereo_inside_each_requested_lap(self):
+        options = {"start": 2 * STEP, "finish": 8 * STEP, "laps": 2, "lap_duration_s": 3 * STEP / audit.NANO}
+        result = self.audit(recording(range(1, 10)), **options)
+        self.assertEqual(result["interior_stereo_samples_per_lap"], [2, 2])
+        with self.assertRaisesRegex(ValueError, "2周目"):
+            self.audit(recording([1, 2, 3, 4, 5, 8, 9]), **options)
 
     def test_lap_counts_use_exact_header_stamps_and_bracket_both_edges(self):
         messages = recording([1, 2, 3, 4, 6, 7, 8])

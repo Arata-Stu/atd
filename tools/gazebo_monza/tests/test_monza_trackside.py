@@ -1,6 +1,6 @@
 """Geometry-only checks for Monza's full-lap roadside structures."""
 
-from math import cos, hypot, sin
+from math import cos, dist, hypot, sin
 from pathlib import Path
 import sys
 import unittest
@@ -118,6 +118,48 @@ class MonzaTracksideTest(unittest.TestCase):
         self.assertAlmostEqual(max(z for face in self.meshes['monza_pit_wall_green']
                                    for _, _, z in face), .13)
         self.assertTrue(self.meshes['monza_historic_wall'])
-        self.assertLessEqual(len(self.meshes), 12)
-        self.assertLess(sum(len(faces) for faces in self.meshes.values()), 30000)
+        # The wall adds four batches for wire, frames, gate leaves and exit paint.
+        self.assertLessEqual(len(self.meshes), 18)
+        wall_faces = sum(len(faces) for name, faces in self.meshes.items() if name.startswith('pit_wall_'))
+        self.assertLess(sum(map(len, self.meshes.values())) - wall_faces, 30000)
+        self.assertLess(wall_faces, 1300)
         self.assertFalse(list(monza_trackside.geometry(self.edges, self.scenery, lap=False)))
+
+    def test_main_straight_overlaps_are_on_track_facing_blades_at_tagged_height(self):
+        overlaps = self.meshes['monza_lap_steel']
+        for station, expected_heights in ((8, {'left': .12}), (30, {'left': .11, 'right': .11})):
+            _, x, y, heading = min(self.poses, key=lambda p: abs(p[0] - station))
+            seen = {side: [] for side in expected_heights}
+            for face in overlaps:
+                a, b, c = face[:3]
+                dx, dy = a[0] - x, a[1] - y
+                if abs(cos(heading) * dx + sin(heading) * dy) > 1.:
+                    continue
+                side = 'left' if cos(heading) * dy - sin(heading) * dx > 0 else 'right'
+                # Cross product's horizontal projection must face the racing lane.
+                nx = (b[1]-a[1])*(c[2]-a[2]) - (b[2]-a[2])*(c[1]-a[1])
+                ny = (b[2]-a[2])*(c[0]-a[0]) - (b[0]-a[0])*(c[2]-a[2])
+                self.assertGreater(nx * -dx + ny * -dy, 0.)
+                seen[side].extend(z for _, _, z in face)
+            for side, height in expected_heights.items():
+                self.assertTrue(seen[side], (station, side))
+                self.assertAlmostEqual(max(seen[side]), height * .98)
+
+    def test_vehicle_refuge_has_painted_end_and_open_overlap(self):
+        rails = [(p, pts) for p, pts in self.items.lines('guard_rail') if p.get('refuge')]
+        (props, first), (_, second) = rails
+        self.assertEqual(props['vehicle_exit_band_rc_m'], .20)
+        _, x, y, heading = min(self.poses, key=lambda p: abs(p[0] - 40.5))
+        end, restart = first[-1], second[0]
+        self.assertGreater(cos(heading)*(end[1]-y) - sin(heading)*(end[0]-x), 1.)
+        gap = restart[0]-end[0], restart[1]-end[1]
+        self.assertAlmostEqual(-sin(heading)*gap[0] + cos(heading)*gap[1], .45, delta=.01)
+        self.assertLess(cos(heading)*gap[0] + sin(heading)*gap[1], 0)
+        for _, rings in self.scenery.polygons('grandstand'):
+            for a, b in zip(second, second[1:]):
+                self.assertFalse(scenery._inside(*a, rings) or scenery._inside(*b, rings))
+                self.assertFalse(scenery._crosses_ring(a, b, rings[0]))
+        faces = self.meshes['monza_refuge_orange']
+        self.assertEqual(len(faces), 8)
+        for face in faces:
+            self.assertAlmostEqual(dist(face[0], face[1]), .20)

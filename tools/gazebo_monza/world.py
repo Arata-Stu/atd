@@ -322,7 +322,7 @@ def cameras(link, height, pitch, circuit, far):
 
 
 def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
-          circuit="monza", route=None, wait_for_capture=False, speed_mps=None, laps=1):
+          circuit="monza", route=None, wait_for_capture=False, speed_mps=None, laps=1, record_ground_truth=False):
     if type(laps) is not int or laps < 1:
         raise ValueError("laps must be a positive integer")
     if route is None and laps > 1:
@@ -414,6 +414,8 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                    "width": 640, "height": 480, "rate_hz": 90, "optical_frames": OPTICAL_FRAMES,
                    "mount_source": "Simulation assumption; actual lens height, pose and intrinsics unmeasured."},
     }
+    if record_ground_truth:
+        scene["trajectory"]["trace_interval_s"] = min(.05, travel_seconds / 120)
     output.mkdir(exist_ok=True, parents=True)
     scene_file = output / "scene.json"
     scene_file.write_text(json.dumps(scene, indent=2) + "\n")

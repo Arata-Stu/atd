@@ -115,14 +115,21 @@ def close_recorder(proc):
         raise RuntimeError(f"MCAP の保存に失敗しました（recorder 終了値 {code}）。recorder.log を確認してください")
 
 
-def audit_and_publish(pending, final, timing, report):
+def audit_and_publish(pending, final, timing, report, trace):
     from bag_audit import audit_bag
+    # Gazebo 専用イメージから、replay と同じ保存形式を使う。
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros2_ws/src/atd_bringup"))
+    try:
+        from atd_bringup.replay_gt_source import store_ground_truth
+    finally:
+        sys.path.pop(0)
 
     laps = report["laps_requested"]
     print(f"{laps}周分のステレオ入力と固定TFを保存済み MCAP で検査しています。", flush=True)
     audit = audit_bag(pending, timing["start_sim_ns"], timing["finish_sim_ns"],
                       laps=laps, lap_duration_s=report["lap_duration_s"])
     report["bag_audit"] = audit
+    store_ground_truth(pending, trace, audit["file_bytes"])
     check_destination(final)
     pending.rename(final)
     del report["partial_bag"]

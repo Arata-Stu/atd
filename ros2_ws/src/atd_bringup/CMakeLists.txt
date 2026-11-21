@@ -4,7 +4,8 @@ find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(atd_bringup)
-install(PROGRAMS scripts/choose_localization_map scripts/esc_trial_session scripts/gazebo_lap_map scripts/replay_vslam
+install(PROGRAMS scripts/choose_localization_map scripts/esc_trial_session scripts/gazebo_lap_map
+  scripts/replay_vslam scripts/replay_ground_truth
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
@@ -15,7 +16,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(autonomous_rev6 test/test_autonomous_rev6.py)
   ament_add_pytest_test(bringup_composition test/test_composition.py APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   ament_add_pytest_test(gazebo_lap_mapping test/test_lap_mapping.py APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
-  foreach(test_name replay_inputs replay_readiness replay_vslam)
+  foreach(test_name replay_inputs replay_readiness replay_vslam replay_gt_source replay_gt_geometry replay_gt_node)
     ament_add_pytest_test(${test_name} test/test_${test_name}.py APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   endforeach()
 endif()

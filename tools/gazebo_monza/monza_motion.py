@@ -33,6 +33,7 @@ class MonzaMotion:
         self.finished = False
         self.start_s = 0.0
         self.laps = 1
+        self.trace_interval_s = None
 
     def configure(self, entity, sdf, ecm, event_mgr):
         from gz.sim import Link, Model
@@ -48,6 +49,7 @@ class MonzaMotion:
         self.distances = [point[0] for point in self.samples]
         self.duration = trajectory["travel_seconds"]
         self.repeat = trajectory["repeat"]
+        self.trace_interval_s = trajectory.get("trace_interval_s")
         self.laps = trajectory.get("laps", 1)
         self.closed = trajectory.get("route") == "lap"
         self.start_s = None if trajectory.get("wait_for_capture") else 0.0
@@ -98,9 +100,8 @@ class MonzaMotion:
                     self.capture_finish.touch()
                 elif seconds > self.start_s + self.duration * self.laps + 1:
                     self.capture_finish.with_suffix(".failed").touch()
-        interval = min(.5, self.duration / (120 if self.closed else 8))
         if seconds >= self.next_trace_s:
-            self.next_trace_s += interval
+            self.next_trace_s += self.trace_interval_s or min(.5, self.duration / (120 if self.closed else 8))
 
 
 def get_system():

@@ -8,6 +8,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -61,6 +62,7 @@ class MonzaWorldTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "scene"
             scene = world.build(output, height=.135, pitch_deg=4)
+            self.assertNotIn("trace_interval_s", scene["trajectory"])
             sdf = ET.parse(output / "world.sdf")
             rig = sdf.find(".//model[@name='d455_rig']")
             left, right = rig.findall("./link/sensor")
@@ -167,8 +169,10 @@ class MonzaWorldTest(unittest.TestCase):
 
     def test_speed_and_laps_use_the_actual_route_length(self):
         with tempfile.TemporaryDirectory() as tmp:
-            scene = world.build(tmp, circuit="spa", speed_mps=3.5, laps=3, wait_for_capture=True)
+            scene = world.build(tmp, circuit="spa", speed_mps=3.5, laps=3, wait_for_capture=True,
+                                record_ground_truth=True)
             route = scene["trajectory"]
+            self.assertEqual(route["trace_interval_s"], .05)
             self.assertEqual(route["route"], "lap")
             self.assertEqual(route["laps"], 3)
             self.assertEqual(route["speed_mps"], 3.5)
@@ -248,6 +252,28 @@ class MonzaWorldTest(unittest.TestCase):
             self.assertEqual([s["sim_time_s"] for s in samples], [.01, .51])
             self.assertEqual(samples[-1]["x_m"], 1.3)
             self.assertEqual(samples[-1]["yaw_rad"], -.4)
+
+    def test_bag_trace_targets_twenty_samples_per_sim_second_at_physics_ticks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scene_file = Path(tmp) / "scene.json"
+            scene_file.write_text(json.dumps({"trajectory": {
+                "samples_s_x_y_yaw": [[0, 0, 0, 0], [1, 1, 0, 0]], "travel_seconds": 120,
+                "repeat": False, "trace_interval_s": .05, "route": "lap",
+            }}))
+            measured = SimpleNamespace(x=lambda: 2., y=lambda: 1., yaw=lambda: .3)
+            model = SimpleNamespace(canonical_link=lambda _: None)
+            link = SimpleNamespace(world_pose=lambda _: measured)
+            sim = SimpleNamespace(Model=lambda _: model, Link=lambda _: link)
+            motion = MonzaMotion()
+            with patch.dict(sys.modules, {"gz.sim": sim, "gz.math": SimpleNamespace(Pose3d=object)}):
+                motion.configure(None, SimpleNamespace(get_string=lambda _: scene_file), None, None)
+            for i in range(180):
+                motion.post_update(SimpleNamespace(sim_time=timedelta(seconds=i / 90), paused=False), None)
+            samples = [json.loads(line) for line in motion.trace.read_text().splitlines()]
+            self.assertEqual(len(samples), 40)
+            self.assertEqual({s["x_m"] for s in samples}, {2.})
+            ticks = [round(s["sim_time_s"] * 90) for s in samples]
+            self.assertEqual({b - a for a, b in zip(ticks, ticks[1:])}, {4, 5})
 
 
 if __name__ == "__main__":

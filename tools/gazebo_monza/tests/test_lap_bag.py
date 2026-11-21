@@ -159,8 +159,9 @@ class LapBagTests(unittest.TestCase):
             self.assertEqual(report["total_travel_seconds"], 34.)
             self.assertFalse(build.call_args.kwargs["repeat"])
             self.assertTrue(build.call_args.kwargs["wait_for_capture"])
+            self.assertTrue(build.call_args.kwargs["record_ground_truth"])
             record.assert_called_once()
-            publish.assert_called_once_with(root / ".gazebo123", final, timing, report)
+            publish.assert_called_once_with(root / ".gazebo123", final, timing, report, root / "scene/rig_motion.jsonl")
 
     def test_partial_metadata_never_appears_in_the_web_library(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -171,24 +172,30 @@ class LapBagTests(unittest.TestCase):
             pending = lap_bag.staging_path(final)
             pending.mkdir()
             (pending / "metadata.yaml").write_text("partial")
+            trace = root / "rig_motion.jsonl"
             report = {"partial_bag": str(pending), "laps_requested": 1, "lap_duration_s": 1e-7}
             timing = {"start_sim_ns": 10, "finish_sim_ns": 123}
             audit = MagicMock(side_effect=ValueError("missing right image"))
             with patch.dict(sys.modules, {"bag_audit": SimpleNamespace(audit_bag=audit)}):
                 with self.assertRaisesRegex(ValueError, "missing right"):
-                    lap_bag.audit_and_publish(pending, final, timing, report)
+                    lap_bag.audit_and_publish(pending, final, timing, report, trace)
                 self.assertEqual(list(rosbags.rglob("metadata.yaml")), [])
                 self.assertTrue((Path(report["partial_bag"]) / "metadata.yaml").is_file())
                 audit.assert_called_once_with(pending, 10, 123, laps=1, lap_duration_s=1e-7)
                 audit.side_effect = None
                 audit.return_value = {"coverage": "gaps_detected", "complete_stereo_samples": 2, "largest_gap_sim_s": .3,
                                       "file_bytes": {"test.mcap": 1234}}
+                with self.assertRaises(FileNotFoundError):
+                    lap_bag.audit_and_publish(pending, final, timing, report, trace)
+                self.assertFalse(final.exists())
+                trace.write_text('{"sim_time_s": 1, "x_m": 2, "y_m": 3, "yaw_rad": 0}\n')
                 # A file or bag added during the lap is never replaced.
                 final.mkdir()
                 with self.assertRaises(FileExistsError):
-                    lap_bag.audit_and_publish(pending, final, timing, report)
+                    lap_bag.audit_and_publish(pending, final, timing, report, trace)
                 final.rmdir()
-                lap_bag.audit_and_publish(pending, final, timing, report)
+                lap_bag.audit_and_publish(pending, final, timing, report, trace)
+                self.assertEqual((final / "atd_ground_truth/rig_motion.jsonl").read_bytes(), trace.read_bytes())
                 self.assertEqual(report, {"bag_audit": audit.return_value, "bag_path": str(final),
                                           "laps_requested": 1, "lap_duration_s": 1e-7})
                 self.assertEqual(list(rosbags.rglob("metadata.yaml")), [final / "metadata.yaml"])

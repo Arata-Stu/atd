@@ -1,6 +1,7 @@
 from contextlib import ExitStack, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 
@@ -25,11 +26,12 @@ class ReplaySessionTests(unittest.TestCase):
         self.output = self.stack.enter_context(redirect_stdout(StringIO()))
         self.config = Path(__file__).resolve().parents[1] / 'config/bag_vslam.rviz'
 
-    def session(self):
-        replay.run_session(Mock(), 'two words/run', 0.5, self.config, 'qos.yaml')
+    def session(self, ground_truth=None):
+        replay.run_session(Mock(), 'two words/run', 0.5, self.config, 'qos.yaml', ground_truth)
 
     def test_eof_keeps_viewer_open_until_closed(self):
-        def resume(node, *, player_name, check_running):
+        def resume(node, *, player_name, check_running, ground_truth):
+            self.assertFalse(ground_truth)
             check_running()
             cmd = self.spawn.call_args.args[0]
             self.assertEqual(cmd[cmd.index('--remap') + 1], '__node:=' + player_name.lstrip('/'))
@@ -53,16 +55,58 @@ class ReplaySessionTests(unittest.TestCase):
         displays = yaml.safe_load(self.config.read_text())['Visualization Manager']['Displays']
         self.assertEqual({d['Topic']['Value'] for d in displays if d['Enabled'] and 'Topic' in d},
                          {'/visual_slam/tracking/slam_path', '/visual_slam/vis/landmarks_cloud',
-                          '/visual_slam/vis/loop_closure_cloud',
+                          '/visual_slam/vis/loop_closure_cloud', '/atd/replay/ground_truth_path',
+                          '/atd/replay/position_error',
                           '/camera/camera/infra1/image_rect_raw', '/camera/camera/infra2/image_rect_raw'})
         eyes = [d['Topic'] for d in displays if d['Class'] == 'rviz_default_plugins/Image']
         self.assertEqual(len(eyes), 2)
         for topic in eyes:
             self.assertEqual((topic['Reliability Policy'], topic['Durability Policy']), ('Best Effort', 'Volatile'))
+        paths = {d['Topic']['Value']: d for d in displays if d['Class'] == 'rviz_default_plugins/Path'}
+        gt = paths['/atd/replay/ground_truth_path']
+        self.assertEqual((gt['Topic']['Reliability Policy'], gt['Topic']['Durability Policy']),
+                         ('Reliable', 'Transient Local'))
+        self.assertNotEqual(gt['Color'], paths['/visual_slam/tracking/slam_path']['Color'])
+        error_topic = next(d['Topic'] for d in displays if d['Class'] == 'rviz_default_plugins/Marker')
+        self.assertEqual((error_topic['Value'], error_topic['Reliability Policy'], error_topic['Durability Policy']),
+                         ('/atd/replay/position_error', 'Reliable', 'Transient Local'))
+
+    def test_gazebo_replay_starts_overlay_before_resume_and_keeps_it_after_eof(self):
+        overlay = Mock()
+        overlay.poll.return_value = None
+        self.spawn.side_effect = [self.launch, self.rviz, overlay, self.player]
+        trace = Path('two words/run/rig_motion.jsonl')
+
+        def resume(node, *, player_name, check_running, ground_truth):
+            check_running()
+            self.assertTrue(ground_truth)
+            self.assertEqual(self.spawn.call_args_list[2].args[0],
+                             ['ros2', 'run', 'atd_bringup', 'replay_ground_truth', str(trace)])
+            self.player.returncode = 0
+
+        def close(_):
+            self.assertIn('末尾に到達', self.output.getvalue())
+            self.stop.assert_not_called()
+            self.rviz.returncode = 0
+
+        self.ready.side_effect = resume
+        self.tick.side_effect = close
+        self.session(trace)
+        self.assertEqual([c.args[0] for c in self.stop.call_args_list],
+                         [self.player, overlay, self.rviz, self.launch])
+
+    def test_bag_without_ground_truth_only_subscribes_to_its_estimate_and_sensors(self):
+        with TemporaryDirectory() as directory:
+            path = replay.estimated_only_config(self.config, directory)
+            displays = yaml.safe_load(path.read_text())['Visualization Manager']['Displays']
+        topics = {d['Topic']['Value'] for d in displays if 'Topic' in d}
+        self.assertIn('/visual_slam/tracking/slam_path', topics)
+        self.assertNotIn('/atd/replay/ground_truth_path', topics)
+        self.assertNotIn('/atd/replay/position_error', topics)
 
     def test_closing_viewer_during_startup_cleans_up_paused_player(self):
         self.rviz.returncode = 0
-        self.ready.side_effect = lambda node, *, player_name, check_running: check_running()
+        self.ready.side_effect = lambda node, **kwargs: kwargs['check_running']()
         self.session()
         self.assertNotIn('bag を再生しています', self.output.getvalue())
         self.assertEqual(self.stop.call_count, 3)
@@ -75,7 +119,7 @@ class ReplaySessionTests(unittest.TestCase):
 
     def test_mapper_exits_during_startup(self):
         self.launch.returncode = 1
-        self.ready.side_effect = lambda node, *, player_name, check_running: check_running()
+        self.ready.side_effect = lambda node, **kwargs: kwargs['check_running']()
         with self.assertRaisesRegex(RuntimeError, 'cuVSLAM'):
             self.session()
         self.assertEqual(self.stop.call_count, 3)

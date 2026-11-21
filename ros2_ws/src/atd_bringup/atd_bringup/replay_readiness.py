@@ -2,7 +2,9 @@
 
 from time import monotonic
 
-from atd_bringup.replay_inputs import STEREO_WORKFLOW
+from atd_bringup.replay_inputs import (
+    GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, SLAM_ODOMETRY, STEREO_WORKFLOW,
+)
 
 
 def _name(name, namespace):
@@ -14,9 +16,23 @@ def _endpoints(infos, kind, node_name):
         node_name is None or _name(info.node_name, info.node_namespace) == node_name)]
 
 
-def _missing_endpoints(node, player_name, rviz_name):
+def _connection_issues(topic, publishers, subscribers, producer, consumer):
     from rclpy.qos import QoSCompatibility, qos_check_compatible
 
+    missing = []
+    if not publishers:
+        missing.append(f'{topic} の {producer} publisher')
+    if not subscribers:
+        missing.append(f'{topic} の {consumer} subscriber')
+    if publishers and subscribers and all(
+        qos_check_compatible(pub.qos_profile, sub.qos_profile)[0] == QoSCompatibility.ERROR
+        for pub in publishers for sub in subscribers
+    ):
+        missing.append(f'{topic} の QoS が {consumer} と非互換')
+    return missing
+
+
+def _missing_endpoints(node, player_name, rviz_name, ground_truth=False):
     inputs = {
         STEREO_WORKFLOW['left_image']: 'sensor_msgs/msg/Image',
         STEREO_WORKFLOW['right_image']: 'sensor_msgs/msg/Image',
@@ -27,8 +43,13 @@ def _missing_endpoints(node, player_name, rviz_name):
     }
     missing = []
     nodes = [_name(name, namespace) for name, namespace in node.get_node_names_and_namespaces()]
-    if nodes.count(player_name) > 1:
-        raise RuntimeError(f'同じ ROS domain に {player_name} が複数あります。別の再生を終了してください')
+    overlay = '/' + GROUND_TRUTH_NODE
+    required_nodes = [player_name, '/visual_slam']
+    if ground_truth:
+        required_nodes.append(overlay)
+    for name in required_nodes:
+        if nodes.count(name) > 1:
+            raise RuntimeError(f'同じ ROS domain に {name} が複数あります。別の再生・追跡セッションを終了してください')
     for topic, kind in inputs.items():
         offered = node.get_publishers_info_by_topic(topic)
         publishers = _endpoints(offered, kind, player_name)
@@ -51,26 +72,33 @@ def _missing_endpoints(node, player_name, rviz_name):
         else:
             consumer = '/visual_slam'
             subscribers = _endpoints(infos, kind, consumer)
-        if not publishers:
-            missing.append(f'{topic} の {player_name} publisher')
-        if not subscribers:
-            missing.append(f'{topic} の {consumer} subscriber')
-        if publishers and subscribers and all(
-            qos_check_compatible(pub.qos_profile, sub.qos_profile)[0] == QoSCompatibility.ERROR
-            for pub in publishers for sub in subscribers
-        ):
-            missing.append(f'{topic} の QoS が {consumer} と非互換')
+        missing.extend(_connection_issues(topic, publishers, subscribers, player_name, consumer))
+        if ground_truth and topic == '/clock':
+            readers = _endpoints(infos, kind, overlay)
+            missing.extend(_connection_issues(topic, publishers, readers, player_name, overlay))
 
     # RViz creates both display subscriptions while loading the preset, before the first TF.
     for topic, kind in (('/visual_slam/tracking/slam_path', 'nav_msgs/msg/Path'),
                         ('/visual_slam/vis/landmarks_cloud', 'sensor_msgs/msg/PointCloud2')):
         if not _endpoints(node.get_subscriptions_info_by_topic(topic), kind, rviz_name):
             missing.append(f'{topic} の {rviz_name} subscriber')
-    return missing
+    if ground_truth:
+        for topic, kind, producer, consumer in (
+            (SLAM_ODOMETRY, 'nav_msgs/msg/Odometry', '/visual_slam', overlay),
+            (GROUND_TRUTH_PATH, 'nav_msgs/msg/Path', overlay, rviz_name),
+            (GROUND_TRUTH_ERROR, 'visualization_msgs/msg/Marker', overlay, rviz_name),
+        ):
+            infos = node.get_publishers_info_by_topic(topic)
+            if any(_name(info.node_name, info.node_namespace) != producer for info in infos):
+                raise RuntimeError(f'{topic} に別の配信元があります。別の追跡・再生セッションを終了してください')
+            missing.extend(_connection_issues(
+                topic, _endpoints(infos, kind, producer),
+                _endpoints(node.get_subscriptions_info_by_topic(topic), kind, consumer), producer, consumer))
+    return list(dict.fromkeys(missing))
 
 
 def wait_and_resume(node, player_name='/rosbag2_player', timeout_s=90.0, *,
-                    rviz_name='/rviz2', check_running=None):
+                    rviz_name='/rviz2', check_running=None, ground_truth=False):
     """再生開始の応答まで待つ。check_running は子プロセスの異常終了時に例外を送出する。"""
     import rclpy
     from rosbag2_interfaces.srv import IsPaused, Resume
@@ -97,7 +125,7 @@ def wait_and_resume(node, player_name='/rosbag2_player', timeout_s=90.0, *,
     resume = node.create_client(Resume, player_name + '/resume')
     try:
         while True:
-            waiting = _missing_endpoints(node, player_name, rviz_name)
+            waiting = _missing_endpoints(node, player_name, rviz_name, ground_truth)
             if not paused.service_is_ready():
                 waiting.append(player_name + '/is_paused')
             if not resume.service_is_ready():
@@ -105,7 +133,7 @@ def wait_and_resume(node, player_name='/rosbag2_player', timeout_s=90.0, *,
             if not waiting:
                 if not call(paused, IsPaused.Request(), player_name + '/is_paused').paused:
                     raise RuntimeError(f'{player_name} が開始待ちの一時停止状態ではありません')
-                waiting = _missing_endpoints(node, player_name, rviz_name)
+                waiting = _missing_endpoints(node, player_name, rviz_name, ground_truth)
                 if not waiting:
                     break
             poll('、'.join(waiting))

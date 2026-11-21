@@ -16,6 +16,10 @@ STEREO_WORKFLOW = {
     'tf_static': '/tf_static',
 }
 STEREO_TOPICS = tuple(STEREO_WORKFLOW.values())
+SLAM_ODOMETRY = '/visual_slam/vis/slam_odometry'
+GROUND_TRUTH_PATH = '/atd/replay/ground_truth_path'
+GROUND_TRUTH_ERROR = '/atd/replay/position_error'
+GROUND_TRUTH_NODE = 'atd_replay_ground_truth'
 
 
 def select_bag(value, root=Path('/data/record/rosbags')):

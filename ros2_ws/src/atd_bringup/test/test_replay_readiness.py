@@ -3,7 +3,9 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from atd_bringup.replay_inputs import STEREO_WORKFLOW
+from atd_bringup.replay_inputs import (
+    GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, SLAM_ODOMETRY, STEREO_WORKFLOW,
+)
 from atd_bringup.replay_readiness import _missing_endpoints, wait_and_resume
 
 
@@ -33,7 +35,7 @@ class GateTests(unittest.TestCase):
         self.subs['/visual_slam/vis/landmarks_cloud'] = [endpoint(self.rviz, 'sensor_msgs/msg/PointCloud2')]
 
         self.node = Mock()
-        self.node.get_node_names_and_namespaces.return_value = [('bag', '/preview')]
+        self.node.get_node_names_and_namespaces.return_value = [('bag', '/preview'), ('visual_slam', '/')]
         self.node.get_service_names_and_types.return_value = []
         self.node.get_publishers_info_by_topic.side_effect = self.pubs.__getitem__
         self.node.get_subscriptions_info_by_topic.side_effect = self.subs.__getitem__
@@ -82,6 +84,27 @@ class GateTests(unittest.TestCase):
             wait_and_resume(self.node, self.player, timeout_s=0)
         self.resume.call_async.assert_not_called()
 
+    def test_gazebo_overlay_needs_map_odometry_clock_and_matching_rviz_qos(self):
+        overlay = '/' + GROUND_TRUTH_NODE
+        self.pubs[SLAM_ODOMETRY] = [endpoint('/visual_slam', 'nav_msgs/msg/Odometry')]
+        self.subs[SLAM_ODOMETRY] = []
+        self.pubs[GROUND_TRUTH_PATH] = [endpoint(overlay, 'nav_msgs/msg/Path')]
+        self.subs[GROUND_TRUTH_PATH] = [endpoint(self.rviz, 'nav_msgs/msg/Path', 'incompatible')]
+        self.pubs[GROUND_TRUTH_ERROR] = [endpoint(overlay, 'visualization_msgs/msg/Marker')]
+        self.subs[GROUND_TRUTH_ERROR] = [endpoint(self.rviz, 'visualization_msgs/msg/Marker')]
+        issues = _missing_endpoints(self.node, self.player, self.rviz, ground_truth=True)
+        self.assertEqual(issues, [f'/clock の {overlay} subscriber',
+                                  f'{SLAM_ODOMETRY} の {overlay} subscriber',
+                                  f'{GROUND_TRUTH_PATH} の QoS が {self.rviz} と非互換'])
+        self.subs['/clock'].append(endpoint(overlay, 'rosgraph_msgs/msg/Clock'))
+        self.subs[SLAM_ODOMETRY] = [endpoint(overlay, 'nav_msgs/msg/Odometry')]
+        self.subs[GROUND_TRUTH_PATH] = [endpoint(self.rviz, 'nav_msgs/msg/Path')]
+        self.assertFalse(_missing_endpoints(self.node, self.player, self.rviz, ground_truth=True))
+        self.pubs[GROUND_TRUTH_PATH].append(endpoint('/old_replay', 'nav_msgs/msg/Path'))
+        with self.assertRaisesRegex(RuntimeError, GROUND_TRUTH_PATH):
+            wait_and_resume(self.node, self.player, ground_truth=True)
+        self.resume.call_async.assert_not_called()
+
     def test_conflicting_clock_discovered_during_pause_query_never_resumes(self):
         def another_clock():
             self.pubs['/clock'].append(endpoint('/other/bag', 'rosgraph_msgs/msg/Clock'))
@@ -95,6 +118,16 @@ class GateTests(unittest.TestCase):
     def test_two_players_with_the_same_name_never_receive_resume(self):
         self.node.get_node_names_and_namespaces.return_value = [('bag', '/preview')] * 2
         with self.assertRaisesRegex(RuntimeError, '/preview/bag.*複数'):
+            wait_and_resume(self.node, self.player)
+        self.resume.call_async.assert_not_called()
+
+    def test_second_tracker_appears_before_resume(self):
+        def another_tracker():
+            self.node.get_node_names_and_namespaces.return_value.append(('visual_slam', '/'))
+            return NS(paused=True)
+
+        self.paused.call_async.return_value.result.side_effect = another_tracker
+        with self.assertRaisesRegex(RuntimeError, '/visual_slam.*複数'):
             wait_and_resume(self.node, self.player)
         self.resume.call_async.assert_not_called()
 

@@ -166,7 +166,7 @@ def inspect_lap(scene_dir, trajectory, samples, metrics):
     finish_error = None
     # The transform can be applied one physics step after the pre-update command.
     step_s = 1 / 90
-    max_allowed_gap = min(.5, lap_seconds / 8) + 2 * step_s
+    max_allowed_gap = trajectory.get("trace_interval_s", min(.5, lap_seconds / 8)) + 2 * step_s
     verified = True
     completed_laps = 0
     for sample in samples:
@@ -326,7 +326,8 @@ def run(args, report):
     scene = world.build(scene_dir, height=args.camera_height, pitch_deg=args.camera_pitch_deg,
                         travel_seconds=args.duration if finite_run else None, speed_mps=args.speed,
                         laps=args.laps or 1, repeat=not finite_run, circuit=args.circuit, route=args.route,
-                        wait_for_capture=(lap_video or finite_serve or mode in ("map", "bag")))
+                        wait_for_capture=(lap_video or finite_serve or mode in ("map", "bag")),
+                        record_ground_truth=mode == "bag")
     trajectory = scene["trajectory"]
     total_seconds = trajectory["total_travel_seconds"]
     duration = total_seconds if finite_run else args.duration
@@ -378,7 +379,7 @@ def run(args, report):
         if mode == "bag":
             pending, timing = record_laps(children, out, args.circuit, scene, report, args.bag_output)
             stack.close()  # Release the renderer and bridge before reading the full MCAP back.
-            lap_bag.audit_and_publish(pending, args.bag_output, timing, report)
+            lap_bag.audit_and_publish(pending, args.bag_output, timing, report, scene_dir / "rig_motion.jsonl")
             return 0
         if mode == "serve":
             start_stream(children, args.wait_for_stereo, args.circuit)

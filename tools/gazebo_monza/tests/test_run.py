@@ -242,6 +242,9 @@ class RunContractTests(unittest.TestCase):
             self.assertTrue(verified["lap_completed"])
             self.assertTrue(verified["video_endpoints_covered"])
             self.assertAlmostEqual(verified["sampled_distance_m"], 40)
+            # New bags require the denser trace used to compare poses on bends.
+            bag_scene = {"trajectory": {**scene["trajectory"], "trace_interval_s": .05}}
+            self.assertFalse(run.inspect_motion(out, bag_scene, {"mode": "bag"})["lap_completed"])
             late = dict(metrics, first_encoded_pair_sim_ns=5_000_000_000)
             self.assertFalse(run.inspect_motion(out, scene, late)["video_endpoints_covered"])
             for direction in (0, -1):

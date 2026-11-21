@@ -18,6 +18,7 @@ while (($#)); do
 
 Linux Notebook の Isaac ROS コンテナで cuVSLAM と RViz を起動し、rosbag を再生します。
 BAG を省略すると対話端末で記録を選べます。直接指定する場合はコンテナ内の bag パスを使います。
+Gazebo の正解軌跡がある記録では、青の正解と橙の cuVSLAM 推定を RViz に重ねます。
 --rate 0.5 は半速再生、--dry-run は起動コマンドの表示です。
 再生専用の ROS_DOMAIN_ID は 75 です。ATD_REPLAY_ROS_DOMAIN_ID で変更できます。
 ホストから使う場合は、先に atd dev で開発コンテナを起動してください。

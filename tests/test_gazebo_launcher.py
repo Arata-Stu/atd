@@ -93,13 +93,13 @@ class GazeboHostTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 out = subprocess.check_output([*command, mode, "--dry-run", "--course", "spa",
                                                "--speed", "1.5", "--laps", "3",
-                                               "--resolution", "1280x720", "--imu", "400"], text=True)
+                                               "--resolution", "1280x720", "--camera-hz", "60", "--imu", "400"], text=True)
                 drives = [shlex.split(line) for line in out.splitlines()
                           if line.startswith("docker ") and "gazebo_monza/run.py" in line]
                 self.assertEqual(len(drives), 2 if mode == "run" else 1)
                 for args in drives:
                     for flag, expected in (("--circuit", "spa"), ("--route", "lap"), ("--speed", "1.5"),
-                                           ("--resolution", "1280x720"), ("--imu", "400")):
+                                           ("--resolution", "1280x720"), ("--camera-hz", "60"), ("--imu", "400")):
                         self.assertEqual(args[args.index(flag) + 1], expected)
                     if args[args.index("--mode") + 1] == "benchmark":
                         self.assertNotIn("--laps", args)
@@ -109,6 +109,7 @@ class GazeboHostTests(unittest.TestCase):
     def test_invalid_drive_settings_fail_before_start_and_diagnostics_accept_speed(self):
         command = ["bash", str(ROOT / "scripts/gazebo.sh")]
         cases = [("bag", "--resolution", "320x240"), ("bag", "--imu", "100"),
+                 ("bag", "--camera-hz", "45"), ("run", "--camera-hz"), ("prepare", "--camera-hz", "30"),
                  ("prepare", "--imu", "400"), ("prepare", "--speed", "2"), ("video", "--speed", "nan"),
                  ("bag", "--speed", "-1"), ("video", "--speed", "1e500"),
                  ("map", "--laps", "0"), ("video", "--laps", "1.2"), ("bag", "--laps"),

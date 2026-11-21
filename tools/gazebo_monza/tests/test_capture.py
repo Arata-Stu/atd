@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import capture
 
 
-def stereo_stamp(index):
-    return round(index * capture.NANO / capture.TARGET_HZ)
+def stereo_stamp(index, camera_hz=capture.DEFAULT_CAMERA_HZ):
+    return round(index * capture.NANO / camera_hz)
 
 
 class PairTests(unittest.TestCase):
@@ -48,6 +48,25 @@ class PairTests(unittest.TestCase):
         self.assertEqual(slow["paired_wall_hz"], 45)
         self.assertAlmostEqual(slow["paired_sim_hz"], 90)
         self.assertFalse(capture.benchmark_passes(slow))
+
+    def test_target_rate_and_missing_slots_follow_camera_setting(self):
+        for hz in capture.CAMERA_RATES:
+            with self.subTest(hz=hz):
+                pairs = capture.StereoPairs()
+                for i in range(hz):
+                    for side in capture.TOPICS:
+                        pairs.feed(side, stereo_stamp(i, hz), i / hz)
+                report = pairs.summary(1, camera_hz=hz)
+                self.assertEqual(report["target_hz"], hz)
+                self.assertTrue(capture.benchmark_passes(report))
+                self.assertFalse(capture.benchmark_passes(pairs.summary(2, camera_hz=hz)))
+                for side in capture.TOPICS:
+                    pairs.feed(side, stereo_stamp(hz + 1, hz), (hz + 1) / hz)
+                report = pairs.summary(1, camera_hz=hz)
+                self.assertFalse(capture.benchmark_passes(report))
+                self.assertEqual(report["missing_sim_slots_between_pairs_estimate"], 1)
+                for stream in report["image_streams"].values():
+                    self.assertEqual(stream["missing_sim_slots_between_images_estimate"], 1)
 
     def test_per_eye_delivery_and_overflow_of_live_pairing_buffer(self):
         pairs = capture.StereoPairs()
@@ -95,21 +114,21 @@ class PairTests(unittest.TestCase):
 
 class CaptureLoopTests(unittest.TestCase):
     def run_receiver(self, directory, frame_count, matched=True, right_baseline=0.095,
-                     deliver_info=True, lap_video=False):
+                     deliver_info=True, lap_video=False, camera_hz=capture.DEFAULT_CAMERA_HZ):
         clock = SimpleNamespace(now=3.0, next_frame=0)
         callbacks = {}
         raw = bytes(640 * 480)
 
         def spin_once(timeout_sec):
             if matched and clock.next_frame < frame_count:
-                stamp = stereo_stamp(clock.next_frame)
+                stamp = stereo_stamp(clock.next_frame, camera_hz)
                 if lap_video:
                     stamp += 4 * capture.NANO
                     scene_dir = directory / "scene"
                     origin_file = scene_dir / "lap_start.json"
                     if (scene_dir / "lap_capture.ready").is_file() and not origin_file.is_file():
                         origin_file.write_text(json.dumps({"sim_time_s": stamp / capture.NANO}))
-                clock.now += 1.0 / 90
+                clock.now += 1.0 / camera_hz
                 for side, topic in capture.TOPICS.items():
                     header = SimpleNamespace(frame_id=capture.FRAMES[side], stamp=SimpleNamespace(
                         sec=stamp // capture.NANO, nanosec=stamp % capture.NANO))
@@ -139,7 +158,8 @@ class CaptureLoopTests(unittest.TestCase):
                         "sensor_msgs": SimpleNamespace(), "sensor_msgs.msg": SimpleNamespace(Image=object, CameraInfo=object)}
         args = SimpleNamespace(output=directory, mode="video" if lap_video else "benchmark",
                                route="lap" if lap_video else "chicane", duration=.2 if lap_video else 1.0, warmup=0.2,
-                               startup_timeout=0.5, video_timeout=100.0, resolution="640x480")
+                               startup_timeout=0.5, video_timeout=100.0, resolution="640x480",
+                               camera_hz=camera_hz)
         report = {}
         counters = [{"InErrors": i, "RcvbufErrors": i, "SndbufErrors": 0} for i in (5, 7)]
         with patch.dict(sys.modules, fake_modules), patch.object(capture.time, "monotonic", lambda: clock.now), \
@@ -154,13 +174,14 @@ class CaptureLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as dirname:
             out = Path(dirname)
             (out / "scene").mkdir()
-            status, metrics = self.run_receiver(out, 100, lap_video=True)
+            status, metrics = self.run_receiver(out, 100, lap_video=True, camera_hz=30)
             self.assertEqual(status, 0)
             origin = metrics["lap_start_sim_ns"]
             self.assertGreater(origin, 4 * capture.NANO)
             self.assertLessEqual(metrics["first_encoded_pair_sim_ns"], origin)
             self.assertGreaterEqual(metrics["last_encoded_pair_sim_ns"],
-                                    origin + round(.2 * capture.NANO) + stereo_stamp(2))
+                                    origin + round(.2 * capture.NANO) + stereo_stamp(2, 30))
+            self.assertEqual(metrics["video_fps"], 30)
             self.assertEqual(metrics["video_frames"], 7)
             self.assertTrue((out / "left.mp4").is_file())
 
@@ -170,6 +191,7 @@ class CaptureLoopTests(unittest.TestCase):
             self.assertEqual(status, 0)
             self.assertTrue((Path(root) / "benchmark.ready").is_file())
             self.assertTrue(report["pass_90hz"])
+            self.assertTrue(report["pass_target_hz"])
             self.assertEqual(report["stereo_calibration"]["stamp_ns"], 0)
             self.assertAlmostEqual(report["stereo_calibration"]["baseline_from_projection_m"], 0.095)
             self.assertAlmostEqual(report["measurement_wall_s"], 1)
@@ -178,6 +200,16 @@ class CaptureLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             with self.assertRaisesRegex(TimeoutError, "No synchronized"):
                 self.run_receiver(Path(root), 0)
+
+    def test_benchmark_labels_lower_rates(self):
+        for hz in (30, 60):
+            with self.subTest(hz=hz), tempfile.TemporaryDirectory() as root:
+                _, report = self.run_receiver(Path(root), 100, camera_hz=hz)
+                self.assertEqual(report["target_hz"], hz)
+                self.assertNotIn("pass_90hz", report)
+                self.assertEqual(report["pass_target_hz"], report["status"] == "pass")
+                self.assertAlmostEqual(report["paired_sim_hz"], hz)
+                self.assertEqual(report["missing_sim_slots_between_pairs_estimate"], 0)
 
     def test_missing_publishers_calibration_or_wrong_baseline(self):
         with tempfile.TemporaryDirectory() as dirname:

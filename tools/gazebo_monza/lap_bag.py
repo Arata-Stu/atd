@@ -10,9 +10,9 @@ import tempfile
 import time
 
 from bag_audit import check_imu
-from capture import (Calibration, FRAMES, HEIGHT, INFO_TOPICS, NANO, StereoPairs, TARGET_HZ,
+from capture import (Calibration, FRAMES, HEIGHT, INFO_TOPICS, NANO, StereoPairs,
                      TOPICS, WIDTH, check_image)
-from sensor_profile import imu_streams
+from sensor_profile import DEFAULT_CAMERA_HZ, imu_streams
 
 
 RECORDER = "atd_gazebo_lap_recorder"
@@ -149,12 +149,13 @@ def audit_and_publish(pending, final, timing, report, trace):
         sys.path.pop(0)
 
     laps = report["laps_requested"]
+    camera_hz = report.get("camera_hz", DEFAULT_CAMERA_HZ)
     imu_hz = report.get("imu_hz", 0)
     sensors = "ステレオ・IMU" if imu_hz else "ステレオ"
     print(f"{laps}周分の{sensors}入力と固定TFを保存済み MCAP で検査しています。", flush=True)
     audit = audit_bag(pending, timing["start_sim_ns"], timing["finish_sim_ns"],
                       laps=laps, lap_duration_s=report["lap_duration_s"],
-                      geometry=tuple(report.get("geometry", (WIDTH, HEIGHT))), imu_hz=imu_hz,
+                      geometry=tuple(report.get("geometry", (WIDTH, HEIGHT))), camera_hz=camera_hz, imu_hz=imu_hz,
                       preroll_s=IMU_PREROLL_S if imu_hz else 0)
     report["bag_audit"] = audit
     store_ground_truth(pending, trace, audit["file_bytes"], course=recorded_course(report))
@@ -166,7 +167,8 @@ def audit_and_publish(pending, final, timing, report, trace):
         pending.parent.rmdir()
     except OSError as exc:
         print(f"bag は保存済みです。作業ディレクトリが残っています: {exc}", file=sys.stderr)
-    print(f"{laps}周のステレオ {audit['complete_stereo_samples']} 組、最大間隔 "
+    print(f"{laps}周のステレオ {audit['complete_stereo_samples']} 組、平均 {audit['measured_sim_hz']:.1f} Hz"
+          f"（sim、設定 {camera_hz} Hz）、最大間隔 "
           f"{audit['largest_gap_sim_s'] * 1000:.1f} ms、MCAP {sum(audit['file_bytes'].values()) / 1e9:.2f} GB",
           flush=True)
     for topic, stream in audit.get("imu_streams", {}).items():

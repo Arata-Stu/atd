@@ -10,10 +10,9 @@ from collections import OrderedDict
 from functools import partial
 from pathlib import Path
 
-from sensor_profile import RESOLUTIONS
+from sensor_profile import CAMERA_RATES, DEFAULT_CAMERA_HZ, RESOLUTIONS
 
 WIDTH, HEIGHT = RESOLUTIONS["640x480"]
-TARGET_HZ = 90
 VIDEO_HZ = 30
 TOLERANCE = 0.01
 NANO = 1_000_000_000
@@ -31,8 +30,8 @@ def stamp_intervals(stamps):
     return [(b - a) / NANO for a, b in zip(stamps, stamps[1:])]
 
 
-def missing_slots(intervals):
-    return sum(max(0, round(dt * TARGET_HZ) - 1) for dt in intervals)
+def missing_slots(intervals, camera_hz=DEFAULT_CAMERA_HZ):
+    return sum(max(0, round(dt * camera_hz) - 1) for dt in intervals)
 
 
 def udp_error_counters(path=Path("/proc/net/snmp")):
@@ -82,7 +81,7 @@ class StereoPairs:
         self.arrivals.append(arrival)
         return (frame, partner) if side == "left" else (partner, frame)
 
-    def summary(self, wall_seconds, *, image_wall_seconds=None):
+    def summary(self, wall_seconds, *, image_wall_seconds=None, camera_hz=DEFAULT_CAMERA_HZ):
         count = len(self.stamps)
         intervals = stamp_intervals(self.stamps)
         arrival_intervals = [b - a for a, b in zip(self.arrivals, self.arrivals[1:])]
@@ -100,11 +99,12 @@ class StereoPairs:
                 "unique_sim_hz": (len(stamps) - 1) / sim_span if sim_span > 0 else None,
                 "first_sim_ns": stamps[0] if stamps else None,
                 "last_sim_ns": stamps[-1] if stamps else None,
-                "missing_sim_slots_between_images_estimate": missing_slots(gaps),
+                "missing_sim_slots_between_images_estimate": missing_slots(gaps, camera_hz),
                 "largest_sim_gap_ms": max(gaps) * 1000 if gaps else None,
             }
         shared = len(self.seen["left"] & self.seen["right"])
         return {
+            "target_hz": camera_hz,
             "received_images": self.received,
             "image_measurement_wall_s": image_wall_seconds,
             "image_streams": streams,
@@ -123,7 +123,7 @@ class StereoPairs:
             "measurement_wall_s": wall_seconds,
             "paired_wall_hz": count / wall_seconds if wall_seconds > 0 else None,
             "paired_sim_hz": (count - 1) / span if span > 0 else None,
-            "missing_sim_slots_between_pairs_estimate": missing_slots(intervals),
+            "missing_sim_slots_between_pairs_estimate": missing_slots(intervals, camera_hz),
             "largest_sim_gap_ms": max(intervals) * 1000 if intervals else None,
             "largest_arrival_gap_ms": max(arrival_intervals) * 1000 if intervals else None,
         }
@@ -191,9 +191,11 @@ class Calibration:
 class StereoVideo:
     """Sample real stereo pairs at 30 fps on the simulation time axis."""
 
-    def __init__(self, output, duration, *, include_finish=False, geometry=(WIDTH, HEIGHT)):
+    def __init__(self, output, duration, *, include_finish=False, geometry=(WIDTH, HEIGHT),
+                 camera_hz=DEFAULT_CAMERA_HZ):
         self.output = output
         self.duration_ns = round(duration * NANO)
+        self.camera_hz = camera_hz
         self.include_finish = include_finish
         self.frame_count = math.ceil(duration * VIDEO_HZ) + int(include_finish)
         self.written = 0
@@ -230,7 +232,7 @@ class StereoVideo:
             # The last video frame shows the parked goal after two camera ticks.
             offset = round(self.written * NANO / VIDEO_HZ)
             if finish:
-                offset = self.duration_ns + math.ceil(2 * NANO / TARGET_HZ)
+                offset = self.duration_ns + math.ceil(2 * NANO / self.camera_hz)
             target = self.origin + offset
             if target > stamp:
                 break
@@ -272,9 +274,10 @@ class StereoVideo:
 def benchmark_passes(metrics):
     sim_hz = metrics["paired_sim_hz"]
     wall_hz = metrics["paired_wall_hz"]
+    target_hz = metrics["target_hz"]
     return (sim_hz is not None and wall_hz is not None
-            and wall_hz >= TARGET_HZ * (1 - TOLERANCE)
-            and abs(sim_hz / TARGET_HZ - 1) <= TOLERANCE
+            and wall_hz >= target_hz * (1 - TOLERANCE)
+            and abs(sim_hz / target_hz - 1) <= TOLERANCE
             and metrics["missing_sim_slots_between_pairs_estimate"] == 0
             and metrics["out_of_order_pairs"] == 0)
 
@@ -340,7 +343,8 @@ def capture(args, report):
 
     try:
         if not measure:
-            video = StereoVideo(args.output, args.duration, include_finish=lap_video, geometry=geometry)
+            video = StereoVideo(args.output, args.duration, include_finish=lap_video,
+                                geometry=geometry, camera_hz=args.camera_hz)
         subscriptions = {}
         for side, topic in TOPICS.items():
             subscriptions[topic] = node.create_subscription(
@@ -415,7 +419,7 @@ def capture(args, report):
         else:
             elapsed = max(now - first_pair_at, 0.0) if first_pair_at is not None else 0.0
             image_elapsed = max(now - ready_at, 0.0) if ready_at is not None else 0.0
-        report.update(pairs.summary(elapsed, image_wall_seconds=image_elapsed))
+        report.update(pairs.summary(elapsed, image_wall_seconds=image_elapsed, camera_hz=args.camera_hz))
         if first_pair_at is not None and ready_at is not None:
             report["first_pair_wait_wall_s"] = first_pair_at - ready_at
         report["stereo_calibration"] = calibration.result
@@ -434,9 +438,12 @@ def capture(args, report):
             rclpy.try_shutdown()
 
     if measure:
-        report["pass_90hz"] = benchmark_passes(report)
-        report["status"] = "pass" if report["pass_90hz"] else "below_target"
-        return 0 if report["pass_90hz"] else 2
+        passed = benchmark_passes(report)
+        report["pass_target_hz"] = passed
+        if args.camera_hz == 90:
+            report["pass_90hz"] = passed
+        report["status"] = "pass" if passed else "below_target"
+        return 0 if passed else 2
     report.update(status="complete", videos=["left.mp4", "right.mp4"])
     return 0
 
@@ -447,6 +454,7 @@ def main():
     parser.add_argument("--mode", required=True, choices=("video", "benchmark"))
     parser.add_argument("--route", choices=("chicane", "lap"), default="chicane")
     parser.add_argument("--resolution", choices=RESOLUTIONS, default="640x480")
+    parser.add_argument("--camera-hz", type=int, choices=CAMERA_RATES, default=DEFAULT_CAMERA_HZ)
     parser.add_argument("--duration", type=float, required=True)
     parser.add_argument("--warmup", type=float, default=1.0, help="benchmark wall seconds after first pair")
     parser.add_argument("--startup-timeout", type=float, default=60.0, help="wall seconds to first pair")
@@ -467,7 +475,7 @@ def main():
                                     for ext in (".mp4", ".partial.mp4")):
         parser.error("Existing stereo video files; use a fresh output directory")
     report = {"mode": args.mode, "route": args.route, "topics": TOPICS, "geometry": list(RESOLUTIONS[args.resolution]),
-              "encoding": "mono8", "target_hz": TARGET_HZ, "rate_tolerance_fraction": TOLERANCE,
+              "encoding": "mono8", "target_hz": args.camera_hz, "rate_tolerance_fraction": TOLERANCE,
               "requested_duration_s": args.duration, "duration_clock": "wall" if args.mode == "benchmark" else "simulation",
               "ready": False, "warmup_wall_s": args.warmup if args.mode == "benchmark" else 0}
     try:

@@ -13,9 +13,9 @@ import time
 
 import world
 import lap_bag
-from capture import TARGET_HZ
 from monza_motion import interpolate, travel_fraction
-from sensor_profile import ACCEL_FRAME, ACCEL_TOPIC, GYRO_FRAME, GYRO_TOPIC, IMU_MODES, IMU_TOPIC, RESOLUTIONS
+from sensor_profile import (ACCEL_FRAME, ACCEL_TOPIC, CAMERA_RATES, DEFAULT_CAMERA_HZ,
+                            GYRO_FRAME, GYRO_TOPIC, IMU_MODES, IMU_TOPIC, RESOLUTIONS)
 
 HERE = Path(__file__).resolve().parent
 
@@ -175,7 +175,7 @@ def inspect_lap(scene_dir, trajectory, samples, metrics):
     errors = []
     finish_error = None
     # The transform can be applied one physics step after the pre-update command.
-    step_s = 1 / 90
+    step_s = trajectory.get("physics_step_s", 1 / DEFAULT_CAMERA_HZ)
     max_allowed_gap = trajectory.get("trace_interval_s", min(.5, lap_seconds / 8)) + 2 * step_s
     verified = True
     completed_laps = 0
@@ -336,7 +336,8 @@ def run(args, report):
     finite_run = mode in ("video", "map", "bag") or finite_serve
     width, height = RESOLUTIONS[args.resolution]
     imu_hz = IMU_MODES[args.imu]
-    report.update(geometry=[width, height], imu_hz=imu_hz, accel_hz=200 if imu_hz else 0, gyro_hz=imu_hz)
+    report.update(geometry=[width, height], camera_hz=args.camera_hz, imu_hz=imu_hz,
+                  accel_hz=200 if imu_hz else 0, gyro_hz=imu_hz)
     if mode == "bag":
         lap_bag.check_recorder()
         lap_bag.check_destination(args.bag_output)
@@ -344,7 +345,8 @@ def run(args, report):
                         travel_seconds=args.duration if finite_run else None, speed_mps=args.speed,
                         laps=args.laps or 1, repeat=not finite_run, circuit=args.circuit, route=args.route,
                         wait_for_capture=(lap_video or finite_serve or mode in ("map", "bag")),
-                        record_ground_truth=mode == "bag", resolution=args.resolution, imu_hz=imu_hz)
+                        record_ground_truth=mode == "bag", resolution=args.resolution,
+                        camera_hz=args.camera_hz, imu_hz=imu_hz)
     trajectory = scene["trajectory"]
     total_seconds = trajectory["total_travel_seconds"]
     duration = total_seconds if finite_run else args.duration
@@ -359,13 +361,13 @@ def run(args, report):
         schedule = "繰り返し走行"
     print(f"{args.circuit} / {args.route}  RC速度 {trajectory['speed_mps']:.3g} m/s  {schedule}", flush=True)
     inertial = f"加速度 200 Hz・ジャイロ／統合 {imu_hz} Hz" if imu_hz else "OFF"
-    print(f"ステレオ {width}×{height} @ {TARGET_HZ} Hz  IMU {inertial}", flush=True)
+    print(f"ステレオ {width}×{height} @ {args.camera_hz} Hz  IMU {inertial}", flush=True)
     if mode == "bag":
         report["lap_length_m"] = trajectory["end_s_m"]
-        image_bytes = 2 * width * height * TARGET_HZ * duration
+        image_bytes = 2 * width * height * args.camera_hz * duration
         print(f"左右画像の容量目安 合計 {image_bytes / 1e9:.2f} GB "
               f"（1周 {image_bytes / trajectory['laps'] / 1e9:.2f} GB × {trajectory['laps']}周、"
-              f"mono8 {width}×{height} × 左右2枚 × {TARGET_HZ} Hz）", flush=True)
+              f"mono8 {width}×{height} × 左右2枚 × {args.camera_hz} Hz）", flush=True)
     config = out / "bridge.yaml"
     config.write_text(json.dumps(bridge_topics(args.circuit, imu_hz), indent=2) + "\n")
     report.update(ros_domain_id=os.environ.get("ROS_DOMAIN_ID", "0"),
@@ -419,7 +421,7 @@ def run(args, report):
             wait_for((out / "gz_probe.ready").is_file, children, 30, "Gazebo 側の診断購読の準備")
         receiver = start("capture", [sys.executable, str(HERE / "capture.py"), "--output", str(out),
                                      "--mode", mode, "--route", args.route, "--duration", str(duration),
-                                     "--resolution", args.resolution])
+                                     "--resolution", args.resolution, "--camera-hz", str(args.camera_hz)])
         wait_for((out / f"{mode}.ready").is_file, children, 70, "左右カメラの ROS publisher と subscriber の接続")
         wait_for(lambda: unpause(args.circuit), children, 45, "Gazebo の再生開始")
         servers = {k: v for k, v in children.items() if v is not receiver and v is not probe}
@@ -493,7 +495,8 @@ def run(args, report):
         if metrics["paired_sim_hz"] is not None:
             print(f"画像スタンプ基準 {metrics['paired_sim_hz']:.2f} 組/シミュレーション秒、"
                   f"観測ペア間の欠け推定 {metrics['missing_sim_slots_between_pairs_estimate']} 組", flush=True)
-        print("90 Hz 判定（実時間配信を含む） " + ("達成" if metrics["pass_90hz"] else "未達"), flush=True)
+        verdict = "達成" if metrics["pass_target_hz"] else "未達"
+        print(f"{args.camera_hz} Hz 判定（実時間配信を含む） {verdict}", flush=True)
     return exit_code
 
 
@@ -511,6 +514,7 @@ def main():
     parser.add_argument("--camera-height", type=float, default=.12)
     parser.add_argument("--camera-pitch-deg", type=float, default=0)
     parser.add_argument("--resolution", choices=RESOLUTIONS, default="640x480")
+    parser.add_argument("--camera-hz", type=int, choices=CAMERA_RATES, default=DEFAULT_CAMERA_HZ)
     parser.add_argument("--imu", choices=IMU_MODES, default="off", help="ジャイロ・統合IMUのHz。加速度は200 Hz")
     args = parser.parse_args()
     if (args.mode == "bag") != (args.bag_output is not None):

@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geography
 from monza_motion import MonzaMotion, interpolate, travel_fraction
-from sensor_profile import IMU_MODES, RESOLUTIONS, imu_streams
+from sensor_profile import CAMERA_RATES, IMU_MODES, RESOLUTIONS, imu_streams
 import world
 
 
@@ -111,9 +111,26 @@ class MonzaWorldTest(unittest.TestCase):
                 self.assertEqual(sdf.findtext(".//world/gravity"), "0 0 -9.80665")
                 self.assertEqual(len(scene["imu"]["streams"]), 3)
         self.assertEqual(imu_streams(IMU_MODES["off"]), {})
-        for options in ({"resolution": "1280x800"}, {"imu_hz": -1}):
+        for options in ({"resolution": "1280x800"}, {"imu_hz": -1}, {"camera_hz": 45}, {"camera_hz": 60.1}):
             with self.assertRaises(ValueError):
                 world.build(Path("/unused"), **options)
+
+    def test_stereo_period_is_a_whole_number_of_physics_ticks(self):
+        for camera_hz in CAMERA_RATES:
+            for imu_hz in IMU_MODES.values():
+                with self.subTest(camera_hz=camera_hz, imu_hz=imu_hz), tempfile.TemporaryDirectory() as tmp:
+                    with patch.object(world, "track"):
+                        scene = world.build(tmp, camera_hz=camera_hz, imu_hz=imu_hz)
+                    sdf = ET.parse(Path(tmp) / "world.sdf")
+                    self.assertEqual([s.text for s in sdf.findall(".//sensor/update_rate")], [str(camera_hz)] * 2)
+                    self.assertEqual(scene["camera"]["rate_hz"], camera_hz)
+                    step = float(sdf.findtext(".//physics/max_step_size"))
+                    self.assertEqual(scene["trajectory"]["physics_step_s"], step)
+                    ticks = 1 / (camera_hz * step)
+                    self.assertAlmostEqual(ticks, round(ticks), delta=1e-5)
+                    self.assertEqual(scene["imu"]["rate_hz"], imu_hz)
+                    if imu_hz:
+                        self.assertAlmostEqual(1 / step, 900, places=3)
 
     def test_asphalt_mesh_covers_the_line_and_leaves_runoff_on_both_sides(self):
         with tempfile.TemporaryDirectory() as tmp:

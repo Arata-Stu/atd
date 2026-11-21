@@ -57,6 +57,7 @@ class RunContractTests(unittest.TestCase):
                 self.assertEqual(run.main(), 0)
                 args, report = simulate.call_args.args
                 self.assertEqual((args.route, report["route"], args.duration), (route, route, duration))
+                self.assertEqual(args.camera_hz, 90)
 
     def test_map_uses_one_complete_lap_and_defaults_to_normal_course_speed(self):
         for circuit in ("monza", "spa"):
@@ -298,7 +299,7 @@ class RunContractTests(unittest.TestCase):
                 out = Path(tmp)
                 args = SimpleNamespace(mode=mode, route="lap", circuit="spa", output=out,
                                        speed=3., laps=2, duration=None, wait_for_stereo=True,
-                                       camera_height=.12, camera_pitch_deg=0., resolution="848x480", imu="400")
+                                       camera_height=.12, camera_pitch_deg=0., resolution="848x480", camera_hz=60, imu="400")
                 if mode == "video":
                     metrics = {"mode": mode, "status": "complete", "largest_sim_gap_ms": 12,
                                "held_video_frames": 0, "video_frames": 4000, "paired_wall_hz": 45.}
@@ -311,7 +312,9 @@ class RunContractTests(unittest.TestCase):
                         patch.object(run, "start_stream") as stream, patch.object(run, "wait_for"), \
                         patch.object(run, "drive_laps") as drive, patch.object(run, "inspect_motion", return_value=motion):
                     self.assertEqual(run.run(args, report), 0)
-                trajectory = json.loads((out / "scene/scene.json").read_text())["trajectory"]
+                scene = json.loads((out / "scene/scene.json").read_text())
+                trajectory = scene["trajectory"]
+                self.assertEqual((report["camera_hz"], scene["camera"]["rate_hz"]), (60, 60))
                 self.assertEqual(report["geometry"], [848, 480])
                 self.assertEqual((report["accel_hz"], report["gyro_hz"], report["imu_hz"]), (200, 400, 400))
                 distance = trajectory["end_s_m"]
@@ -324,6 +327,7 @@ class RunContractTests(unittest.TestCase):
                     self.assertAlmostEqual(float(capture_cmd[capture_cmd.index("--duration") + 1]),
                                            report["total_travel_seconds"])
                     self.assertEqual(capture_cmd[capture_cmd.index("--resolution") + 1], "848x480")
+                    self.assertEqual(capture_cmd[capture_cmd.index("--camera-hz") + 1], "60")
                 else:
                     stream.assert_called_once()
                     drive.assert_called_once()

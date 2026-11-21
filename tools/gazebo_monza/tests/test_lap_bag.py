@@ -150,9 +150,11 @@ class LapBagTests(unittest.TestCase):
             final.parent.mkdir()
             args = SimpleNamespace(mode="bag", route="lap", circuit="spa", output=root,
                                    bag_output=final, duration=17., speed=None, laps=2,
-                                   camera_height=.12, camera_pitch_deg=0., resolution="424x240", imu="off")
+                                   camera_height=.12, camera_pitch_deg=0., resolution="424x240",
+                                   camera_hz=30, imu="off")
             scene = {"camera": {"height_above_floor_m": .12, "midpoint_forward_from_rear_axle_m": .1,
-                                "pitch_down_deg": 0., "baseline_m": .095, "optical_frames": lap_bag.FRAMES},
+                                "pitch_down_deg": 0., "baseline_m": .095, "optical_frames": lap_bag.FRAMES,
+                                "rate_hz": 30},
                      "trajectory": {"travel_seconds": 17., "laps": 2, "speed_mps": 1.2,
                                     "end_s_m": 20.4, "total_travel_seconds": 34.}}
             timing = {"start_sim_ns": 10, "finish_sim_ns": 20}
@@ -167,7 +169,8 @@ class LapBagTests(unittest.TestCase):
                     patch.object(run.shutil, "which", return_value=None), patch.object(subprocess, "Popen", start), \
                     patch.object(run, "stop_group", side_effect=lambda p: setattr(p, "stopped", True)), \
                     patch.object(run, "record_laps", return_value=(root / ".gazebo123", timing)) as record, \
-                    patch.object(lap_bag, "audit_and_publish", side_effect=audit) as publish:
+                    patch.object(lap_bag, "audit_and_publish", side_effect=audit) as publish, \
+                    contextlib.redirect_stdout(io.StringIO()) as log:
                 report = {"mode": "bag"}
                 self.assertEqual(run.run(args, report), 0)
             self.assertEqual(len(processes), 5)  # Gazebo, bridge and three static TF publishers.
@@ -175,7 +178,11 @@ class LapBagTests(unittest.TestCase):
             self.assertEqual(build.call_args.kwargs["travel_seconds"], 17.)
             self.assertEqual(build.call_args.kwargs["laps"], 2)
             self.assertEqual(report["geometry"], [424, 240])
+            self.assertEqual(report["camera_hz"], 30)
             self.assertEqual(build.call_args.kwargs["resolution"], "424x240")
+            self.assertEqual(build.call_args.kwargs["camera_hz"], 30)
+            expected_gb = 424 * 240 * 2 * 30 * 34 / 1e9
+            self.assertIn(f"合計 {expected_gb:.2f} GB", log.getvalue())
             self.assertEqual(report["total_travel_seconds"], 34.)
             self.assertEqual(report["lap_length_m"], 20.4)
             self.assertFalse(build.call_args.kwargs["repeat"])
@@ -194,7 +201,7 @@ class LapBagTests(unittest.TestCase):
             pending.mkdir()
             (pending / "metadata.yaml").write_text("partial")
             trace = root / "rig_motion.jsonl"
-            report = {"partial_bag": str(pending), "laps_requested": 1, "lap_duration_s": 1e-7}
+            report = {"partial_bag": str(pending), "laps_requested": 1, "lap_duration_s": 1e-7, "camera_hz": 60}
             timing = {"start_sim_ns": 10, "finish_sim_ns": 123}
             audit = MagicMock(side_effect=ValueError("missing right image"))
             with patch.dict(sys.modules, {"bag_audit": SimpleNamespace(audit_bag=audit)}):
@@ -203,10 +210,10 @@ class LapBagTests(unittest.TestCase):
                 self.assertEqual(list(rosbags.rglob("metadata.yaml")), [])
                 self.assertTrue((Path(report["partial_bag"]) / "metadata.yaml").is_file())
                 audit.assert_called_once_with(pending, 10, 123, laps=1, lap_duration_s=1e-7,
-                                              geometry=(640, 480), imu_hz=0, preroll_s=0)
+                                              geometry=(640, 480), camera_hz=60, imu_hz=0, preroll_s=0)
                 audit.side_effect = None
                 audit.return_value = {"coverage": "gaps_detected", "complete_stereo_samples": 2, "largest_gap_sim_s": .3,
-                                      "file_bytes": {"test.mcap": 1234}}
+                                      "measured_sim_hz": 42.1, "file_bytes": {"test.mcap": 1234}}
                 with self.assertRaises(FileNotFoundError):
                     lap_bag.audit_and_publish(pending, final, timing, report, trace)
                 self.assertFalse(final.exists())
@@ -219,7 +226,7 @@ class LapBagTests(unittest.TestCase):
                 lap_bag.audit_and_publish(pending, final, timing, report, trace)
                 self.assertEqual((final / "atd_ground_truth/rig_motion.jsonl").read_bytes(), trace.read_bytes())
                 self.assertEqual(report, {"bag_audit": audit.return_value, "bag_path": str(final),
-                                          "laps_requested": 1, "lap_duration_s": 1e-7})
+                                          "laps_requested": 1, "lap_duration_s": 1e-7, "camera_hz": 60})
                 self.assertEqual(list(rosbags.rglob("metadata.yaml")), [final / "metadata.yaml"])
                 self.assertFalse(pending.parent.exists())
 

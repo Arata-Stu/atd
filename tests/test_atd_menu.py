@@ -161,17 +161,19 @@ exit 130
         self.assertFalse(self.ssh_args.exists())
 
     def test_notebook_can_launch_simulation_and_ros_bringup(self):
-        self.menu(picks=['gazebo', 'serve', 'monza', 'chicane', '424x240', '400', 'quit'], keys=b'1.25\n')
+        self.menu(picks=['gazebo', 'serve', 'monza', 'chicane', '424x240', '30', '400', 'quit'], keys=b'1.25\n')
         self.assert_call('gazebo.sh', 'serve', '--route', 'chicane', '--circuit', 'monza', '--speed', '1.25',
-                         '--resolution', '424x240', '--imu', '400')
+                         '--resolution', '424x240', '--camera-hz', '30', '--imu', '400')
         for mode in ['bag', 'map', 'video', 'serve', 'run']:
-            self.menu('gazebo', picks=[mode, 'spa', '848x480', '200'], keys=b'1.75\n3\n')
+            self.menu('gazebo', picks=[mode, 'spa', '848x480', '60', '200'], keys=b'1.75\n3\n')
             self.assert_call('gazebo.sh', mode, '--route', 'lap', '--circuit', 'spa',
-                             '--speed', '1.75', '--laps', '3', '--resolution', '848x480', '--imu', '200')
-        self.menu('gazebo', picks=['video', 'monza', 'lap', '640x480', 'off'], keys=b'\n\n')
-        self.assert_call('gazebo.sh', 'video', '--route', 'lap', '--circuit', 'monza', '--resolution', '640x480', '--imu', 'off')
-        self.menu('gazebo', picks=['diagnose', 'monza', 'lap', '1280x720', 'off'], keys=b'\n')
-        self.assert_call('gazebo.sh', 'diagnose', '--route', 'lap', '--circuit', 'monza', '--resolution', '1280x720', '--imu', 'off')
+                             '--speed', '1.75', '--laps', '3', '--resolution', '848x480', '--camera-hz', '60', '--imu', '200')
+        self.menu('gazebo', picks=['video', 'monza', 'lap', '640x480', '90', 'off'], keys=b'\n\n')
+        self.assert_call('gazebo.sh', 'video', '--route', 'lap', '--circuit', 'monza',
+                         '--resolution', '640x480', '--camera-hz', '90', '--imu', 'off')
+        self.menu('gazebo', picks=['diagnose', 'monza', 'lap', '1280x720', '30', 'off'], keys=b'\n')
+        self.assert_call('gazebo.sh', 'diagnose', '--route', 'lap', '--circuit', 'monza',
+                         '--resolution', '1280x720', '--camera-hz', '30', '--imu', 'off')
         self.menu('gazebo', picks=['map', 'spa'], keys=b'1.25\nq\n')
         self.assertFalse(self.calls.exists())
         result = self.invoke('gazebo', 'bag', '--course', 'spa', '--speed', '.9', '--laps', '4')

@@ -5,9 +5,9 @@ import math
 from pathlib import Path
 import sys
 
-from capture import (BASELINE_M, Calibration, FRAMES, HEIGHT, INFO_TOPICS, NANO, TARGET_HZ,
+from capture import (BASELINE_M, Calibration, FRAMES, HEIGHT, INFO_TOPICS, NANO,
                      TOPICS, WIDTH, check_image, missing_slots, stamp_intervals)
-from sensor_profile import ACCEL_TOPIC, GYRO_TOPIC, IMU_TOPIC, imu_streams
+from sensor_profile import ACCEL_TOPIC, CAMERA_RATES, DEFAULT_CAMERA_HZ, GYRO_TOPIC, IMU_TOPIC, imu_streams
 
 
 TF = "/tf_static"
@@ -187,12 +187,14 @@ def imu_coverage(name, stamps, boundaries, frame, hz):
 
 
 def audit_bag(path, start_sim_ns, finish_sim_ns, *, laps=1, lap_duration_s=None,
-              geometry=(WIDTH, HEIGHT), imu_hz=0, preroll_s=0):
+              geometry=(WIDTH, HEIGHT), camera_hz=DEFAULT_CAMERA_HZ, imu_hz=0, preroll_s=0):
     """ROS の画像ヘッダ時刻を使う。成功時は JSON に保存可能な検査結果を返す。"""
     if start_sim_ns <= 0 or finish_sim_ns <= start_sim_ns:
         raise ValueError("周回の発着時刻が不正です")
     if type(laps) is not int or laps < 1:
         raise ValueError("監査対象の周回数が不正です")
+    if camera_hz not in CAMERA_RATES:
+        raise ValueError(f"監査対象のカメラ周波数が不正です: {camera_hz}")
     if laps > 1 and (lap_duration_s is None or not math.isfinite(lap_duration_s) or lap_duration_s <= 0):
         raise ValueError("監査対象の周回時間が不正です")
     bag = Path(path)
@@ -310,7 +312,7 @@ def audit_bag(path, start_sim_ns, finish_sim_ns, *, laps=1, lap_duration_s=None,
         streams[name] = {"unique_stamps": len(stamps),
                          "duplicates": sum(counts_at_stamp[t] - 1 for t in stamps),
                          "missing_at_observed_stamps": len(observed) - len(stamps),
-                         "missing_slots_estimate": missing_slots(stamp_intervals(stamps))}
+                         "missing_slots_estimate": missing_slots(stamp_intervals(stamps), camera_hz)}
     return {"storage_id": "mcap", "file_bytes": files, "message_counts": dict(counts),
             "geometry": list(geometry), "imu_streams": {
                 name: imu_coverage(name, imu_stamps[name], boundaries, frame, hz)
@@ -319,11 +321,12 @@ def audit_bag(path, start_sim_ns, finish_sim_ns, *, laps=1, lap_duration_s=None,
             "laps_requested": laps, "interior_stereo_samples_per_lap": lap_sample_counts,
             "lap_start_sim_ns": start_sim_ns, "lap_finish_sim_ns": finish_sim_ns,
             "first_covering_sim_ns": lap[0], "last_covering_sim_ns": lap[-1],
-            "complete_stereo_samples": len(lap), "nominal_sim_hz": TARGET_HZ,
+            "complete_stereo_samples": len(lap), "nominal_sim_hz": camera_hz,
+            "measured_sim_hz": (len(lap) - 1) * NANO / (lap[-1] - lap[0]),
             "largest_receive_header_offset_s": max_clock_offset / NANO,
             "receive_header_offset_over_1s": large_offsets,
             "coverage": "gaps_detected" if gaps else "continuous",
             "gaps": gaps, "largest_gap_sim_s": max(intervals), "gap_threshold_sim_s": GAP_WARNING_NS / NANO,
-            "missing_complete_slots_estimate": missing_slots(intervals), "streams": streams,
+            "missing_complete_slots_estimate": missing_slots(intervals, camera_hz), "streams": streams,
             "tf_ready_sim_ns": tf_ready_ns, "tf_ready_before_lap": tf_ready_ns <= start_sim_ns,
             "stereo_calibration": calibration.result, "static_tf_parents": parents}

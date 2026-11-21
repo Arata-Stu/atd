@@ -12,14 +12,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import bag_audit as audit
 
 
-STEP = round(audit.NANO / audit.TARGET_HZ)
+STEP = round(audit.NANO / audit.DEFAULT_CAMERA_HZ)
 PIXELS = bytes(640 * 480)
 
 
-def frame(topic, index, geometry=(640, 480)):
+def frame(topic, index, geometry=(640, 480), step=STEP):
     side = audit.CAMERAS[topic]
     w, h = geometry
-    sec, ns = divmod(index * STEP, audit.NANO)
+    sec, ns = divmod(index * step, audit.NANO)
     header = Obj(stamp=Obj(sec=sec, nanosec=ns), frame_id=audit.FRAMES[side])
     if topic == audit.TOPICS[side]:
         return Obj(header=header, width=w, height=h, encoding="mono8", step=w,
@@ -42,11 +42,12 @@ def static_tf(imu_hz=0):
     return Obj(transforms=transforms)
 
 
-def recording(indices=range(1, 8), *, geometry=(640, 480), imu_hz=0):
+def recording(indices=range(1, 8), *, geometry=(640, 480), camera_hz=audit.DEFAULT_CAMERA_HZ, imu_hz=0):
+    step = round(audit.NANO / camera_hz)
     messages = [(audit.TF, static_tf(imu_hz))]
-    messages.extend((topic, frame(topic, i, geometry)) for i in indices for topic in audit.CAMERAS)
+    messages.extend((topic, frame(topic, i, geometry, step)) for i in indices for topic in audit.CAMERAS)
     for name, (frame_id, rate) in audit.imu_streams(imu_hz).items():
-        for ns in range(audit.NANO // rate, 8 * STEP, audit.NANO // rate):
+        for ns in range(audit.NANO // rate, 8 * step, audit.NANO // rate):
             header = Obj(frame_id=frame_id, stamp=Obj(sec=0, nanosec=ns))
             messages.append((name, Obj(header=header, linear_acceleration=Obj(x=0., y=-9.8, z=0.),
                                        angular_velocity=Obj(x=.5, y=0., z=0.),
@@ -92,6 +93,27 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(result["interior_stereo_samples_per_lap"], [2, 2])
         with self.assertRaisesRegex(ValueError, "2周目"):
             self.audit(recording([1, 2, 3, 4, 5, 8, 9]), **options)
+
+    def test_camera_rate_drives_slot_estimates_on_both_laps_independently_of_imu(self):
+        for hz in (30, 60, 90):
+            with self.subTest(camera_hz=hz):
+                step = round(audit.NANO / hz)
+                options = {"camera_hz": hz, "imu_hz": 400, "start": step, "finish": 7 * step,
+                           "laps": 2, "lap_duration_s": 3 * step / audit.NANO}
+                messages = recording(camera_hz=hz, imu_hz=400)
+                full = self.audit(messages, **options)
+                self.assertEqual(full["nominal_sim_hz"], hz)
+                self.assertAlmostEqual(full["measured_sim_hz"], hz, places=5)
+                self.assertEqual(full["missing_complete_slots_estimate"], 0)
+                self.assertEqual(full["imu_streams"][audit.GYRO_TOPIC]["nominal_sim_hz"], 400)
+                right = audit.TOPICS["right"]
+                partial = [(name, msg) for name, msg in messages
+                           if name != right or msg.header.stamp.nanosec not in (3 * step, 6 * step)]
+                result = self.audit(partial, **options)
+                self.assertEqual(result["interior_stereo_samples_per_lap"], [1, 1])
+                self.assertEqual(result["missing_complete_slots_estimate"], 2)
+                self.assertEqual(result["streams"][right]["missing_slots_estimate"], 2)
+                self.assertEqual(result["streams"][audit.TOPICS["left"]]["missing_slots_estimate"], 0)
 
     def test_selected_geometry_and_all_imu_streams_are_verified_in_sim_time(self):
         geometry = (424, 240)

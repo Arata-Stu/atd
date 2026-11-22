@@ -11,7 +11,7 @@ import map_job
 
 class MapJobTests(unittest.TestCase):
     def make_output(self, root):
-        out = root / "runs/gazebo/spa/trial"
+        out = root / "runs/gazebo/odaiba/trial"
         out.mkdir(parents=True)
         return out
 
@@ -37,7 +37,7 @@ wait('mapping.ready')
 (p/'scene/scene.json').write_text('{"geography":{"fixture":true}}')
 (p/'lap.complete.json').write_text('{"start_sim_ns":1,"finish_sim_ns":2}')
 wait('mapping.saved.json')
-(p/'run.json').write_text('{"status":"complete","circuit":"spa","motion":{"lap_completed":true}}')
+(p/'run.json').write_text('{"status":"complete","circuit":"odaiba","motion":{"lap_completed":true}}')
 """
             mapper = common + """
 assert (p/'gazebo.ready').exists()
@@ -57,12 +57,12 @@ db.mkdir(parents=True)
             altered["tracking"]["finish_sim_ns"] += 1
             saved.write_text(json.dumps(altered))
             with self.assertRaisesRegex(RuntimeError, "全周"):
-                map_job.verify_and_publish(root, out, "spa")
+                map_job.verify_and_publish(root, out, "odaiba")
             saved.write_text(witness)
-            target = map_job.verify_and_publish(root, out, "spa")
-            self.assertEqual(target, root / "maps/gazebo-spa-trial")
+            target = map_job.verify_and_publish(root, out, "odaiba")
+            self.assertEqual(target, root / "maps/gazebo-odaiba-trial")
             self.assertEqual((target / "nvidia/cuvslam_map/landmarks.mdb").read_bytes(), b"map")
-            self.assertEqual(json.loads((target / "mapping.json").read_text())["run"], "runs/gazebo/spa/trial")
+            self.assertEqual(json.loads((target / "mapping.json").read_text())["run"], "runs/gazebo/odaiba/trial")
             self.assertFalse((out / "map-staging").exists())
 
     def test_mapper_exit_is_detected_even_if_launch_returns_zero(self):
@@ -96,14 +96,14 @@ while not (p/'mapping.cancel').exists(): time.sleep(.01)
                      "slam_max_map_size": 0}
             (out / "mapping.saved.json").write_text(json.dumps(saved))
             motion = {"lap_completed": True, "laps_requested": 2, "laps_completed": 1}
-            report = {"status": "complete", "circuit": "spa", "motion": motion}
+            report = {"status": "complete", "circuit": "odaiba", "motion": motion}
             (out / "run.json").write_text(json.dumps(report))
             with self.assertRaisesRegex(RuntimeError, "全周"):
-                map_job.verify_and_publish(root, out, "spa")
+                map_job.verify_and_publish(root, out, "odaiba")
             self.assertFalse((root / "maps").exists())
             motion["laps_completed"] = 2
             (out / "run.json").write_text(json.dumps(report))
-            target = map_job.verify_and_publish(root, out, "spa")
+            target = map_job.verify_and_publish(root, out, "odaiba")
             metadata = json.loads((target / "mapping.json").read_text())
             self.assertEqual(metadata["lap"], {**timing, "speed_mps": 3.0, "laps_completed": 2})
             self.assertEqual(metadata["save"]["slam_max_map_size"], 0)

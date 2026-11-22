@@ -2,7 +2,7 @@
 from datetime import timedelta
 from hashlib import sha256
 import json
-from math import cos, degrees, dist, isclose, pi, sin
+from math import dist, isclose, pi
 from pathlib import Path
 import sys
 import tempfile
@@ -12,18 +12,9 @@ from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import geography
 from monza_motion import MonzaMotion, interpolate, travel_fraction
 from sensor_profile import CAMERA_RATES, IMU_MODES, RESOLUTIONS, imu_streams
 import world
-
-
-def in_ring(x, y, ring):
-    inside = False
-    for (ax, ay), (bx, by) in zip(ring, ring[1:]):
-        if (ay > y) != (by > y) and x < ax + (y - ay) * (bx - ax) / (by - ay):
-            inside = not inside
-    return inside
 
 
 def ground_faces(visual):
@@ -42,24 +33,8 @@ def on_surface(x, y, faces):
     return False
 
 
-class MonzaWorldTest(unittest.TestCase):
-    def test_pinned_car_chicane_and_rc_reference_frame(self):
-        meta = geography.reference_metadata()
-        self.assertEqual(meta["sha256"], sha256(geography.TRACK_FILE.read_bytes()).hexdigest())
-        self.assertEqual(meta["osm_ways"], {
-            "straight": {"id": 19842206, "version": 56},
-            "chicane": {"id": 179968242, "version": 9},
-            "exit": {"id": 179968264, "version": 6},
-            "left": {"id": 1569593286, "version": 1},
-            "right": {"id": 1569604642, "version": 1},
-        })
-        lon, lat = 9.2818939, 45.6244492
-        self.assertEqual(geography.project(lon, lat), (0, 0))
-        self.assertAlmostEqual(geography.project(lon + .001, lat)[0], 7.799, places=2)
-        self.assertAlmostEqual(geography.project(lon, lat + .001)[1], 11.114, places=2)
-        self.assertEqual(meta["horizontal_scale"], .1)
-
-    def test_monza_geometry_and_sensors(self):
+class OdaibaWorldTest(unittest.TestCase):
+    def test_geometry_and_sensors(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "scene"
             scene = world.build(output, height=.135, pitch_deg=4)
@@ -69,8 +44,8 @@ class MonzaWorldTest(unittest.TestCase):
             left, right = rig.findall("./link/sensor")
             self.assertEqual([s.findtext("frame_id") for s in (left, right)],
                              ["camera_infra1_optical_frame", "camera_infra2_optical_frame"])
-            self.assertEqual(left.findtext("topic"), "/monza/left/image")
-            self.assertEqual(right.findtext("camera/camera_info_topic"), "/monza/right/camera_info")
+            self.assertEqual(left.findtext("topic"), "/odaiba/left/image")
+            self.assertEqual(right.findtext("camera/camera_info_topic"), "/odaiba/right/camera_info")
             lp, rp = [list(map(float, s.findtext("pose").split())) for s in (left, right)]
             self.assertAlmostEqual(lp[1]-rp[1], .095)
             self.assertEqual(lp[2], .135)
@@ -87,19 +62,13 @@ class MonzaWorldTest(unittest.TestCase):
                 self.assertTrue(all(Path(e.text).is_file() for e in sdf.iter(tag)))
             poses = scene["trajectory"]["samples_s_x_y_yaw"]
             self.assertEqual(poses[0][0], 0)
-            self.assertAlmostEqual(poses[-1][0], 23.96, places=1)
+            self.assertAlmostEqual(poses[-1][0], 79.66, places=1)
             self.assertEqual(scene["trajectory"]["end_s_m"], poses[-1][0])
             self.assertTrue(all(a[0] < b[0] for a, b in zip(poses, poses[1:])))
-            self.assertLess(min(dist((x, y), (0, 0)) for s, x, y, yaw in poses if 11.9 < s < 12.1), .05)
-            # Heading is measured CCW from east. The pit straight runs north,
-            # T1 turns right beyond east, and T2 turns left towards north again.
-            self.assertAlmostEqual(degrees(poses[0][3]), 85, delta=3)
-            self.assertLess(min(degrees(p[3]) for p in poses if 13 < p[0] < 16), -15)
-            self.assertAlmostEqual(degrees(poses[-1][3]), 105, delta=3)
 
     def test_stereo_resolutions_and_imu_clock(self):
         for resolution, (width, height) in RESOLUTIONS.items():
-            with self.subTest(resolution=resolution), tempfile.TemporaryDirectory() as tmp, patch.object(world, "track"):
+            with self.subTest(resolution=resolution), tempfile.TemporaryDirectory() as tmp, patch.object(world, "odaiba_track"):
                 scene = world.build(tmp, resolution=resolution, imu_hz=400)
                 sdf = ET.parse(Path(tmp) / "world.sdf")
                 self.assertEqual([(int(c.findtext("width")), int(c.findtext("height")))
@@ -119,7 +88,7 @@ class MonzaWorldTest(unittest.TestCase):
         for camera_hz in CAMERA_RATES:
             for imu_hz in IMU_MODES.values():
                 with self.subTest(camera_hz=camera_hz, imu_hz=imu_hz), tempfile.TemporaryDirectory() as tmp:
-                    with patch.object(world, "track"):
+                    with patch.object(world, "odaiba_track"):
                         scene = world.build(tmp, camera_hz=camera_hz, imu_hz=imu_hz)
                     sdf = ET.parse(Path(tmp) / "world.sdf")
                     self.assertEqual([s.text for s in sdf.findall(".//sensor/update_rate")], [str(camera_hz)] * 2)
@@ -132,64 +101,17 @@ class MonzaWorldTest(unittest.TestCase):
                     if imu_hz:
                         self.assertAlmostEqual(1 / step, 900, places=3)
 
-    def test_asphalt_mesh_covers_the_line_and_leaves_runoff_on_both_sides(self):
+    def test_asphalt_mesh_and_pinned_geometry(self):
         with tempfile.TemporaryDirectory() as tmp:
-            output = Path(tmp)
-            scene = world.build(output)
-            sdf = ET.parse(output / "world.sdf")
-            self.assertEqual(scene["environment"], "outdoor_circuit")
-            self.assertEqual(scene["scenery"], "monza_prima_variante_osm")
+            scene = world.build(tmp)
             manifest = scene["geography"]
             for filename, checksum in (("file", "sha256"), ("scenery_file", "scenery_sha256")):
                 self.assertEqual(manifest[checksum], sha256((world.HERE / manifest[filename]).read_bytes()).hexdigest())
+            sdf = ET.parse(Path(tmp) / "world.sdf")
             self.assertIsNotNone(sdf.find(".//light[@type='directional']"))
-            self.assertEqual(sdf.findtext(".//model[@name='grandstand']/static"), "true")
-            trees = sdf.findall(".//model[@name='woodland']/link/visual")
-            self.assertGreaterEqual(len(trees), 2)
-            tree_roots = []
-            for tree in trees:
-                material = tree.find("material")
-                self.assertEqual(material.findtext("double_sided"), "true")
-                rows = Path(tree.findtext("geometry/mesh/uri")).read_text().splitlines()
-                vertices = [tuple(map(float, r.split()[1:])) for r in rows if r.startswith("v ")]
-                for i in range(0, len(vertices), 4):
-                    base = [(x, y) for x, y, z in vertices[i:i+4] if z == 0]
-                    self.assertEqual(len(base), 2)
-                    (ax, ay), (bx, by) = base
-                    tree_roots.append(((ax + bx) / 2, (ay + by) / 2))
-            visuals = {v.get("name"): v for v in sdf.findall(".//model[@name='circuit']/link/visual")}
-            self.assertEqual(Path(visuals["grass"].findtext(".//albedo_map")).name, "grass.jpg")
-            self.assertEqual(Path(visuals["floor"].findtext(".//albedo_map")).name, "floor.jpg")
-            faces = ground_faces(visuals["floor"])
-            bypass = ground_faces(visuals["bypass_centerline"])
-            decks = ground_faces(sdf.find(".//visual[@name='stand_decks']"))
-
-        for s, x, y, yaw in scene["trajectory"]["samples_s_x_y_yaw"]:
-            self.assertTrue(on_surface(x, y, faces), f"カメラ台が舗装から外れた位置 {s:.3f} m")
-            if s < 5:
-                # Mapped width near the ride start is ~1 m at RC scale.
-                for offset in (-.9, .9):
-                    self.assertFalse(on_surface(x - offset * sin(yaw), y + offset * cos(yaw), faces))
-        # An incoming driver can continue onto the separate escape road,
-        # whose straight centre does not belong to the double-bend GP strip.
-        x, y = geography.project(9.281957, 45.625164)
-        self.assertFalse(on_surface(x, y, faces))
-        self.assertTrue(on_surface(x, y, bypass))
-        reference = json.loads((geography.TRACK_FILE.parent / "monza_scenery.geojson").read_text())
-        forest = [[[geography.project(*p) for p in ring] for ring in f["geometry"]["coordinates"]]
-                  for f in reference["features"] if f["properties"]["kind"] == "woodland"]
-        self.assertTrue(tree_roots)
-        for x, y in set(tree_roots):
-            self.assertTrue(any(in_ring(x, y, rings[0]) and not any(in_ring(x, y, hole) for hole in rings[1:])
-                                for rings in forest), f"樹木が地図の林域から外れています {(x, y)}")
-        # Use top-face centroids to match all six structures to real footprints.
-        # Coincident XY wall vertices give degenerate triangles in this projection.
-        deck_centres = {(sum(x for x, _ in tri) / 3, sum(y for _, y in tri) / 3)
-                        for tri in decks if len(set(tri)) == 3}
-        for feature in reference["features"]:
-            if feature["properties"]["kind"] == "grandstand":
-                ring = [geography.project(*p) for p in feature["geometry"]["coordinates"][0]]
-                self.assertTrue(any(in_ring(x, y, ring) for x, y in deck_centres), feature["id"])
+            faces = ground_faces(sdf.find(".//visual[@name='floor']"))
+        for s, x, y, yaw in scene["trajectory"]["samples_s_x_y_yaw"][::10]:
+            self.assertTrue(on_surface(x, y, faces), f"走行軌跡が舗装から外れた位置 {s:.2f} m")
 
     def test_endpoints_and_benchmark_return_trip(self):
         self.assertEqual([travel_fraction(t, 10, False) for t in (0, 5, 10, 25)], [0, .5, 1, 1])
@@ -205,7 +127,7 @@ class MonzaWorldTest(unittest.TestCase):
 
     def test_speed_and_laps_use_the_actual_route_length(self):
         with tempfile.TemporaryDirectory() as tmp:
-            scene = world.build(tmp, circuit="spa", speed_mps=3.5, laps=3, wait_for_capture=True,
+            scene = world.build(tmp, circuit="odaiba", speed_mps=3.5, laps=3, wait_for_capture=True,
                                 record_ground_truth=True)
             route = scene["trajectory"]
             self.assertEqual(route["trace_interval_s"], .05)
@@ -221,13 +143,13 @@ class MonzaWorldTest(unittest.TestCase):
 
     def test_odaiba_two_lap_bag_scene(self):
         with tempfile.TemporaryDirectory() as tmp:
-            scene = world.build(tmp, circuit="odaiba", speed_mps=5, laps=2, resolution="1280x720",
+            scene = world.build(tmp, circuit="odaiba", speed_mps=3, laps=2, resolution="1280x720",
                                 camera_hz=30, record_ground_truth=True, wait_for_capture=True)
             self.assertEqual(scene["geography"]["horizontal_scale"], .2)
             self.assertNotIn("origin_lon_lat_deg", scene["geography"])
             route = scene["trajectory"]
             self.assertAlmostEqual(route["end_s_m"], 80, delta=.5)
-            self.assertEqual(route["total_travel_seconds"], 2 * route["end_s_m"] / 5)
+            self.assertEqual(route["total_travel_seconds"], 2 * route["end_s_m"] / 3)
             self.assertTrue(route["wait_for_capture"])
             self.assertLessEqual(route["trace_interval_s"], .05)
             self.assertEqual(route["samples_s_x_y_yaw"][0][1:], route["samples_s_x_y_yaw"][-1][1:])

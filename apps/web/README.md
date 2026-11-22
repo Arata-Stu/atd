@@ -58,7 +58,7 @@ Notebook ホストから準備する場合は、コンテナを起動してか�
 
 Notebook で[シミュレーター](http://127.0.0.1:8766/#simulation)を開き、同じコースを固定先読みと速度連動先読みで走らせる。軌跡、横ずれ、目標・模擬速度、操舵と、仮定した遅延による違いを確認できる。[モデルと比較手順](../../docs/simulation.md)
 
-「F1 ベンチマーク」は同梱の F1 レイアウト20件または選択コースを評価する。コースごとに編集用地図を作成し、通常の「地図とライン」から Centerline・Raceline を再生成できる。評価履歴には条件とコース別・試行別の成績を保存する。[操作と指標](../../docs/simulation.md#f1-コースでベンチマークを実行する)
+「コース別評価」では、「地図とライン」で作成した閉路の HDMap と生成済みの Centerline または Raceline を使う。選択したラインを持つ全地図をまとめて評価するか、1つの地図を選べる。保存した評価結果はコース・試行ごとに閲覧できる。[操作と指標](../../docs/simulation.md)
 
 ## 自己位置検証
 
@@ -94,7 +94,7 @@ Notebook の [自己位置検証](http://127.0.0.1:8766/#localization) を開き
 
 Map 画面で、次の順に進める。駐車機能は対象に含めない。
 
-Notebook ホストで `atd gazebo bag --circuit monza` を実行して作成した1周分の bag も、実車の記録と同じ「rosbag から地図を作成」から選べる。[Gazebo の記録手順と所要容量](../../docs/gazebo_circuits.md#1周でcuvslam地図を作る)
+Notebook ホストで `atd gazebo bag --course odaiba --speed 3 --laps 2` を実行して作成した2周分の bag も、実車の記録と同じ「rosbag から地図を作成」から選べる。[Gazebo の記録手順と所要容量](../../docs/gazebo_circuits.md)
 
 1. **cuVSLAM 地図を作成**: `/data/record/rosbags/` の bag、地図 ID、左右画像・CameraInfo の topic、base / optical frame を指定する。NVIDIA の `isaac_mapping_ros/create_map_offline.py` を独立 worker で呼び、`maps/<id>/nvidia/` に公式の `cuvslam_map/`・`map_frames/` 等の構成を維持して保存する。
 2. **VGL 地図を準備する**。「VGL地図を作成」で Notebook に export 済みのモデルを選ぶ。入力解像度と export ID を確認して「VGL地図の準備を開始」を押すと、この PC の GPU 用 engine を生成し、公式 `create_cuvgl_map.py` で地図の `cuvgl_map/` を作成する。地図を選ぶ前でも「VGLモデル一覧」で export 済みのモデルを確認できる。[モデルの準備手順](../../docs/vgl_models.md)

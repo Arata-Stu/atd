@@ -93,6 +93,6 @@ def measure(output, circuit):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--circuit", default="monza")
+    parser.add_argument("--circuit", default="odaiba")
     args = parser.parse_args()
     measure(args.output, args.circuit)

@@ -6,9 +6,6 @@ import json
 from math import ceil, cos, dist, hypot, sin, tau
 from pathlib import Path
 
-from monza_trackside import _beam
-from scenery import _box
-
 REFERENCE = Path(__file__).resolve().parent / "reference" / "circuits" / "odaiba" / "scenery.json"
 COLORS = {
     "barrier_blue": (.045, .13, .45), "barrier_white": (.83, .84, .82),
@@ -22,6 +19,36 @@ COLORS = {
     "tyres": (.075, .078, .079), "boundary_steel": (.41, .44, .45),
     "floodlights": (.76, .76, .72),
 }
+
+
+def _beam(a, b, width, low, high):
+    """Rectangular beam along a horizontal span, including both end faces."""
+    length = dist(a, b)
+    nx, ny = (a[1] - b[1]) / length, (b[0] - a[0]) / length
+    half = width / 2
+    profile = [(-half, low), (half, low), (half, high), (-half, high)]
+    start, end = [[(x+nx*w, y+ny*w, z) for w, z in profile] for x, y in (a, b)]
+    for i in range(4):
+        j = (i + 1) % 4
+        yield [start[i], start[j], end[j], end[i]]
+    yield start[::-1]
+    yield end
+
+
+def _box(front, back, u0, u1, v0, v1, z0, z1, *, rise_u=0, rise_v=0):
+    # The four mapped corners may form a slightly skewed quadrilateral.
+    bottom = []
+    for u, v, rise in ((u0, v0, 0), (u1, v0, rise_u),
+                       (u1, v1, rise_u + rise_v), (u0, v1, rise_v)):
+        xy = [(1-v)*(a + (b-a)*u) + v*(d + (c-d)*u)
+              for a, b, d, c in zip(*front, *back)]
+        bottom.append((*xy, z0 + rise))
+    top = [(x, y, z + (z1 - z0)) for x, y, z in bottom]
+    yield bottom[::-1]
+    yield top
+    for i in range(4):
+        j = (i+1) % 4
+        yield [bottom[i], bottom[j], top[j], top[i]]
 
 
 class Frontage:

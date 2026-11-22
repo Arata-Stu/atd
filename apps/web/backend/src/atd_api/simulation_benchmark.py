@@ -1,11 +1,10 @@
-"""Notebook 上の F1 サンプル、編集用コピー、再現可能な閉ループ評価。"""
+"""Notebook に保存された閉路の HDMap を使う閉ループ評価。"""
 from __future__ import annotations
 
 import csv
 import hashlib
 import io
 import json
-import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -16,7 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from .planning_replay import _core
 from .store import atomic_json, confined, identifier, read_json
 
-SAMPLES = Path(__file__).resolve().parents[5] / 'samples/f1tenth'
 REPORTS = Path('runs/simulation_benchmarks')
 router = APIRouter(prefix='/simulation')
 
@@ -25,7 +23,7 @@ class CourseOptions(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     settings: dict = Field(default_factory=dict)
     line: Literal['centerline', 'raceline'] = 'raceline'
-    source: Literal['sample', 'workspace'] = 'sample'
+    source: Literal['workspace'] = 'workspace'
 
 
 class Batch(CourseOptions):
@@ -39,39 +37,19 @@ class Trace(CourseOptions):
     trial: int = Field(default=1, ge=1, le=3)
 
 
-def catalog():
-    return read_json(SAMPLES / 'catalog.json')
+def course_lines(document):
+    if not document.get('closed') or document.get('source', {}).get('kind') == 'f1tenth_benchmark':
+        return []
+    lines = document.get('lines', {})
+    return [kind for kind in ('raceline', 'centerline')
+            if lines.get(kind) and lines[kind].get('points') and lines[kind].get('profile')]
 
 
-def included():
-    return {row['id']: row for row in catalog()['tracks'] if row['included']}
-
-
-def sample_folder(key):
-    if key not in included():
-        raise ValueError('ベンチマークに含まれるコースを選択してください')
-    return confined(SAMPLES / 'maps', identifier(key))
-
-
-def working_id(key):
-    return 'f1tenth-' + identifier(key)
-
-
-def editable_id(store, key):
-    path = confined(store.maps_root, working_id(key) + '/hdmap/map.json', exists=False)
-    if path.is_file() and read_json(path).get('source', {}).get('benchmark_course') == key:
-        return working_id(key)
-    return None
-
-
-def document_for(store, key, source):
-    folder = sample_folder(key)
-    if source == 'sample':
-        return read_json(folder / 'hdmap/map.json')
-    edit = editable_id(store, key)
-    if not edit:
-        raise ValueError(f'{key} の編集用 HDMap を先に作成してください')
-    return store.load_map(edit)
+def document_for(store, key, line):
+    document = store.load_map(key)
+    if line not in course_lines(document):
+        raise ValueError(f'{key} の評価には、閉路の HDMap と生成済みの {line} が必要です')
+    return document
 
 
 def engine():
@@ -83,42 +61,17 @@ def engine():
 
 @router.get('/courses')
 def courses(request: Request):
-    store = request.app.state.store
-    data = catalog()
-    return dict(upstream=data['upstream'], items=[
-        dict(row, editable_id=editable_id(store, row['id']) if row['included'] else None)
-        for row in data['tracks']])
-
-
-@router.post('/courses/{key}/edit')
-def edit_course(key: str, request: Request):
-    folder = sample_folder(key)
-    store = request.app.state.store
-    name = working_id(key)
-    with store.lock('maps'):
-        target = confined(store.maps_root, name, exists=False)
-        if target.exists():
-            if editable_id(store, key) == name:
-                return dict(map_id=name)
-            raise ValueError(f'同じ地図 ID {name} が既に使われています')
-        # 地図と両ラインが揃った時点で公開する。既存の編集結果を再インポートしない。
-        with tempfile.TemporaryDirectory(dir=store.maps_root, prefix='.sample-') as tmp:
-            stage = Path(tmp) / name
-            document = read_json(folder / 'hdmap/map.json')
-            document['id'] = name
-            document['source'] = dict(document.get('source', {}), benchmark_course=key)
-            atomic_json(stage / 'hdmap/map.json', document)
-            for kind in ('centerline', 'raceline'):
-                line = read_json(folder / 'lines' / (kind + '.json'))
-                line['map_id'] = name
-                atomic_json(stage / 'lines' / (kind + '.json'), line)
-            stage.rename(target)
-    return dict(map_id=name)
+    items = []
+    for document in request.app.state.store.list_maps():
+        lines = course_lines(document)
+        if lines:
+            items.append(dict(id=document['id'], name=document.get('title') or document['id'], lines=lines))
+    return dict(items=items)
 
 
 @router.post('/courses/{key}/compare')
 def compare_course(key: str, body: Trace, request: Request):
-    doc = document_for(request.app.state.store, key, body.source)
+    doc = document_for(request.app.state.store, key, body.line)
     return JSONResponse(engine().compare_course(doc, body.settings, line=body.line, laps=body.laps, trial=body.trial))
 
 
@@ -137,7 +90,7 @@ def prepare(store, body):
     if len(set(keys)) != len(keys):
         raise ValueError('同じコースを複数回指定できません')
     # 投稿時の入力を検証し、worker 実行までの編集を検出する。
-    hashes = {key: signature(document_for(store, key, body.source), body.line) for key in keys}
+    hashes = {key: signature(document_for(store, key, body.line), body.line) for key in keys}
     _core('atd_planning')
     simulation = _core('atd_control', 'simulation')
     return dict(body.model_dump(), settings=simulation.validate_settings(body.settings), course_sha256=hashes)
@@ -148,8 +101,7 @@ def start(body: Batch, request: Request):
     store = request.app.state.store
     payload = prepare(store, body)
     resources = ['simulation-benchmark']
-    if body.source == 'workspace':
-        resources.extend('map:' + working_id(key) for key in body.course_ids)
+    resources.extend('map:' + key for key in body.course_ids)
     return request.app.state.jobs.start('simulation_benchmark', payload, resources,
                                         f'走行ベンチマーク（{len(body.course_ids)} コース）')
 
@@ -162,11 +114,11 @@ def make_report(report_id, payload, rows):
                _core('atd_control', 'speed'), _core('atd_control', 'simulation'))
     source_hashes = {m.__name__: hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest() for m in modules}
     return dict(schema='atd.simulation_benchmark.v1', id=report_id, implementation_sha256=source_hashes,
-                upstream=catalog()['upstream'], options=payload, courses=rows)
+                options=payload, courses=rows)
 
 
 def evaluate_row(store, key, payload, check=lambda: None):
-    doc = document_for(store, key, payload['source'])
+    doc = document_for(store, key, payload['line'])
     digest = signature(doc, payload['line'])
     if digest != payload['course_sha256'][key]:
         raise ValueError(f'{key} の境界またはラインが開始後に更新されました。再実行してください')
@@ -188,8 +140,6 @@ def execute(store, task, payload):
 
 
 def report_path(store, key):
-    if key == 'baseline':
-        return SAMPLES / 'baseline.json'
     return confined(store.result_root, REPORTS / identifier(key) / 'report.json')
 
 
@@ -198,8 +148,7 @@ def list_reports(request: Request):
     root = request.app.state.store.result_root / REPORTS
     reports = sorted((p for p in root.glob('*/report.json') if not p.is_symlink() and not p.parent.is_symlink()),
                      key=lambda p: p.stat().st_mtime, reverse=True)
-    return dict(items=[dict(id=p.parent.name, saved=p.stat().st_mtime) for p in reports],
-                baseline=(SAMPLES / 'baseline.json').is_file())
+    return dict(items=[dict(id=p.parent.name, saved=p.stat().st_mtime) for p in reports])
 
 
 @router.get('/benchmarks/{key}')

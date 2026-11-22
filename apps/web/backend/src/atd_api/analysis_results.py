@@ -60,8 +60,6 @@ def require_idle(states, jobs, kind, run_id, line=None):
 def delete_result(kind: Literal['replay', 'localization', 'calibration', 'benchmark'], run_id: str, request: Request):
     store, jobs = request.app.state.store, request.app.state.jobs
     identifier(run_id)
-    if kind == 'benchmark' and run_id == 'baseline':
-        raise HTTPException(400, '同梱の基準結果は削除できません。')
     folder = confined(store.result_root, ROOTS[kind] / run_id, exists=False)
     if not folder.is_dir():
         raise HTTPException(404, '選択した解析結果が見つかりません。')

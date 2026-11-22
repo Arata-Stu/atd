@@ -157,7 +157,7 @@ class CaptureLoopTests(unittest.TestCase):
                         "rclpy.executors": SimpleNamespace(SingleThreadedExecutor=lambda: executor),
                         "sensor_msgs": SimpleNamespace(), "sensor_msgs.msg": SimpleNamespace(Image=object, CameraInfo=object)}
         args = SimpleNamespace(output=directory, mode="video" if lap_video else "benchmark",
-                               route="lap" if lap_video else "chicane", duration=.2 if lap_video else 1.0, warmup=0.2,
+                               route="lap", duration=.2 if lap_video else 1.0, warmup=0.2,
                                startup_timeout=0.5, video_timeout=100.0, resolution="640x480",
                                camera_hz=camera_hz)
         report = {}

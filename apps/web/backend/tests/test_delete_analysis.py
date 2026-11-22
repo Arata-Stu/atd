@@ -24,7 +24,7 @@ def test_delete_calibration_and_benchmark_with_active_reference(tmp_path):
     atomic_json(jobs.root/'reader.json', state)
     with TestClient(app) as api:
         route = '/api/analysis-results/'
-        assert api.delete(route+'benchmark/baseline').status_code == 400
+        assert api.delete(route+'benchmark/missing').status_code == 404
         assert api.delete(route+'benchmark/test').is_success and not benchmark.exists()
         assert api.delete(route+'calibration/calib').status_code == 409 and folder.exists()
         atomic_json(jobs.root/'reader.json', dict(state, status='succeeded'))

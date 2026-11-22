@@ -3,30 +3,27 @@ import argparse
 from functools import lru_cache
 from hashlib import sha256
 import json
-from math import ceil, dist, hypot, isfinite, remainder, tau
+from math import ceil, dist, hypot, isfinite
 from pathlib import Path
 
-from geography import SCALE, closed_trajectory, load_track, local_projection
+from geography import closed_trajectory
 
 ROOT = Path(__file__).resolve().parent / "reference" / "circuits"
 
 
 def circuit_ids():
-    return sorted(["monza", "odaiba", *(p.parent.name for p in ROOT.glob("*/track.geojson")
-                             if (p.parent / "scenery.geojson").is_file())])
+    return ["odaiba"]
 
 
 def reference_files(circuit):
-    # Tokyo Bay's facility drawings are in a venue-local frame, not WGS84.
-    extension = "json" if circuit == "odaiba" else "geojson"
+    if circuit not in circuit_ids():
+        raise ValueError(f"Unknown circuit: {circuit}")
     folder = ROOT / circuit
-    return folder / f"track.{extension}", folder / f"scenery.{extension}"
+    return folder / "track.json", folder / "scenery.json"
 
 
-@lru_cache(maxsize=24)
+@lru_cache(maxsize=1)
 def track_data(circuit):
-    if circuit not in circuit_ids() or circuit == "monza":
-        raise ValueError(f"No full-lap reference for circuit {circuit!r}")
     track, _ = reference_files(circuit)
     data = json.loads(track.read_bytes())
     if data["circuit_id"] != circuit:
@@ -37,19 +34,15 @@ def track_data(circuit):
 def resolve_route(circuit, route):
     if circuit not in circuit_ids():
         raise ValueError(f"Unknown circuit: {circuit}")
-    if route is None:
-        return "chicane" if circuit == "monza" else "lap"
-    if route != "lap" and not (route == "chicane" and circuit == "monza"):
-        raise ValueError("The chicane section is available for Monza only")
-    return route
+    if route not in (None, "lap"):
+        raise ValueError(f"Unknown route: {route}")
+    return "lap"
 
 
-def default_travel_seconds(route, circuit="monza"):
-    if circuit == "monza":
-        return {"chicane": 10.0, "lap": 240.0}[route]
-    # Match Monza's approximate 2.4 m/s RC speed across different lap lengths.
+def default_travel_seconds(route, circuit="odaiba"):
+    resolve_route(circuit, route)
     data = track_data(circuit)
-    return round(data["official_length_m"] * data.get("horizontal_scale", SCALE) / 2.4)
+    return round(data["official_length_m"] * data["horizontal_scale"] / 2.4)
 
 
 def route_timing(circuit, route, length, travel_seconds, speed_mps):
@@ -72,12 +65,11 @@ def route_timing(circuit, route, length, travel_seconds, speed_mps):
 
 def load_lap(circuit):
     data = track_data(circuit)
-    scale = data.get("horizontal_scale", SCALE)
-    if circuit == "odaiba":
-        def project(x, y):
-            return x * scale, y * scale
-    else:
-        project = local_projection(*data["origin_lon_lat"])
+    scale = data["horizontal_scale"]
+
+    def project(x, y):
+        return x * scale, y * scale
+
     course, = [f for f in data["features"] if f["properties"]["kind"] == "course"]
     midline = []
     for point in course["geometry"]["coordinates"]:
@@ -109,61 +101,24 @@ def load_lap(circuit):
     return edges, points, project
 
 
-def estimated_kerbs(edges, points):
-    """Approximate inside kerbs where heading changes over a 1.2 RC metre window."""
-    count = len(points) - 1
-    half_window = max(1, round(.6 * count / points[-1][0]))
-    turns = [remainder(points[(i+half_window) % count][3] - points[(i-half_window) % count][3], tau)
-             for i in range(count)]
-    result = {}
-    for side, sign in (("left", 1), ("right", -1)):
-        edge = edges[side]
-        start = None
-        distance = 0.
-        spans = []
-        for i, turn in enumerate(turns):
-            stop = distance + dist(edge[i], edge[(i+1) % count])
-            if sign * turn > .16:
-                if start is None:
-                    start = distance
-            elif start is not None:
-                if distance-start >= .4:
-                    spans.append((start, distance))
-                start = None
-            distance = stop
-        if start is not None and distance-start >= .4:
-            spans.append((start, distance))
-        result[side] = spans
-    return result
-
-
 def metadata(circuit):
     data = track_data(circuit)
     track, surroundings = reference_files(circuit)
     scene_data = json.loads(surroundings.read_bytes())
     course, = [f for f in data["features"] if f["properties"]["kind"] == "course"]
-    result = {
-        "name": data["name"], "axes": data.get("axes", ["east", "north"]),
-        "horizontal_scale": data.get("horizontal_scale", SCALE), "official_length_m": data["official_length_m"],
+    return {
+        "name": data["name"], "axes": data["axes"],
+        "horizontal_scale": data["horizontal_scale"], "official_length_m": data["official_length_m"],
         "file": f"reference/circuits/{circuit}/{track.name}", "sha256": sha256(track.read_bytes()).hexdigest(),
         "scenery_file": f"reference/circuits/{circuit}/{surroundings.name}",
         "scenery_sha256": sha256(surroundings.read_bytes()).hexdigest(),
         "attribution": data["attribution"], "license": data["license"], "retrieved": data["retrieved"],
         "scenery_attribution": scene_data["attribution"],
         "track_source": data["source"], "official_reference": data["official_reference"],
-        **{key: data[key] for key in ("layout_reference", "layout_note", "origin_note", "direction",
-                                      "start_reference_attribution", "start_reference_license")
-           if key in data},
+        "layout_reference": data["layout_reference"], "layout_note": data["layout_note"],
+        "origin_note": data["origin_note"], "direction": data["direction"],
         "road_width_m": course["properties"]["width_m"], "width_source": course["properties"]["width_source"],
-    }
-    if circuit == "odaiba":
-        return {**result, "scenery_sources": scene_data["sources"], "modelled": scene_data["modelled"]}
-    return {
-        **result, "origin_lon_lat_deg": data["origin_lon_lat"], "scenery_license": scene_data["license"],
-        "default_pit_lane_width_rc_m": .65,
-        "modelled": ["road edges at representative width", "inside kerbs estimated from curvature",
-                     "level terrain, no banking", "unmapped ground cover", "stand structure",
-                     "unmeasured building heights, pit facades and tower silhouette", "individual tree appearance"],
+        "scenery_sources": scene_data["sources"], "modelled": scene_data["modelled"],
     }
 
 
@@ -180,7 +135,7 @@ if __name__ == "__main__":
     else:
         if args.laps < 1:
             parser.error("--laps は1以上を指定してください")
-        points = load_track("lap")[1] if args.lap_label == "monza" else load_lap(args.lap_label)[1]
+        points = load_lap(args.lap_label)[1]
         try:
             _, speed = route_timing(args.lap_label, "lap", points[-1][0], args.duration, args.speed)
         except ValueError as exc:

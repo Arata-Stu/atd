@@ -26,10 +26,10 @@ class GazeboHostTests(unittest.TestCase):
             config.write_text(f"ATD_PC_RECORD_DIR={shlex.quote(str(configured))}\n")
             env = {**os.environ, "ATD_STORAGE_CONFIG": str(config), "ATD_RESULT_DIR": str(root / "runs")}
             env.pop("ATD_RECORD_DIR", None)
-            for circuit, record_path in (("monza", configured), ("spa", root / "override")):
-                if circuit == "spa":
+            for record_path in (configured, root / "override"):
+                if record_path != configured:
                     env["ATD_RECORD_DIR"] = str(record_path)
-                output = subprocess.check_output([*command, "--circuit", circuit, "--duration", "240"],
+                output = subprocess.check_output([*command, "--circuit", "odaiba", "--duration", "240"],
                                                  env=env, text=True)
                 commands = [shlex.split(line) for line in output.splitlines() if line.startswith("docker ")]
                 self.assertEqual(len(commands), 1)
@@ -42,8 +42,7 @@ class GazeboHostTests(unittest.TestCase):
                 bag = Path(args[args.index("--bag-output") + 1])
                 self.assertEqual(bag.parent, Path("/data/record/rosbags"))
                 stamp = r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}"
-                expected_speed = r"2\.413" if circuit == "monza" else r"2\.917"
-                self.assertRegex(bag.name, rf"^gazebo-{circuit}-{stamp}_640x480-90Hz_imu-off_1lap_{expected_speed}mps$")
+                self.assertRegex(bag.name, rf"^gazebo-odaiba-{stamp}_640x480-90Hz_imu-off_1lap_0\.3319mps$")
                 self.assertTrue(any(arg.endswith(f"/{bag.name},dst=/output") for arg in args))
                 self.assertNotIn("gazebo_mapping.launch.py", output)
                 self.assertEqual(list(root.iterdir()), [config])
@@ -90,12 +89,12 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
             env = {"HOME": str(root), "TZ": "UTC", "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
                    "DOCKER_HOST": "unix:///unused", "ATD_RECORD_DIR": str(records), "ATD_RESULT_DIR": str(results)}
             command = ["bash", str(scripts / "gazebo.sh"), "bag"]
-            prefix = "gazebo-monza-2026-11-22_03-04-05"
-            for settings, profile in (([], "640x480-90Hz_imu-off_1lap_2.413mps"),
+            prefix = "gazebo-odaiba-2026-11-22_03-04-05"
+            for settings, profile in (([], "640x480-90Hz_imu-off_1lap_2.414mps"),
                                       (["--resolution", "848x480", "--camera-hz", "60", "--imu", "200",
                                         "--speed", "5.0", "--laps", "2"], "848x480-60Hz_imu-200Hz_2laps_5mps"),
                                       (["--resolution", "1280x720", "--camera-hz", "30", "--imu", "400",
-                                        "--duration", "120", "--laps", "3"], "1280x720-30Hz_imu-400Hz_3laps_4.827mps")):
+                                        "--duration", "120", "--laps", "3"], "1280x720-30Hz_imu-400Hz_3laps_0.6638mps")):
                 with self.subTest(profile=profile):
                     output = subprocess.check_output([*command, *settings, "--dry-run"], env=env, text=True)
                     self.assertIn(f"--bag-output /data/record/rosbags/{prefix}_{profile} ", output)
@@ -103,8 +102,8 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
             self.assertFalse(results.exists())
 
             bag_root = records / "rosbags"
-            run_root = results / "runs/gazebo_monza"
-            base = f"{prefix}_640x480-90Hz_imu-off_1lap_2.413mps"
+            run_root = results / "runs/gazebo/odaiba"
+            base = f"{prefix}_640x480-90Hz_imu-off_1lap_2.414mps"
             # A previously transferred bag may exist without its original run log.
             (bag_root / base).mkdir(parents=True)
             for suffix in ("-2", "-3"):
@@ -123,11 +122,11 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
     def test_map_connects_two_containers_to_one_lap_and_results_mount(self):
         command = ["bash", str(ROOT / "scripts/gazebo.sh"), "map", "--dry-run"]
         with tempfile.TemporaryDirectory() as tmp:
-            for circuit, dds in (("monza", "shm"), ("spa", "udp")):
-                out = subprocess.check_output([*command, "--circuit", circuit, "--dds", dds],
+            for dds in ("shm", "udp"):
+                out = subprocess.check_output([*command, "--circuit", "odaiba", "--dds", dds],
                                               text=True, env={**os.environ, "ATD_RESULT_DIR": tmp,
                                                               "ATD_GAZEBO_ROS_DOMAIN_ID": "74"})
-                self.assertIn(f"--mode map --output /output --circuit {circuit} --route lap", out)
+                self.assertIn("--mode map --output /output --circuit odaiba --route lap", out)
                 self.assertIn("gazebo_mapping.launch.py", out)
                 self.assertIn("/map-staging/nvidia/cuvslam_map", out)
                 processes = [line for line in out.splitlines() if line.startswith("docker ")]
@@ -140,16 +139,14 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
 
     def test_all_circuits_can_be_selected_from_the_host(self):
         command = ["bash", str(ROOT / "scripts/gazebo.sh")]
-        gp_circuits = [p.name for p in (ROOT / "samples/f1tenth/maps").iterdir() if p.is_dir()]
-        expected = sorted([*gp_circuits, "odaiba"])
         listed = subprocess.check_output([*command, "list"], text=True).splitlines()
-        self.assertEqual(listed, expected)
+        self.assertEqual(listed, ["odaiba"])
         for circuit in listed:
             out = subprocess.check_output([*command, "video", "--dry-run", "--circuit", circuit], text=True)
             self.assertIn(f"--circuit {circuit}", out)
-            self.assertIn("/gazebo_monza/" if circuit == "monza" else f"/gazebo/{circuit}/", out)
-        for args in (["video", "--circuit", "../spa"], ["serve", "--route", "chicane", "--circuit", "spa"],
-                     ["prepare", "--circuit", "silverstone"]):
+            self.assertIn(f"/gazebo/{circuit}/", out)
+        for args in (["video", "--circuit", "../odaiba"], ["serve", "--route", "chicane", "--circuit", "odaiba"],
+                     ["bag", "--course", "monza"], ["video", "--course", "spa"], ["prepare", "--circuit", "odaiba"]):
             self.assertNotEqual(subprocess.run([*command, *args, "--dry-run"], capture_output=True).returncode, 0)
 
     def test_lap_choice_reaches_simulation_and_rejects_unknown_routes(self):
@@ -165,14 +162,14 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
         command = ["bash", str(ROOT / "scripts/gazebo.sh")]
         for mode in ("run", "bag", "map", "video", "serve"):
             with self.subTest(mode=mode):
-                out = subprocess.check_output([*command, mode, "--dry-run", "--course", "spa",
+                out = subprocess.check_output([*command, mode, "--dry-run", "--course", "odaiba",
                                                "--speed", "1.5", "--laps", "3",
                                                "--resolution", "1280x720", "--camera-hz", "60", "--imu", "400"], text=True)
                 drives = [shlex.split(line) for line in out.splitlines()
                           if line.startswith("docker ") and "gazebo_monza/run.py" in line]
                 self.assertEqual(len(drives), 2 if mode == "run" else 1)
                 for args in drives:
-                    for flag, expected in (("--circuit", "spa"), ("--route", "lap"), ("--speed", "1.5"),
+                    for flag, expected in (("--circuit", "odaiba"), ("--route", "lap"), ("--speed", "1.5"),
                                            ("--resolution", "1280x720"), ("--camera-hz", "60"), ("--imu", "400")):
                         self.assertEqual(args[args.index(flag) + 1], expected)
                     if args[args.index("--mode") + 1] == "benchmark":

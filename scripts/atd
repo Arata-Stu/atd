@@ -81,9 +81,8 @@ usage() {
     atd hotspot on --band 5
     atd web prepare
     atd gazebo
-    atd gazebo bag --course monza --speed 1.5 --laps 2
+    atd gazebo bag --course odaiba --speed 3 --laps 2
     atd gazebo video --route lap
-    atd gazebo video --circuit spa
     atd gazebo serve
     atd bringup gazebo
     atd replay
@@ -131,7 +130,7 @@ choose() {
 }
 
 gazebo_from_menu() {
-    local title="$1" action catalog circuit route speed laps resolution camera_hz imu
+    local title="$1" action catalog circuit speed laps resolution camera_hz imu
     shift
     action="$(choose "$title" bag 'ステレオ rosbag を記録' map '走行中に cuVSLAM 地図を作成' \
         video '左右の車載動画を保存' serve 'ステレオ画像と /clock を配信' \
@@ -143,27 +142,22 @@ gazebo_from_menu() {
         prepare) "$@" prepare; return ;;
     esac
     catalog="$("$@" list)" || return
-    local -a options=(monza 'Monza')
+    local -a options=()
     while IFS= read -r circuit; do
         case "$circuit" in
-            ''|monza) ;;
+            '') ;;
             odaiba) options+=("$circuit" 'お台場・シティサーキット東京ベイ（1/5）') ;;
-            *) options+=("$circuit" 'GP コース') ;;
+            *) options+=("$circuit" "$circuit") ;;
         esac
     done <<< "$catalog"
     circuit="$(choose "$title / コース" "${options[@]}" back '前のメニューへ')" || return 0
     [[ "$circuit" != back ]] || return 0
-    route=lap
-    if [[ "$circuit" = monza && "$action" != bag && "$action" != map ]]; then
-        route="$(choose "$title / 走行区間" lap 'GP コース全周' chicane '第1シケインのみ' back '前のメニューへ')" || return 0
-        [[ "$route" != back ]] || return 0
-    fi
-    local -a args=("$action" --route "$route" --circuit "$circuit")
+    local -a args=("$action" --route lap --circuit "$circuit")
     printf '走行速度 [RC m/s]（Enter でコース既定、q で戻る）> ' >&2
     IFS= read -r speed || return 0
     [[ "$speed" != q ]] || return 0
     if [[ -n "$speed" ]]; then args+=(--speed "$speed"); fi
-    if [[ "$route" = lap && "$action" != benchmark && "$action" != diagnose ]]; then
+    if [[ "$action" != benchmark && "$action" != diagnose ]]; then
         local default_laps='1周'
         if [[ "$action" = serve ]]; then default_laps='連続配信'; fi
         printf '周回数（Enter で%s、q で戻る）> ' "$default_laps" >&2

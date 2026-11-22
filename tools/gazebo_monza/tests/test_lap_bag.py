@@ -20,14 +20,14 @@ class LapBagTests(unittest.TestCase):
     def test_bag_cli_selects_a_full_lap_and_a_new_destination(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            final = root / "rosbags/gazebo-spa-001"
-            argv = ["run.py", "--mode", "bag", "--output", str(root / "logs"), "--circuit", "spa"]
+            final = root / "rosbags/gazebo-odaiba-001"
+            argv = ["run.py", "--mode", "bag", "--output", str(root / "logs"), "--circuit", "odaiba"]
             with patch.object(sys, "argv", argv + ["--bag-output", str(final)]), \
                     patch.object(run, "run", return_value=0) as simulate, patch.object(signal, "signal"):
                 self.assertEqual(run.main(), 0)
             args = simulate.call_args.args[0]
             self.assertEqual((args.route, args.duration, args.bag_output),
-                             ("lap", run.world.default_travel_seconds("lap", "spa"), final))
+                             ("lap", run.world.default_travel_seconds("lap", "odaiba"), final))
             for invalid in ([], ["--route", "chicane", "--bag-output", str(final)]):
                 with patch.object(sys, "argv", argv + invalid), contextlib.redirect_stderr(io.StringIO()), \
                         self.assertRaises(SystemExit):
@@ -110,7 +110,7 @@ class LapBagTests(unittest.TestCase):
             with self.subTest(interrupted=interrupted), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root / "rosbags").mkdir()
-                final = root / "rosbags/gazebo-monza"
+                final = root / "rosbags/gazebo-odaiba"
                 events = []
                 children, report = {}, {"geometry": [848, 480], "imu_hz": 400}
                 proc = MagicMock()
@@ -130,9 +130,9 @@ class LapBagTests(unittest.TestCase):
                         patch.object(lap_bag, "close_recorder", side_effect=lambda p: events.append("close")):
                     if interrupted:
                         with self.assertRaises(KeyboardInterrupt):
-                            run.record_laps(children, root, "monza", {"camera": {}}, report, final)
+                            run.record_laps(children, root, "odaiba", {"camera": {}}, report, final)
                     else:
-                        pending, actual = run.record_laps(children, root, "monza", {"camera": {}}, report, final)
+                        pending, actual = run.record_laps(children, root, "odaiba", {"camera": {}}, report, final)
                         self.assertEqual(actual, timing)
                         self.assertEqual(pending, Path(report["partial_bag"]))
                 profile = {"geometry": (848, 480), "imu_hz": 400}
@@ -146,9 +146,9 @@ class LapBagTests(unittest.TestCase):
     def test_bag_mode_stops_the_renderer_before_reading_back_the_recording(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            final = root / "rosbags/gazebo-spa"
+            final = root / "rosbags/gazebo-odaiba"
             final.parent.mkdir()
-            args = SimpleNamespace(mode="bag", route="lap", circuit="spa", output=root,
+            args = SimpleNamespace(mode="bag", route="lap", circuit="odaiba", output=root,
                                    bag_output=final, duration=17., speed=None, laps=2,
                                    camera_height=.12, camera_pitch_deg=0., resolution="424x240",
                                    camera_hz=30, imu="off")
@@ -196,7 +196,7 @@ class LapBagTests(unittest.TestCase):
             root = Path(tmp)
             rosbags = root / "rosbags"
             rosbags.mkdir()
-            final = rosbags / "gazebo-monza"
+            final = rosbags / "gazebo-odaiba"
             pending = lap_bag.staging_path(final)
             pending.mkdir()
             (pending / "metadata.yaml").write_text("partial")

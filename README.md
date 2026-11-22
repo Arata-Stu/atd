@@ -37,7 +37,7 @@ Jetson ではホスト・Docker のどちらからも `bluetooth`、`hotspot`、
 | `scripts/bringup.sh` | Jetson の車載 profile・Notebook の Gazebo ステレオ VO を選択・実行 |
 | `scripts/replay.sh`（`atd replay`） | Linux Notebook で記録済みのステレオ bag を選び、cuVSLAM の推定軌跡を RViz で確認 |
 | `scripts/webui.sh` | Notebook の Web UI を起動 |
-| `scripts/gazebo.sh` | Linux Notebook 専用。[お台場で2周記録・再生](docs/gazebo_circuits.md#お台場を2周して再訪時の追跡を確認する)、[GP コースの走行とオフライン cuVSLAM 地図作成](docs/gazebo_circuits.md#1周でcuvslam地図を作る)、左右車載動画・30／60／90 Hz のステレオ受信計測・専用イメージの容量計測。[手順](docs/gazebo_monza.md) |
+| `scripts/gazebo.sh` | Linux Notebook 専用。[お台場で2周記録・再生](docs/gazebo_circuits.md#お台場を2周して再訪時の追跡を確認する)、[オフラインでの cuVSLAM 地図作成](docs/gazebo_circuits.md#1周でcuvslam地図を作る)、左右車載動画・30／60／90 Hz のステレオ受信計測・専用イメージの容量計測。[手順](docs/gazebo_monza.md) |
 
 ```bash
 ./scripts/setup.sh
@@ -113,7 +113,6 @@ ROS 用は起動時に通常ユーザーで同期し、学習・VGL export 用�
 | [rosbag記録](docs/recording.md) | Joy・プロポからの開始停止、記録profile、状態と保存完了 |
 | [車両モデルの校正](docs/vehicle_calibration.md) | 手動走行を記録し、Notebook で VO 速度・加速度・操舵応答を解析 |
 | [2D 走行シミュレーター](docs/simulation.md) | Notebook で固定先読みと速度連動先読みの閉ループ走行を比較 |
-| [F1 コースベンチマーク](docs/f1_circuits.md) | 採用した20コースの HDMap と走行ライン、コース別完走率・ラップ・衝突の比較 |
 | [車両配置・TF](docs/vehicle_layout.md) | 座標系、UIの寸法編集、実測とstatic TFの適用 |
 | [CAD・3Dプリント資料](docs/hardware_cad.md) | TT-02印刷フレーム、Rev6カメラ組立モデル、3MFと取り込み元 |
 

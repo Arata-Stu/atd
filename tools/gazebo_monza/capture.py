@@ -305,7 +305,7 @@ def capture(args, report):
     geometry = RESOLUTIONS[args.resolution]
     calibration = Calibration(geometry)
     info_subscriptions = []
-    lap_video = args.mode == "video" and args.route == "lap"
+    lap_video = args.mode == "video"
     scene_dir = args.output / "scene"
     pending_lap_start = scene_dir / "lap_start.json"
     armed = False
@@ -452,17 +452,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--mode", required=True, choices=("video", "benchmark"))
-    parser.add_argument("--route", choices=("chicane", "lap"), default="chicane")
+    parser.add_argument("--route", choices=("lap",), default="lap")
     parser.add_argument("--resolution", choices=RESOLUTIONS, default="640x480")
     parser.add_argument("--camera-hz", type=int, choices=CAMERA_RATES, default=DEFAULT_CAMERA_HZ)
     parser.add_argument("--duration", type=float, required=True)
     parser.add_argument("--warmup", type=float, default=1.0, help="benchmark wall seconds after first pair")
     parser.add_argument("--startup-timeout", type=float, default=60.0, help="wall seconds to first pair")
-    parser.add_argument("--video-timeout", type=float,
-                        help="wall seconds without progress for a lap, or after first pair for a chicane")
+    parser.add_argument("--video-timeout", type=float, default=60.,
+                        help="wall seconds without new stereo pairs during a lap")
     args = parser.parse_args()
-    if args.video_timeout is None:
-        args.video_timeout = 60. if args.route == "lap" else max(60, args.duration * 10)
     for key in ("duration", "startup_timeout", "video_timeout", "warmup"):
         value = getattr(args, key)
         if not math.isfinite(value) or (value < 0 if key == "warmup" else value <= 0):

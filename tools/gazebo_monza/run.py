@@ -20,7 +20,7 @@ from sensor_profile import (ACCEL_FRAME, ACCEL_TOPIC, CAMERA_RATES, DEFAULT_CAME
 HERE = Path(__file__).resolve().parent
 
 
-def bridge_topics(circuit="monza", imu_hz=0):
+def bridge_topics(circuit="odaiba", imu_hz=0):
     topics = [{"ros_topic_name": "/clock", "gz_topic_name": f"/world/{circuit}/clock",
                "ros_type_name": "rosgraph_msgs/msg/Clock", "gz_type_name": "gz.msgs.Clock",
                "direction": "GZ_TO_ROS", "qos_profile": "CLOCK"}]
@@ -84,7 +84,7 @@ def unpause(circuit):
     return reply.returncode == 0 and "data: true" in reply.stdout
 
 
-def start_stream(children, wait_for_stereo, circuit="monza", check_external=None, *, imu_hz=0):
+def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=None, *, imu_hz=0):
     import rclpy
     from rclpy.parameter import Parameter
     from rclpy.qos import QoSCompatibility, qos_check_compatible
@@ -223,21 +223,14 @@ def inspect_motion(scene_dir, scene, metrics):
     xy = [(p["x_m"], p["y_m"]) for p in samples]
     travelled = sum(math.dist(a, b) for a, b in zip(xy, xy[1:]))
     observation = {"pose_samples": len(xy), "sampled_distance_m": travelled}
-    trajectory = scene["trajectory"]
-    if metrics["mode"] in ("bag", "map", "video", "serve") and trajectory.get("route") == "lap":
-        observation.update(inspect_lap(scene_dir, trajectory, samples, metrics))
+    if metrics["mode"] in ("bag", "map", "video", "serve"):
+        observation.update(inspect_lap(scene_dir, scene["trajectory"], samples, metrics))
         return observation
-    complete = None
-    if metrics["mode"] == "video":
-        endpoint = scene["trajectory"]["samples_s_x_y_yaw"][-1][1:3]
-        # The trace is sampled every 0.5 s or faster on short video runs.
-        sample_spacing = scene["trajectory"]["end_s_m"] * min(.5 / scene["trajectory"]["travel_seconds"], .125)
-        complete = bool(xy) and math.dist(xy[-1], endpoint) <= sample_spacing + .05
-    if (len(xy) > 1 and travelled < .005) or complete is False:
+    if len(xy) > 1 and travelled < .005:
         raise RuntimeError("カメラ台が予定区間を移動していません。scene/rig_motion.jsonl を確認してください")
     if len(xy) < 2 and metrics.get("pair_span_sim_s", 0) >= .55:
         raise RuntimeError("カメラの移動記録が途中で途切れました")
-    return {**observation, "reached_corner_exit": complete}
+    return observation
 
 
 def drive_laps(children, out, scene, report, check_external=None):
@@ -331,7 +324,7 @@ def run(args, report):
     mode = "benchmark" if diagnose else args.mode
     out = args.output
     scene_dir = out / "scene"
-    lap_video = mode == "video" and args.route == "lap"
+    lap_video = mode == "video"
     finite_serve = mode == "serve" and args.laps is not None
     finite_run = mode in ("video", "map", "bag") or finite_serve
     width, height = RESOLUTIONS[args.resolution]
@@ -351,12 +344,11 @@ def run(args, report):
     total_seconds = trajectory["total_travel_seconds"]
     duration = total_seconds if finite_run else args.duration
     report.update(requested_duration_s=duration, speed_mps=trajectory["speed_mps"],
-                  laps_requested=trajectory["laps"] if args.route == "lap" else None,
-                  lap_duration_s=trajectory["travel_seconds"] if args.route == "lap" else None,
+                  laps_requested=trajectory["laps"],
+                  lap_duration_s=trajectory["travel_seconds"],
                   total_travel_seconds=total_seconds)
     if finite_run:
-        extent = f"{trajectory['laps']}周" if args.route == "lap" else "シケイン区間"
-        schedule = f"{extent}  走行時間 {duration:.2f} シミュレーション秒"
+        schedule = f"{trajectory['laps']}周  走行時間 {duration:.2f} シミュレーション秒"
     else:
         schedule = "繰り返し走行"
     print(f"{args.circuit} / {args.route}  RC速度 {trajectory['speed_mps']:.3g} m/s  {schedule}", flush=True)
@@ -505,8 +497,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mode", choices=("benchmark", "video", "diagnose", "serve", "map", "bag"), required=True)
     parser.add_argument("--bag-output", type=Path, help="bag の確定保存先（rosbags/直下の新規ディレクトリ）")
-    parser.add_argument("--circuit", "--course", choices=world.circuits.circuit_ids(), default="monza")
-    parser.add_argument("--route", choices=("chicane", "lap"))
+    parser.add_argument("--circuit", "--course", choices=world.circuits.circuit_ids(), default="odaiba")
+    parser.add_argument("--route", choices=("lap",), default="lap")
     parser.add_argument("--duration", type=float)
     parser.add_argument("--speed", type=float, help="RC スケールの走行速度（m/s、シミュレーション時刻）")
     parser.add_argument("--laps", type=int, help="走行する周回数（正の整数）")
@@ -524,14 +516,6 @@ def main():
             parser.error("--laps は1以上の整数を指定してください")
         if args.mode in ("benchmark", "diagnose"):
             parser.error("実時間計測の benchmark / diagnose では --duration で計測秒数を指定してください")
-    if args.mode in ("map", "bag") or args.laps is not None:
-        if args.route == "chicane":
-            parser.error("周回走行では --route lap を指定してください")
-        args.route = "lap"
-    try:
-        args.route = world.circuits.resolve_route(args.circuit, args.route)
-    except ValueError as exc:
-        parser.error(str(exc))
     if args.wait_for_stereo and args.mode != "serve":
         parser.error("--wait-for-stereo requires --mode serve")
     if args.mode == "serve" and args.duration is not None:

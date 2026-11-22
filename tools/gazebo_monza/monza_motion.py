@@ -1,4 +1,4 @@
-"""Monza の保存済み走行線を、Gazebo のシミュレーション時刻で移動するカメラ台。"""
+"""保存済みの走行線を、Gazebo のシミュレーション時刻で移動するカメラ台。"""
 
 from bisect import bisect_right
 import json

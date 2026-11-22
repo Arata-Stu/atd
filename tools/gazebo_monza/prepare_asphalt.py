@@ -1,4 +1,4 @@
-"""Bake the Monza lap pavement once from the bundled CC0 asphalt photograph."""
+"""Bake the Odaiba circuit pavement once from the bundled CC0 asphalt photograph."""
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +23,7 @@ def pavement_tone(photo, cells):
 def main():
     with Image.open(MATERIALS / "floor.jpg") as source:
         photo = source.convert("L").convert("F")
-    # Four 0.8 m aggregate tiles retain the size of the original grains.
+    # Preserve the fine photographic grain by repeating four subtiles in each direction.
     # LANCZOS preserves their shape when baking a 512 px patch from the 1K photo.
     grain = np.asarray(photo.resize((SIZE // 4, SIZE // 4), Image.Resampling.LANCZOS))
     grain = np.tile(grain - grain.mean(), (4, 4))
@@ -33,7 +33,7 @@ def main():
     broad_tone = pavement_tone(photo.transpose(Image.Transpose.ROTATE_90), 16)
     albedo = 117 + 1.7 * grain + 5.5 * tone + 3.5 * broad_tone
     pixels = np.clip(albedo.round(), 0, 255).astype(np.uint8)
-    Image.fromarray(pixels).convert("RGB").save(MATERIALS / "monza_asphalt.jpg", quality=91)
+    Image.fromarray(pixels).convert("RGB").save(MATERIALS / "asphalt.jpg", quality=91)
 
 
 if __name__ == "__main__":

@@ -4,8 +4,7 @@ import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { modeLabel, type Mode, type SimSettings } from './simulation';
 
 export interface Circuit {
-  id: string; folder: string; name: string; included: boolean; venue_on_2026_calendar: boolean;
-  note: string; editable_id: string | null;
+  id: string; name: string; lines: string[];
 }
 interface Attempt { trial: number; outcome: string; lap_times_s: number[]; reason: string }
 interface Score {
@@ -25,31 +24,33 @@ const outcomes: Record<string, string> = {
 
 export function BenchmarkResults({ latest, circuits }: { latest: string; circuits: Circuit[] }) {
   const [reports, setReports] = useState<{ id: string; saved: number }[]>([]);
-  const [key, setKey] = useState('baseline'), [hasBaseline, setHasBaseline] = useState(false);
+  const [key, setKey] = useState('');
+  const [loaded, setLoaded] = useState(false);
   const [report, setReport] = useState<Report>(), [error, setError] = useState('');
   const [referenceKey, setReferenceKey] = useState(''), [reference, setReference] = useState<Report>();
   const [detail, setDetail] = useState('');
   useEffect(() => {
     const controller = new AbortController();
-    api<{items: typeof reports; baseline: boolean}>('simulation/benchmarks', undefined, undefined, controller.signal)
+    api<{items: typeof reports}>('simulation/benchmarks', undefined, undefined, controller.signal)
       .then(data => {
-        setReports(data.items); setHasBaseline(data.baseline);
+        if (controller.signal.aborted) return;
+        setReports(data.items); setLoaded(true);
         if (latest && data.items.some(item => item.id === latest)) setKey(latest);
-        else if (!data.baseline && data.items.length) setKey(data.items[0].id);
+        else setKey(current => data.items.some(item => item.id === current) ? current : data.items[0]?.id ?? '');
       }).catch(e => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
   }, [latest]);
   useEffect(() => {
     const controller = new AbortController();
     setReport(undefined); setDetail('');
-    if (key && (key !== 'baseline' || hasBaseline)) {
+    if (key) {
       setError('');
       api<Report>('simulation/benchmarks/' + key, undefined, undefined, controller.signal)
         .then(data => { if (!controller.signal.aborted) setReport(data); })
         .catch(e => { if (!controller.signal.aborted) setError(e.message); });
     }
     return () => controller.abort();
-  }, [key, hasBaseline]);
+  }, [key]);
   useEffect(() => {
     setReference(undefined);
     if (!referenceKey || referenceKey === key) return;
@@ -62,7 +63,6 @@ export function BenchmarkResults({ latest, circuits }: { latest: string; circuit
   const selected = report?.courses.find(c => c.course_id === detail);
   const title = (id: string) => circuits.find(c => c.id === id)?.name ?? id;
   const options = <>
-    {hasBaseline && <option value="baseline">同梱の基準結果（全コース・既定設定）</option>}
     {reports.map(r => <option key={r.id} value={r.id}>{new Date(r.saved * 1000).toLocaleString('ja-JP')} · {r.id.slice(0,8)}</option>)}
   </>;
   function delta(current: number | null, other: number | null | undefined, digits=0, factor=1) {
@@ -73,18 +73,19 @@ export function BenchmarkResults({ latest, circuits }: { latest: string; circuit
   return <section className="sim-card"><div className="sim-section-title"><h2>コース別の評価結果</h2>
     {report && <span><a href={'/api/simulation/benchmarks/' + key + '/summary.csv'} download>CSV を保存</a> · <a href={'/api/simulation/benchmarks/' + key} download={'benchmark-' + key + '.json'}>全試行を JSON で保存</a></span>}
   </div>
-    <div className="bench-actions"><label className="bench-report-picker">評価履歴<select aria-label="評価履歴" value={key} onChange={e => setKey(e.target.value)}>{options}</select></label>
-      {reports.length > 0 && <label className="bench-report-picker">差分の比較元<select aria-label="差分の比較元" value={referenceKey} onChange={e => setReferenceKey(e.target.value)}>
+    {loaded && !reports.length && <p className="sim-note">保存済みの評価結果はありません。</p>}
+    {reports.length > 0 && <div className="bench-actions"><label className="bench-report-picker">評価履歴<select aria-label="評価履歴" value={key} onChange={e => setKey(e.target.value)}>{options}</select></label>
+      {reports.length > 1 && <label className="bench-report-picker">差分の比較元<select aria-label="差分の比較元" value={referenceKey} onChange={e => setReferenceKey(e.target.value)}>
         <option value="">差分なし</option>{options}</select></label>}
       {reports.some(item => item.id === key) && <DeleteAnalysisButton key={key} path={'analysis-results/benchmark/' + encodeURIComponent(key)}
         detail={`ベンチマーク「${key}」の全コース・全試行の結果を削除しますか？`} onDeleted={() => {
           const remaining = reports.filter(item => item.id !== key);
-          setReports(remaining); setKey(hasBaseline ? 'baseline' : remaining[0]?.id ?? '');
+          setReports(remaining); setKey(remaining[0]?.id ?? '');
           if (referenceKey === key) setReferenceKey('');
-        }}/>}</div>
+        }}/>}</div>}
     {error && <p role="alert" className="sim-error">{error}</p>}
     {report && <>
-      <p className="sim-note">{report.courses.length} コース · {report.options.source === 'sample' ? '同梱 HDMap' : '編集用 HDMap'} · {report.options.line} · 各方式 {report.options.trials} 試行 × {report.options.laps} 周</p>
+      <p className="sim-note">{report.courses.length} コース · {report.options.source === 'sample' ? '同梱 HDMap' : '保存済み HDMap'} · {report.options.line} · 各方式 {report.options.trials} 試行 × {report.options.laps} 周</p>
       <details className="sim-model"><summary>この評価で使った制御・遅延設定</summary>
         <p>固定 {report.options.settings.fixed_lookahead_m} m · 速度連動 {report.options.settings.min_lookahead_m} ～ {report.options.settings.max_lookahead_m} m、先読み {report.options.settings.lookahead_time_s} s</p>
         <p>操舵／スロットルのむだ時間 {report.options.settings.steering_delay_ms} / {report.options.settings.throttle_delay_ms} ms · 操舵／速度の時定数 {report.options.settings.steering_tau_s} / {report.options.settings.speed_tau_s} s</p>

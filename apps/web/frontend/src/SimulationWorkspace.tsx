@@ -83,15 +83,19 @@ function Results({ result }: { result: Comparison }) {
 export function SimulationWorkspace({ jobs, onOpenMap, onLog }: { jobs: Job[]; onOpenMap: (id: string) => void; onLog: (id: string) => void }) {
   const [result, setResult] = useState<Comparison | null>(null);
   const [error, setError] = useState(''), [pending, setPending] = useState(true), [edited, setEdited] = useState(false);
-  const [catalog, setCatalog] = useState<Circuit[]>([]), [catalogError, setCatalogError] = useState('');
-  const [key, setKey] = useState(''), [source, setSource] = useState('sample'), [line, setLine] = useState('raceline');
+  const [catalog, setCatalog] = useState<Circuit[] | null>(null), [catalogError, setCatalogError] = useState('');
+  const [key, setKey] = useState(''), [line, setLine] = useState('raceline');
   const [batchView, setBatchView] = useState(() =>
     new URLSearchParams(window.location.hash.split('?')[1]).get('view') === 'benchmark');
   const [submitting, setSubmitting] = useState(false);
   const [scope, setScope] = useState('all'), [laps, setLaps] = useState(2), [trials, setTrials] = useState(3), [trial, setTrial] = useState(1);
   const [submitted, setSubmitted] = useState<Job>();
-  const circuits = catalog.filter(c => c.included);
+  const circuits = catalog ?? [];
   const circuit = circuits.find(c => c.id === key);
+  const allCourses = batchView && scope === 'all';
+  const usableLines = allCourses ? ['raceline', 'centerline'].filter(kind => circuits.some(c => c.lines.includes(kind))) : circuit?.lines ?? [];
+  const selectedLine = usableLines.includes(line) ? line : usableLines[0];
+  const courseIds = allCourses ? circuits.filter(c => c.lines.includes(selectedLine)).map(c => c.id) : circuit ? [circuit.id] : [];
   const benchJobs = jobs.filter(job => job.action === 'simulation_benchmark');
   const job = benchJobs.find(j => ACTIVE.has(j.status)) ?? benchJobs.find(j => j.id === submitted?.id) ?? submitted ?? benchJobs[0];
   const latest = benchJobs.find(j => j.status === 'succeeded')?.id ?? '';
@@ -104,14 +108,14 @@ export function SimulationWorkspace({ jobs, onOpenMap, onLog }: { jobs: Job[]; o
   }, []);
   const [revision, setRevision] = useState(0);
   const request = useRef<AbortController | null>(null);
-  const compare = useCallback(async (settings: SimSettings, course = '', selectedSource = 'sample', selectedLine = 'raceline', nLaps=2, start=1) => {
+  const compare = useCallback(async (settings: SimSettings, course = '', selectedLine = 'raceline', nLaps=2, start=1) => {
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
     setPending(true); setError('');
     try {
       const path = course ? 'simulation/courses/' + course + '/compare' : 'simulation/compare';
-      const payload = course ? {settings, source:selectedSource, line:selectedLine, laps:nLaps, trial:start} : settings;
+      const payload = course ? {settings, line:selectedLine, laps:nLaps, trial:start} : settings;
       const data = await api<Comparison>(path, payload, 'POST', controller.signal);
       if (controller.signal.aborted) return;
       setResult(data); setRevision(i => i+1); setEdited(false);
@@ -123,23 +127,15 @@ export function SimulationWorkspace({ jobs, onOpenMap, onLog }: { jobs: Job[]; o
     return () => { window.clearTimeout(timer); request.current?.abort(); };
   }, [compare]);
 
-  async function openMap() {
-    if (!key) return;
-    setSubmitting(true); setError('');
-    try { const target = await api<{map_id: string}>('simulation/courses/' + key + '/edit', {}); onOpenMap(target.map_id); }
-    catch (e) { setError((e as Error).message); }
-    finally { setSubmitting(false); }
-  }
   function changeView(value: boolean) {
     setBatchView(value); setError('');
     window.history.replaceState(null, '', value ? '#simulation?view=benchmark' : '#simulation');
-    if (value && !key && circuits.length) { setKey(circuits[0].id); setEdited(true); }
   }
   return <div className="sim-workspace"><div className="sim-content">
     <div className="sim-heading"><h1>{batchView ? 'コース別ベンチマーク' : '先読み距離の比較'}</h1>
       <div className="bench-actions" aria-label="シミュレーターの表示">
         <button className="button" aria-pressed={!batchView} onClick={() => changeView(false)}>走行比較</button>
-        <button className="button" aria-pressed={batchView} onClick={() => changeView(true)}>F1 ベンチマーク</button>
+        <button className="button" aria-pressed={batchView} onClick={() => changeView(true)}>コース別評価</button>
       </div></div>
     <form className="sim-card sim-settings" onChange={() => setEdited(true)} onSubmit={async event => {
       event.preventDefault();
@@ -147,30 +143,28 @@ export function SimulationWorkspace({ jobs, onOpenMap, onLog }: { jobs: Job[]; o
       const settings = { ...defaultSettings };
       for (const c of [...distances, ...responses]) settings[c.key] = Number(values.get(c.key));
       if (settings.max_lookahead_m < settings.min_lookahead_m) { setError('最長距離は最短距離以上にしてください。'); return; }
-      if (!batchView) { void compare(settings, key, source, line, laps, trial); return; }
-      const course_ids = scope === 'all' ? circuits.map(c => c.id) : [key];
-      if (!course_ids.length || course_ids.includes('')) { setError('評価対象のコースを選択してください。'); return; }
+      if (!batchView) { void compare(settings, key, selectedLine, laps, trial); return; }
+      if (!courseIds.length) { setError('評価対象のコースを選択してください。'); return; }
       setSubmitting(true); setError('');
       try {
-        const launched = await api<Job>('simulation/benchmarks', {course_ids, source:scope === 'all' ? 'sample' : source, line, laps, trials, settings});
+        const launched = await api<Job>('simulation/benchmarks', {course_ids: courseIds, line: selectedLine, laps, trials, settings});
         setSubmitted(launched);
       } catch (e) { setError((e as Error).message); } finally { setSubmitting(false); }
     }}>
-      <div className="sim-section-title"><h2>比較条件</h2><button className="button primary" type="submit" disabled={pending || submitting || (batchView && (active || !circuits.length))}>
+      <div className="sim-section-title"><h2>比較条件</h2><button className="button primary" type="submit" disabled={pending || submitting || (batchView && (active || !courseIds.length))}>
         <Icon name="play" size={15}/>{batchView ? (active ? '評価中…' : '評価を実行') : pending ? '計算中…' : '比較を実行'}</button></div>
       <fieldset disabled={pending || submitting}><div className="sim-fields bench-selection">
         {batchView && <label>評価対象<select aria-label="評価対象" value={scope} onChange={e => setScope(e.target.value)}>
-          <option value="all">同梱の全 {circuits.length} コース</option><option value="one">選択したコース</option></select></label>}
-        {(!batchView || scope === 'one') && <label>コース<select aria-label="コース" value={key} onChange={e => {setKey(e.target.value); setSource('sample');}}>
+          <option value="all">選択ラインのある全コース</option><option value="one">選択したコース</option></select></label>}
+        {(!batchView || scope === 'one') && <label>コース<select aria-label="コース" value={key} onChange={e => setKey(e.target.value)}>
           {!batchView ? <option value="">ヘアピンと高速コーナー</option> : !key && <option value="" disabled>コースを選択</option>}{circuits.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
-        {key && (!batchView || scope === 'one') && <label>HDMap<select aria-label="HDMap" value={source} onChange={e => setSource(e.target.value)}>
-          <option value="sample">同梱サンプル</option><option value="workspace" disabled={!circuit?.editable_id}>保存済みの編集用コピー</option></select></label>}
-        {(key || batchView) && <label>走行ライン<select aria-label="走行ライン" value={line} onChange={e => setLine(e.target.value)}><option value="raceline">Raceline</option><option value="centerline">Centerline</option></select></label>}
+        {usableLines.length > 0 && <label>走行ライン<select aria-label="走行ライン" value={selectedLine} onChange={e => setLine(e.target.value)}>
+          {usableLines.map(kind => <option key={kind} value={kind}>{kind === 'raceline' ? 'Raceline' : 'Centerline'}</option>)}</select></label>}
         {(batchView || key) && <label>規定周回数<select aria-label="規定周回数" value={laps} onChange={e => setLaps(Number(e.target.value))}>{[1,2,3,4,5].map(n => <option key={n} value={n}>{n} 周</option>)}</select></label>}
         {batchView && <label>初期条件の数<select aria-label="初期条件の数" value={trials} onChange={e => setTrials(Number(e.target.value))}>{[1,2,3].map(n => <option key={n} value={n}>{n} 試行 / 方式</option>)}</select></label>}
         {!batchView && key && <label>開始姿勢<select aria-label="開始姿勢" value={trial} onChange={e => setTrial(Number(e.target.value))}><option value={1}>① ライン上</option><option value={2}>② 左 6 cm・+3°</option><option value={3}>③ 右 6 cm・−3°</option></select></label>}
       </div>
-      {circuit && (!batchView || scope === 'one') && <button className="bench-link" type="button" onClick={openMap}>{circuit.editable_id ? '編集用 HDMap を開く' : '編集用 HDMap を作成して開く'}</button>}
+      {circuit && (!batchView || scope === 'one') && <button className="bench-link" type="button" onClick={() => onOpenMap(circuit.id)}>HDMap を開く</button>}
       <Inputs controls={distances}/>
         <p className="sim-note">速度連動の先読み距離は「最短距離 ＋ 速度 × 先読み時間」で求め、最長距離で制限します。</p>
         <details className="sim-model"><summary>車両モデル・遅延設定</summary>
@@ -179,11 +173,7 @@ export function SimulationWorkspace({ jobs, onOpenMap, onLog }: { jobs: Job[]; o
           {result && <p>運動学的自転車モデル · 模擬 FF 表 · ホイールベース {result.model.wheelbase_m.toFixed(3)} m · 操舵上限 ±{result.model.steering_limit_deg.toFixed(1)}° · 計算刻み {(1000*result.model.dt_s).toFixed(0)} ms</p>}
         </details>
       </fieldset>
-      {batchView && catalog.length > 0 && <details className="sim-model"><summary>F1TENTH の収録 {catalog.length} コースと採用範囲</summary>
-        <p>2026年の開催会場 · {circuits.filter(c => c.venue_on_2026_calendar).map(c => c.folder).join('、')}</p>
-        <p>過去の開催会場 · {circuits.filter(c => !c.venue_on_2026_calendar).map(c => c.folder).join('、')}</p>
-        {catalog.filter(c => !c.included).map(c => <p key={c.id}>対象外 · {c.folder} — {c.note}</p>)}
-      </details>}
+      {batchView && catalog?.length === 0 && <p className="sim-note">「地図とライン」で閉路の HDMap に Centerline または Raceline を生成すると、ここで評価できます。</p>}
       {!batchView && edited && result && <p className="sim-warning" role="status">比較条件を変更しました。現在のグラフは前回の実行結果です。</p>}
       {batchView && job && <p role="status">{STATUS[job.status] ?? job.status} · {job.message} <button type="button" className="bench-link" onClick={() => onLog(job.id)}>評価ログ</button></p>}
       {(error || catalogError) && <p className="sim-error" role="alert">{error || catalogError}</p>}

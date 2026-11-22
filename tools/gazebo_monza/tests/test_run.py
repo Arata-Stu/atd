@@ -27,7 +27,7 @@ class RunContractTests(unittest.TestCase):
                 self.assertEqual(sdf.attrib["name"], circuit)
                 self.assertEqual(scene["course"], circuit)
                 asphalt = Path(sdf.findtext(".//visual[@name='floor']//albedo_map"))
-                self.assertEqual(asphalt.name, "monza_asphalt.jpg" if circuit in ("monza", "odaiba") else "floor.jpg")
+                self.assertEqual(asphalt.name, "asphalt.jpg")
                 self.assertTrue(asphalt.is_file())
                 routes = {t["gz_topic_name"]: t["ros_topic_name"] for t in run.bridge_topics(circuit)}
                 self.assertEqual(routes[f"/world/{circuit}/clock"], "/clock")
@@ -41,14 +41,9 @@ class RunContractTests(unittest.TestCase):
                                  scene["trajectory"]["samples_s_x_y_yaw"][-1][1:])
                 self.assertAlmostEqual(scene["trajectory"]["end_s_m"] / scene["trajectory"]["travel_seconds"],
                                        2.4, delta=.04)
-                if circuit == "silverstone":
-                    self.assertTrue((out / "pit_lane.obj").is_file())
-                    self.assertTrue((out / "pit_garages.obj").is_file())
-                if circuit == "austin":
-                    self.assertTrue((out / "tower_deck.obj").is_file())
 
-    def test_route_only_changes_the_default_video_duration(self):
-        cases = [("video", "chicane", 10.), ("video", "lap", 240.),
+    def test_default_measurement_windows_and_video_lap_duration(self):
+        cases = [("video", "lap", world.default_travel_seconds("lap", "odaiba")),
                  ("diagnose", "lap", 20.), ("benchmark", "lap", 60.)]
         for mode, route, duration in cases:
             with self.subTest(mode=mode, route=route), tempfile.TemporaryDirectory() as tmp, \
@@ -60,19 +55,19 @@ class RunContractTests(unittest.TestCase):
                 self.assertEqual(args.camera_hz, 90)
 
     def test_map_uses_one_complete_lap_and_defaults_to_normal_course_speed(self):
-        for circuit in ("monza", "spa"):
-            with self.subTest(circuit=circuit), tempfile.TemporaryDirectory() as tmp, \
-                    patch.object(sys, "argv", ["run.py", "--output", tmp, "--mode", "map", "--circuit", circuit]), \
-                    patch.object(run, "run", return_value=0) as simulate:
-                self.assertEqual(run.main(), 0)
-                args, report = simulate.call_args.args
-                self.assertEqual((args.route, args.duration), ("lap", world.default_travel_seconds("lap", circuit)))
-                self.assertEqual(report["status"], "complete")
+        circuit = "odaiba"
+        with self.subTest(circuit=circuit), tempfile.TemporaryDirectory() as tmp, \
+                patch.object(sys, "argv", ["run.py", "--output", tmp, "--mode", "map", "--circuit", circuit]), \
+                patch.object(run, "run", return_value=0) as simulate:
+            self.assertEqual(run.main(), 0)
+            args, report = simulate.call_args.args
+            self.assertEqual((args.route, args.duration), ("lap", world.default_travel_seconds("lap", circuit)))
+            self.assertEqual(report["status"], "complete")
 
     def test_speed_course_laps_and_measurement_duration_have_distinct_meanings(self):
-        cases = [("video", ["--course", "spa", "--speed", "3.5", "--laps", "2"], ("spa", "lap", 3.5, 2, None)),
-                 ("serve", ["--laps", "1"], ("monza", "lap", None, 1, None)),
-                 ("diagnose", ["--speed", "1", "--duration", "4"], ("monza", "chicane", 1., None, 4.))]
+        cases = [("video", ["--course", "odaiba", "--speed", "3.5", "--laps", "2"], ("odaiba", "lap", 3.5, 2, None)),
+                 ("serve", ["--laps", "1"], ("odaiba", "lap", None, 1, None)),
+                 ("diagnose", ["--speed", "1", "--duration", "4"], ("odaiba", "lap", 1., None, 4.))]
         for mode, flags, expected in cases:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, \
                     patch.object(sys, "argv", ["run.py", "--mode", mode, "--output", tmp, *flags]), \
@@ -121,12 +116,12 @@ class RunContractTests(unittest.TestCase):
 
                 with patch.object(run, "start_stream") as stream, patch.object(run, "wait_for", next_phase):
                     if valid:
-                        self.assertEqual(run.map_laps({}, out, "spa", scene, report), 0)
+                        self.assertEqual(run.map_laps({}, out, "odaiba", scene, report), 0)
                         self.assertTrue(report["motion"]["lap_completed"])
                         self.assertEqual(report["mapping"]["map_id"], "map-a")
                     else:
                         with self.assertRaisesRegex(RuntimeError, "全周"):
-                            run.map_laps({}, out, "spa", scene, report)
+                            run.map_laps({}, out, "odaiba", scene, report)
                         self.assertFalse((out / "lap.complete.json").exists())
                     stream.assert_called_once()
 
@@ -136,7 +131,7 @@ class RunContractTests(unittest.TestCase):
                 out = Path(tmp)
                 (out / signal).write_text(payload)
                 with self.assertRaisesRegex(RuntimeError, "tracking lost|中断"):
-                    run.map_laps({}, out, "monza", {}, {"imu_hz": 0})
+                    run.map_laps({}, out, "odaiba", {}, {"imu_hz": 0})
                 self.assertFalse((out / "scene/lap_capture.ready").exists())
                 self.assertFalse((out / "lap.complete.json").exists())
 
@@ -157,17 +152,17 @@ class RunContractTests(unittest.TestCase):
             pose = list(map(float, sensor.findtext("pose").split()))
             self.assertEqual(by_child[frame][3], pose[1])
             self.assertEqual(by_child[frame][5:], (-pi/2, 0, -pi/2))
-        self.assertEqual(topics["/world/monza/clock"]["ros_topic_name"], "/clock")
+        self.assertEqual(topics["/world/odaiba/clock"]["ros_topic_name"], "/clock")
 
     def test_selected_imu_endpoints_and_optical_frames(self):
         inertial = {("imu", run.IMU_TOPIC), ("accel", run.ACCEL_TOPIC), ("gyro", run.GYRO_TOPIC)}
         camera = {"midpoint_forward_from_rear_axle_m": .1, "height_above_floor_m": .12,
                   "pitch_down_deg": 0, "optical_frames": capture.FRAMES, "baseline_m": .095}
         for imu_hz in (0, 200, 400):
-            endpoints = [row for row in run.bridge_topics("spa", imu_hz)
+            endpoints = [row for row in run.bridge_topics("odaiba", imu_hz)
                          if row["ros_type_name"] == "sensor_msgs/msg/Imu"]
             self.assertEqual({(row["gz_topic_name"], row["ros_topic_name"]) for row in endpoints},
-                             {(f"/spa/{name}", topic) for name, topic in inertial} if imu_hz else set())
+                             {(f"/odaiba/{name}", topic) for name, topic in inertial} if imu_hz else set())
             self.assertTrue(all(row["gz_type_name"] == "gz.msgs.IMU" and row["direction"] == "GZ_TO_ROS"
                                 and row["qos_profile"] == "SENSOR_DATA" for row in endpoints))
             frames = [tf for tf in run.transforms(camera, imu_hz) if tf[1] in (run.ACCEL_FRAME, run.GYRO_FRAME)]
@@ -194,7 +189,7 @@ class RunContractTests(unittest.TestCase):
 
         node.get_subscriptions_info_by_topic.side_effect = subscriptions
         def play_when_ready(circuit):
-            self.assertEqual(circuit, "spa")
+            self.assertEqual(circuit, "odaiba")
             self.assertTrue(all(n >= 2 for n in seen.values()))
             return True
 
@@ -204,33 +199,11 @@ class RunContractTests(unittest.TestCase):
                        qos_check_compatible=lambda pub, sub: (2 if sub == "incompatible" else 0, ""))}
         with patch.dict(sys.modules, modules), patch.object(run.time, "sleep"), \
                 patch.object(run, "unpause", side_effect=play_when_ready) as play:
-            run.start_stream({}, True, "spa", imu_hz=400)
+            run.start_stream({}, True, "odaiba", imu_hz=400)
         play.assert_called_once()
         self.assertEqual(ros.create_node.call_args.kwargs["parameter_overrides"], [("use_sim_time", True)])
         self.assertEqual(ros.spin_once.call_count, len(stamps))
         self.assertFalse(node.create_subscription.called)  # No diagnostic image subscription in the data path.
-
-    def test_stationary_or_incomplete_video_is_not_accepted_as_driving(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp)
-            scene = world.build(out)
-            path = out / "rig_motion.jsonl"
-            metrics = {"mode": "video", "pair_span_sim_s": 10}
-            samples = scene["trajectory"]["samples_s_x_y_yaw"]
-
-            def write(samples):
-                path.write_text("".join(json.dumps({"x_m": s[1], "y_m": s[2]}) + "\n" for s in samples))
-
-            # A trace the length of the retired 12.5 m compact course still
-            # falls well short of the georeferenced T2 exit.
-            for poses in ([samples[0]] * 20, [s for s in samples if s[0] <= 12.5]):
-                write(poses)
-                with self.assertRaises(RuntimeError):
-                    run.inspect_motion(out, scene, metrics)
-            write(samples)
-            result = run.inspect_motion(out, scene, metrics)
-            self.assertTrue(result["reached_corner_exit"])
-            self.assertAlmostEqual(result["sampled_distance_m"], scene["trajectory"]["end_s_m"], places=6)
 
     def test_lap_verifies_pose_at_intermediate_stations_and_capture_boundaries(self):
         profile = [[0, 0, 0, 0], [10, 10, 0, pi/2], [20, 10, 10, pi],
@@ -297,7 +270,7 @@ class RunContractTests(unittest.TestCase):
         for mode in ("video", "serve"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 out = Path(tmp)
-                args = SimpleNamespace(mode=mode, route="lap", circuit="spa", output=out,
+                args = SimpleNamespace(mode=mode, route="lap", circuit="odaiba", output=out,
                                        speed=3., laps=2, duration=None, wait_for_stereo=True,
                                        camera_height=.12, camera_pitch_deg=0., resolution="848x480", camera_hz=60, imu="400")
                 if mode == "video":

@@ -88,8 +88,15 @@ class LocalizationMonitor(Node):
     def on_diagnostic(self, msg, info):
         for status in msg.status:
             if status.hardware_id == 'visual_slam' and self.source('cuVSLAM diagnostics', info):
+                was_registered = self.state.registered
                 self.state.diagnostic(stamp_ns(msg.header.stamp), self.arrival_time(),
                                       {value.key: value.value for value in status.values})
+                if self.state.registered and not was_registered:
+                    self.get_logger().info(
+                        f"保存地図の照合成功を診断で確認 map={self.config['map_id']} "
+                        f"session={self.session_id} epoch={self.state.epoch} "
+                        f"hint_stamp_ns={self.state.hint_stamp} diagnostic_stamp_ns={self.state.registered_since} "
+                        "localized_in_exist_map=Yes vo_status=OK")
                 self.publish()
 
     def on_tf(self, msg, info):

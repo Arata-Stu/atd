@@ -67,7 +67,12 @@ class GazeboControlNode(Node):
         if status != self.last_status or drive is not None:
             if status != self.last_status:
                 self.last_status = status
-                self.get_logger().info(f'{status[0]} {status[1]}')
+                detail = ''
+                if drive is not None:
+                    detail = (f' map={controller.route[0]} line={controller.line} '
+                              f'session={controller.session[3]} epoch={controller.session[4]} '
+                              f'image_stamp_ns={drive[0]} command_sim_ns={now}')
+                self.get_logger().info(f'{status[0]} {status[1]}{detail}')
             report = dict(state=status[0], reason=status[1], stamp_ns=now, map_id=controller.route[0],
                           line=controller.line)
             if drive is not None:

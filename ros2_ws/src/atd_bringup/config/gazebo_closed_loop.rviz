@@ -15,7 +15,7 @@ Visualization Manager:
       Plane Cell Count: 100
       Alpha: 0.15
     - Class: rviz_default_plugins/PointCloud2
-      Name: cuVSLAM landmarks
+      Name: SLAM landmarks (live)
       Enabled: true
       Topic:
         Value: /visual_slam/vis/landmarks_cloud
@@ -28,6 +28,20 @@ Visualization Manager:
       Color Transformer: FlatColor
       Color: 180; 194; 209
       Alpha: 0.65
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Map used for localization
+      Enabled: true
+      Topic:
+        Value: /visual_slam/vis/localizer_map_cloud
+        Depth: 1
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 3
+      Decay Time: 0
+      Color Transformer: FlatColor
+      Color: 184; 123; 235
+      Alpha: 0.85
     - Class: rviz_default_plugins/Path
       Name: Reference line
       Enabled: true

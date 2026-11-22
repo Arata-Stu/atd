@@ -56,6 +56,22 @@ def run(c, stamp=START, **kwargs):
     return c.observe('localization', loc, stamp)
 
 
+@pytest.mark.parametrize('line', ('centerline', 'raceline'))
+def test_initial_localization_must_complete_even_with_a_valid_plan(line):
+    controller = GazeboController(ROUTE, line, 1.5, simulation_table())
+    for index, state in enumerate(('waiting_hint', 'localizing', 'tracking')):
+        now = START + index * 33_333_333
+        loc, plan = inputs(now)
+        loc.state, plan.line = state, line
+        assert controller.observe('planning', plan, now) is None
+        drive = controller.observe('localization', loc, now)
+        if state == 'tracking':
+            assert drive is not None and drive[0] == now
+        else:
+            assert drive is None and controller.ready(now) is None
+            assert controller.state == 'waiting'
+
+
 def test_stamp_matching_ackermann_and_real_pid():
     c = gate()
     stamp, angle, throttle = run(c, y=.06, speed=-.02, target=3.)

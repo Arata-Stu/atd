@@ -124,8 +124,9 @@ class CompositionTests(unittest.TestCase):
             view = manager['Views']['Current']
             self.assertEqual((view['X'], view['Y']), (.5, .5))
             topics = {d['Topic']['Value']: d['Topic'] for d in manager['Displays'] if 'Topic' in d}
-            cloud = topics.pop('/visual_slam/vis/landmarks_cloud')
-            self.assertEqual((cloud['Reliability Policy'], cloud['Durability Policy']), ('Best Effort', 'Volatile'))
+            for name in ('landmarks_cloud', 'localizer_map_cloud'):
+                cloud = topics.pop('/visual_slam/vis/' + name)
+                self.assertEqual((cloud['Reliability Policy'], cloud['Durability Policy']), ('Best Effort', 'Volatile'))
             self.assertEqual(set(topics), {'/atd/gazebo/' + name for name in
                              ('reference_path', 'ground_truth_path', 'estimated_path', 'current_poses')})
             for topic in topics.values():

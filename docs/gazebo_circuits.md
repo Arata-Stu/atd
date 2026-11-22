@@ -102,7 +102,7 @@ atd gazebo closed-loop --course odaiba --map gazebo --line raceline --speed 1.5 
 
 矢印は GT と推定それぞれの最新の位置と向きを表す。更新時刻が異なる場合、その時間差も矢印の間隔に含まれる。追跡を失うと推定矢印が消える。RViz は試行終了時に閉じる。画面なしで評価するときは `--rviz` を省略する。
 
-`--rviz` は cuVSLAM の可視化も有効にする。青灰色の点は走行中の cuVSLAM が配信する特徴点地図（`/visual_slam/vis/landmarks_cloud`）で、RViz の「cuVSLAM landmarks」から表示を切り替えられる。
+`--rviz` では「SLAM landmarks (live)」が走行中の SLAM の特徴点（青灰色）、「Map used for localization」が保存地図との位置合わせに使われた点群（紫）を表示する。紫の点は cuVSLAM が `/visual_slam/vis/localizer_map_cloud` に配信したときに見える。照合の成否は試行のログで確認できる。[NVIDIA の可視化トピック一覧](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_cuvslam/index.html#ros-topics-published)
 
 同じ計時線から Raceline を試すときは `--line raceline` に切り替える。シミュレーションでの Pure Pursuit の最短先読み距離は Centerline・Customline が0.35 m、Raceline が0.65 m。同梱のお台場の Raceline は計時線中央から約0.49 mずれており、停止時にも先読み円とラインが交わるようにした。編集したラインに合わせて `--min-lookahead` で上書きできる。
 
@@ -111,6 +111,14 @@ atd gazebo closed-loop --course odaiba --map gazebo --line raceline --speed 1.5 
 自己位置と計画の更新が一時的に途切れると模擬車両はニュートラルで減速し、同じ追跡区間で新しい有効な組がそろうと走行を再開する。明示的な追跡喪失は試行の停止理由になる。車両は前進用の運動学的自転車モデルで、既定のスロットル FF 表と操舵・速度応答はシミュレーション用の設定値。
 
 端末に表示される `runs/gazebo/odaiba/<run-id>/` の `closed_loop.result.json` で完走周回数、周回タイム、境界への接触や停止理由を確認できる。`scene/rig_motion.jsonl` は Gazebo の車体姿勢と制御状態の時系列、`closed_loop.ros.log` は初期位置推定・追跡・制御のログ。初期化中に終了した場合は `closed_loop.host.json` にも理由が残る。
+
+発進時の地図照合を確認するには、該当する試行の保存先で次を実行する。
+
+```bash
+grep -nE 'Trying to localize in map|Successfully localized at|Failed to localize in map|保存地図の照合成功を診断で確認|atd_gazebo_control.*driving' closed_loop.ros.log
+```
+
+`Trying to localize in map` に照合先のパス、`Successfully localized at` に cuVSLAM が求めた初期位置が出る。モニターが成功診断を受け取った行と、制御が最初に `driving` を出した行には、同じ追跡区間を特定する `session`・`epoch` とそれぞれの画像時刻（ns）が残る。
 
 ### 走行後に接触直前を確認する
 

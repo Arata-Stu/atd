@@ -58,18 +58,22 @@ class LocalizationMonitor(Node):
         self.create_subscription(TFMessage, '/tf', self.on_tf, qos_profile_sensor_data)
         for side in ('left', 'right'):
             self.create_subscription(CameraInfo, c[side + '_info'], partial(self.on_camera, side), qos_profile_sensor_data)
-        self.create_timer(0.1, self.publish, clock=self.get_clock() if c['simulation_freshness'] else Clock(clock_type=ClockType.STEADY_TIME))
+        self.create_timer(0.1, self.watch, clock=self.get_clock() if c['simulation_freshness'] else Clock(clock_type=ClockType.STEADY_TIME))
 
     def source(self, stream, info):
         self.state.clock(self.get_clock().now().nanoseconds)
         gid = info.get('publisher_gid') or {}
-        return self.state.source(stream, bytes(gid.get('data', b'')))
+        valid = self.state.source(stream, bytes(gid.get('data', b'')))
+        if not valid:
+            self.publish()
+        return valid
 
     def on_camera(self, side, msg, info):
         if self.source(side, info):
             matches = (msg.header.frame_id == self.config[side + '_frame']
                        and msg.width == self.config['image_width'] and msg.height == self.config['image_height'])
             self.state.camera(side, stamp_ns(msg.header.stamp), self.arrival_time(), matches)
+            self.publish()
 
     def on_hint(self, msg, info):
         if msg.header.frame_id != self.config['map_frame'] or not self.source('VGL', info):
@@ -79,12 +83,14 @@ class LocalizationMonitor(Node):
         except ValueError:
             return
         self.state.hint(stamp_ns(msg.header.stamp))
+        self.publish()
 
     def on_diagnostic(self, msg, info):
         for status in msg.status:
             if status.hardware_id == 'visual_slam' and self.source('cuVSLAM diagnostics', info):
                 self.state.diagnostic(stamp_ns(msg.header.stamp), self.arrival_time(),
                                       {value.key: value.value for value in status.values})
+                self.publish()
 
     def on_tf(self, msg, info):
         for tf in msg.transforms:
@@ -96,6 +102,7 @@ class LocalizationMonitor(Node):
             except ValueError:
                 continue
             self.state.transform(stamp_ns(tf.header.stamp), self.arrival_time(), pose)
+            self.publish()
 
     def on_odometry(self, msg, info):
         if (msg.header.frame_id != self.config['odom_frame'] or msg.child_frame_id != self.config['base_frame']
@@ -107,6 +114,7 @@ class LocalizationMonitor(Node):
             return
         self.state.odometry(stamp_ns(msg.header.stamp), self.arrival_time(), pose,
                             msg.twist.twist.linear.x, msg.twist.twist.angular.z)
+        self.publish()
 
     def hint_ready(self, wall):
         if not (self.state.initialized_stereo(wall) and self.hint_client.service_is_ready()
@@ -117,19 +125,23 @@ class LocalizationMonitor(Node):
                  and item.topic_type == 'geometry_msgs/msg/PoseWithCovarianceStamped']
         return names.count('visual_slam') == 1 and names.count(self.get_name()) == 1
 
-    def publish(self):
-        now = self.get_clock().now()
-        self.state.clock(now.nanoseconds)
+    def watch(self):
+        self.state.clock(self.get_clock().now().nanoseconds)
         received = self.arrival_time()
         self.startup_hint.tick(time.monotonic(), stop=(self.state.registered or self.state.lost
                                           or self.state.conflict or self.state.camera_mismatch),
                                ready=lambda: self.hint_ready(received),
                                request=lambda: self.hint_client.call_async(Trigger.Request()))
-        state, reason, sample = self.state.status(received)
+        self.publish(heartbeat=True)
+
+    def publish(self, *, heartbeat=False):
+        status = self.state.next_status(self.arrival_time(), heartbeat=heartbeat)
+        if status is None:
+            return
+        state, reason, sample = status
         if self.startup_hint.error and state in ('waiting_hint', 'localizing'):
             reason = self.startup_hint.error
         msg = LocalizationStatus()
-        msg.header.stamp = now.to_msg()
         msg.header.frame_id = self.config['map_frame']
         msg.map_id = self.config['map_id']
         msg.map_sha256 = self.config['map_sha256']
@@ -143,6 +155,7 @@ class LocalizationMonitor(Node):
             q.x, q.y, q.z, q.w = sample.pose.xyzw
             msg.speed_mps, msg.yaw_rate_rps = sample.speed, sample.yaw_rate
         else:
+            msg.header.stamp = self.get_clock().now().to_msg()
             p, q = msg.pose.position, msg.pose.orientation
             p.x = p.y = p.z = math.nan
             q.x = q.y = q.z = q.w = math.nan

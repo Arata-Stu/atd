@@ -51,7 +51,7 @@ class AutoDriveNode(Node):
         self.publisher = self.create_publisher(String, '/vehicle/auto_drive/status', 10)
         for kind, (topic, _, message_type) in SOURCES.items():
             self.create_subscription(message_type, topic, partial(self.receive, kind), 10)
-        self.create_timer(.02, self.tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
+        self.board_timer = self.create_timer(.02, self.tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
 
     def graph(self, steady):
         expected = {kind: (topic, node) for kind, (topic, node, _) in SOURCES.items()}
@@ -79,7 +79,11 @@ class AutoDriveNode(Node):
             self.gate.invalidate('制御または自己位置の配信元を確認できません')
             self.gate.speeds.clear(time.time_ns())
             return
-        self.gate.receive(kind, msg, time.time_ns(), time.monotonic_ns())
+        matched = self.gate.receive(kind, msg, time.time_ns(), time.monotonic_ns())
+        if matched and self.gate.host_since is not None:
+            # 通常走行はカメラ観測ごとに照合・送信。観測が途切れても CH3・期限・制動を監視する。
+            self.tick()
+            self.board_timer.reset()
 
     def close(self):
         if self.board is not None:

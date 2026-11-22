@@ -33,6 +33,8 @@ ros2 run atd_localization validate_bag
 
 cuVSLAM が `map → odom → base_link` の動的 TF を発行する。`/localization/pose_hint` は VGL の初期位置候補。`localization_monitor` は診断、同じ観測時刻の `map → odom`・VO odometry、CameraInfo から `/localization/status`（`atd_interfaces/msg/LocalizationStatus`）を配信する。
 
+追跡中は新しい画像時刻の観測が揃った時点で、その姿勢を1回配信する。計画・制御の更新はこの入力に従い、ステレオ30 Hz・90 Hzの切り替えにモニター側の設定変更は不要。Gazebo の閉ループでは同じ追跡区間内で観測済みの直近の地図補正 TF を使える。追跡喪失は診断の受信時に通知し、起動時の VGL 要求・入力途絶の検査・有効な姿勢を待つ間の状態通知は100 ms周期で行う。
+
 初回の候補が購読準備より早く届いた場合に備え、左右 CameraInfo と cuVSLAM 診断、候補の両購読者、VGL サービスの準備を確認してから、位置合わせ待ちの間に `/localization/request_hint` を一度要求する。応答失敗・タイムアウト時は合計3回まで試す。位置合わせの成否は、その後の候補・診断・TF・オドメトリで判定する。
 
 `state` は `waiting_hint`、`localizing`、`tracking`、`lost`、`stale`。姿勢と車体 x 方向速度 [m/s] は `tracking` 時だけ有効。地図 ID・cuVSLAM 地図と HDMap の SHA-256・セッション ID を同じメッセージに持たせ、別の地図や追跡区間の姿勢を識別する。

@@ -1,4 +1,4 @@
-"""Drive the saved Odaiba lines with ideal VO at 10 Hz and map corrections at 1 Hz."""
+"""Drive the saved Odaiba lines with camera-paced ideal VO and map corrections at 1 Hz."""
 import json
 import math
 from pathlib import Path
@@ -24,16 +24,16 @@ class OdaibaFeedbackTest(unittest.TestCase):
         document = json.loads((ROOT / 'samples/odaiba/hdmap/map.json').read_text())
         boundaries, course, _ = load_lap('odaiba')
         identity = ('odaiba-test', '1' * 64, '2' * 64)
-        for line in ('centerline', 'raceline'):
-            with self.subTest(line=line):
+        for line, camera_hz in (('centerline', 10), ('raceline', 10), ('raceline', 30), ('centerline', 90)):
+            with self.subTest(line=line, camera_hz=camera_hz):
                 planner = Planner(ReferenceLine.from_document(document, line))
                 control = GazeboController(identity, line, 1.5, simulation_table())
                 vehicle = CommandPlant(course[0][1:], .30)
                 score = CourseEvaluation(boundaries, course, 2)
                 tracking = TrackingState(allow_sparse_tf=True)
                 correction = RigidPose((2., -1., 0.), (0., 0., 0., 1.))
-                for frame in range(1800):
-                    now = 1_000_000_000 + frame * 100_000_000
+                for frame in range(180 * camera_hz):
+                    now = 1_000_000_000 + round(frame * 1e9 / camera_hz)
                     pose = vehicle.vehicle
                     time_s = now * 1e-9
                     tracking.clock(now)
@@ -41,7 +41,7 @@ class OdaibaFeedbackTest(unittest.TestCase):
                         tracking.hint(now)
                     for side in ('left', 'right'):
                         tracking.camera(side, now, time_s, matches=True)
-                    if frame % 10 == 0:
+                    if frame % camera_hz == 0:
                         tracking.transform(now, time_s, correction)
                     tracking.diagnostic(now, time_s, {'localized_in_exist_map': 'Yes', 'vo_status': 'OK'})
                     q = (0., 0., math.sin(pose.yaw / 2), math.cos(pose.yaw / 2))
@@ -68,11 +68,13 @@ class OdaibaFeedbackTest(unittest.TestCase):
                                               validity_s=.5, **plan), now)
                     self.assertIsNotNone(command, control.reason)
                     stamp, steer, throttle = command
+                    self.assertEqual(stamp, now)
                     vehicle.receive(now, stamp, JOINTS, [steer, throttle, 1.])
+                    self.assertEqual(vehicle.command_stamp_ns, stamp)
                     outcome = score.observe(now * 1e-9, pose.x, pose.y, pose.yaw)
                     if outcome:
                         break
-                    for step in range(1, 10):
+                    for step in range(1, 90 // camera_hz + 1):
                         vehicle.advance(now + round(step * 1e9 / 90), 1. / 90)
                 else:
                     self.fail('2周完走前に180シミュレーション秒が経過しました')

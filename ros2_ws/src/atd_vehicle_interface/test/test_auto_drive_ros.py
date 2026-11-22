@@ -105,6 +105,12 @@ def test_live_ros_tracking_loss_stops_and_recovery_requires_rc(monkeypatch):
         spin_until(lambda: driver.gate.rc_seen and bool(driver.sources))
         driver.board.selector = 1
         spin_until(lambda: (.15, .1) in writes)
+        # タイマーを待たず、同時刻の3入力がそろった callback だけで送る。
+        driver.board_timer.cancel()
+        steering.steering_rad = .25
+        emit()
+        spin_until(lambda: (.25, .1) in writes, emit_samples=False)
+        assert not driver.board_timer.is_canceled()
         loc.speed_mps = speed.estimated_speed_mps = .2
         spin_until(lambda: driver.gate.velocity and driver.gate.velocity[2] == .2)
         loc.state = 'lost'

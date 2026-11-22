@@ -12,6 +12,8 @@ from atd_planning.core import yaw_from_quaternion
 
 # The Gazebo plant consumes the image timestamp and independently expires it after 0.30 sim s.
 COMMAND_TTL_NS = 250_000_000
+# Covers valid 90 Hz observations even if the other stream or /clock arrives later.
+MAX_PENDING_FRAMES = 32
 
 
 def default_min_lookahead(line):
@@ -110,7 +112,7 @@ class GazeboController:
             return None
         pending = self.locations if is_pose else self.plans
         pending[stamp] = msg
-        if len(pending) > 16:
+        if len(pending) > MAX_PENDING_FRAMES:
             pending.pop(min(pending))
         # The /clock sample may arrive after the messages over DDS.
         return self.ready(now)

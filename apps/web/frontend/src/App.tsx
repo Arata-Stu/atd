@@ -5,16 +5,16 @@ import { JobLog } from './JobLog';
 import { Icon } from './ui';
 import { ACTIVE, STATUS } from './job_status';
 import { calibrationHash, receivedBag } from './calibration';
-import { CalibrationWorkspace } from './CalibrationWorkspace';
 import { EscTrialWorkspace } from './EscTrialWorkspace';
 import { LocalizationWorkspace } from './LocalizationWorkspace';
 import { SimulationWorkspace } from './SimulationWorkspace';
 import { MapWorkspace } from './MapWorkspace';
 import { TransferWorkspace } from './TransferWorkspace';
 import { LiveWorkspace } from './LiveWorkspace';
-import { InputWorkspace } from './InputWorkspace';
-import { VehicleWorkspace } from './VehicleWorkspace';
 
+const InputWorkspace = lazy(() => import('./InputWorkspace').then(module => ({ default: module.InputWorkspace })));
+const VehicleWorkspace = lazy(() => import('./VehicleWorkspace').then(module => ({ default: module.VehicleWorkspace })));
+const CalibrationWorkspace = lazy(() => import('./CalibrationWorkspace').then(module => ({ default: module.CalibrationWorkspace })));
 const ClosedLoopWorkspace = lazy(() => import('./ClosedLoopWorkspace'));
 const ReplayErrorsWorkspace = lazy(() => import('./ReplayErrorsWorkspace'));
 const JobHistory = lazy(() => import('./JobHistory'));
@@ -102,7 +102,21 @@ export function App() {
         {EVALUATIONS.map(item => <a key={item.id} href={'#' + item.id} aria-current={page === item.id ? 'page' : undefined}>{item.title}</a>)}
       </nav>}
       {!connected && <div className="backend-banner"><Icon name="info" size={16}/>ローカルサーバーに接続できません。起動状態を確認してください。</div>}
-      <div className="page-container">{page === 'map' && <MapWorkspace notify={notify} onDirty={onDirty} onJob={onJob} jobs={jobs} onTransfer={() => navigate('transfer')}/>} {page === 'transfer' && <TransferWorkspace notify={notify} onJob={onJob} jobs={jobs} onCalibration={bag => navigate('calibration', bag)}/>} {page === 'localization' && <LocalizationWorkspace jobs={jobs} onLog={onJob}/>} {page === 'live' && <LiveWorkspace notify={notify} capture={capture} onCapture={showCapture}/>} {page === 'input' && <InputWorkspace notify={notify} onDirty={onDirty} jobs={jobs} onLog={onJob}/>} {page === 'calibration' && <CalibrationWorkspace jobs={jobs} onLog={onJob} onTransfer={() => navigate('transfer')} onOpenMap={id => navigate('map', id)}/>} {page === 'esc' && <EscTrialWorkspace/>} {page === 'closed-loop' && <Suspense fallback={<p role="status">走行結果を読み込んでいます…</p>}><ClosedLoopWorkspace/></Suspense>} {page === 'replay' && <Suspense fallback={<p role="status">再生結果を読み込んでいます…</p>}><ReplayErrorsWorkspace/></Suspense>} {page === 'simulation' && <SimulationWorkspace jobs={jobs} onOpenMap={id => navigate('map', id)} onLog={onJob}/>} {page === 'vehicle' && <VehicleWorkspace notify={notify} onDirty={onDirty}/>}</div>
+      <div className="page-container">
+        <Suspense fallback={<p role="status">画面を読み込んでいます…</p>}>
+          {page === 'map' && <MapWorkspace notify={notify} onDirty={onDirty} onJob={onJob} jobs={jobs} onTransfer={() => navigate('transfer')}/>}
+          {page === 'transfer' && <TransferWorkspace notify={notify} onJob={onJob} jobs={jobs} onCalibration={bag => navigate('calibration', bag)}/>}
+          {page === 'localization' && <LocalizationWorkspace jobs={jobs} onLog={onJob}/>}
+          {page === 'live' && <LiveWorkspace notify={notify} capture={capture} onCapture={showCapture}/>}
+          {page === 'input' && <InputWorkspace notify={notify} onDirty={onDirty} jobs={jobs} onLog={onJob}/>}
+          {page === 'calibration' && <CalibrationWorkspace jobs={jobs} onLog={onJob} onTransfer={() => navigate('transfer')} onOpenMap={id => navigate('map', id)}/>}
+          {page === 'esc' && <EscTrialWorkspace/>}
+          {page === 'closed-loop' && <ClosedLoopWorkspace/>}
+          {page === 'replay' && <ReplayErrorsWorkspace/>}
+          {page === 'simulation' && <SimulationWorkspace jobs={jobs} onOpenMap={id => navigate('map', id)} onLog={onJob}/>}
+          {page === 'vehicle' && <VehicleWorkspace notify={notify} onDirty={onDirty}/>}
+        </Suspense>
+      </div>
       <footer className="app-footer"><span><i className={connected ? 'online' : ''}/>{connected ? 'ワークスペース接続中' : 'ローカルサーバー未接続'}</span><span>ATD Studio <b>v0.1</b></span></footer>
     </main>
     {notice && <div className={'toast ' + (notice.error ? 'error' : '')} role={notice.error ? 'alert' : 'status'}><Icon name={notice.error ? 'info' : 'check'} size={19}/><span>{notice.message}</span><button className="icon-button" aria-label="通知を閉じる" onClick={() => setNotice(null)}><Icon name="close" size={16}/></button></div>}

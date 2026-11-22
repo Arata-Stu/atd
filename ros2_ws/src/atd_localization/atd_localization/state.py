@@ -106,6 +106,7 @@ class TrackingState:
         self.corrections = {}
         self.registered_since = None
         self.last_sample = None
+        self.last_output = None
         self.last_diag = self.barrier = self.hint_stamp = -1
         self.registered = self.needs_clear = self.lost = False
         self.was_tracking = False
@@ -210,6 +211,8 @@ class TrackingState:
         # VO and its tracking diagnostic still describe one image. At publication time
         # prefer its exact TF, or hold a measured correction from the same registration.
         stamp = max((t for t, parts in self.frames.items() if 'ok' in parts and 'odometry' in parts), default=0)
+        if not stamp:
+            return
         correction = max((t for t in self.corrections if self.registered_since <= t <= stamp), default=0)
         if correction:
             self._compose(stamp, self.frames[stamp], self.corrections[correction])
@@ -233,6 +236,15 @@ class TrackingState:
         if self.was_tracking and state != 'tracking' and not (self.allow_sparse_tf and state == 'stale'):
             self.epoch += 1
         self.was_tracking = state == 'tracking'
+        return state, reason, sample
+
+    def next_status(self, wall, *, heartbeat=False):
+        """Publish each observation once, with periodic status while awaiting usable poses."""
+        state, reason, sample = self.status(wall)
+        key = (self.epoch, state, reason, sample.stamp if sample is not None else None)
+        if key == self.last_output and (sample is not None or not heartbeat):
+            return None
+        self.last_output = key
         return state, reason, sample
 
     def _status(self, wall):

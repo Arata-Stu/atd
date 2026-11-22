@@ -116,11 +116,11 @@ export function chartsFor(run: ClosedLoopDetail): Chart[] {
     {label:'操舵角', unit:'°', digits:1, hint:'Gazebo 車両モデルの実舵角と指令角。左旋回が正',
       series:[series(samples,'実舵角',blue,p=>p.steering_rad === null ? null : degrees(p.steering_rad)),
         series(samples,'指令角',orange,p=>p.requested_steering_rad === null ? null : degrees(p.requested_steering_rad),'step',true)]},
-    {label:'画像からの遅れ',unit:'ms',digits:1,hint:'画像からのシミュレーション時間。推定受信・指令生成は元画像の時刻、採用・経過は GT 観測時刻に表示',
+    {label:'画像からの遅れ',unit:'ms',digits:1,hint:'紫は車体の記録時刻から使用中の指令の元画像時刻を引いた値です。新しい指令に替わるまで増えます。青は画像時刻、紫は車体の記録時刻に表示するため、同じ縦線でも元画像が異なる場合があります。すべてシミュレーション時間です。',
       series:[series(estimates,'画像 → 推定受信',orange,p=>p.received_delay_ms),
         series(control,'画像 → 制御指令生成',blue,p=>p.delay,'linear',true),
         series(samples,'画像 → 指令採用',teal,p=>p.image_to_apply_ms,'step',true),
-        series(samples,'採用中指令の経過時間',purple,p=>p.command_age_ms)]},
+        series(samples,'使用中の指令の元画像は何 ms 前か',purple,p=>p.command_age_ms)]},
     {label:'VSLAM 処理時間',unit:'ms',digits:1,hint:'画像時刻に対応する VisualSlamStatus の実行所要時間（実時間）',
       series:[series(vslam,'追跡処理',blue,p=>p.track_ms),series(vslam,'コールバック全体',purple,p=>p.callback_ms,'linear',true)]},
   ];

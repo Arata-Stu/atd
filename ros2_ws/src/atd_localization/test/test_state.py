@@ -44,6 +44,32 @@ def test_exact_timestamp_join_composes_position_heading_and_preserves_reverse(or
     assert observation.speed == -.4 and observation.yaw_rate == .12
 
 
+@pytest.mark.parametrize('fps', [30, 90])
+@pytest.mark.parametrize('sparse_tf', [False, True])
+def test_new_images_publish_once_as_soon_as_ready(fps, sparse_tf):
+    state = TrackingState(allow_sparse_tf=sparse_tf)
+    camera(state)
+    state.hint(T - 1)
+    stamps = [T + round(i * 1e9 / fps) for i in range(fps)]
+    received = []
+    for index, stamp in enumerate(stamps):
+        wall = 5. + (stamp - T) / 1e9
+        camera(state, stamp, wall)
+        order = ('vo', 'tf', 'diag') if index % 2 == 0 else ('diag', 'tf', 'vo')
+        for part in order:
+            if part == 'tf' and sparse_tf and index != 0:
+                continue
+            observe(state, stamp, wall, (part,))
+            result = state.next_status(wall)
+            if result is not None and result[2] is not None:
+                received.append(result[2].stamp)
+        assert state.next_status(wall, heartbeat=True) is None
+    assert received == stamps
+    assert state.next_status(wall + 2., heartbeat=True)[0] == 'stale'
+    assert state.next_status(wall + 2.) is None
+    assert state.next_status(wall + 2., heartbeat=True)[0] == 'stale'
+
+
 def test_no_identity_hint_or_approximate_timestamp_fallback():
     state = TrackingState()
     camera(state)

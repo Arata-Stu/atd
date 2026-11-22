@@ -2,6 +2,9 @@
 import math
 import re
 
+# 画像90 Hzで指令の最長有効期間250 msを照合できる件数。
+MAX_PENDING_FRAMES = 32
+
 
 class DriveSpeeds:
     """同じ追跡観測の速度対を表示する。制御器が出力できない停止目標も表示する。"""
@@ -52,7 +55,7 @@ class DriveSpeeds:
             if ns != max(rows) or rows[ns][:2] != (values, ttl):
                 self.clear(max(rows))
             return
-        if len(rows) >= 8:
+        if len(rows) >= MAX_PENDING_FRAMES:
             del rows[min(rows)]
         rows[ns] = (values, ttl, steady + ttl - (wall - ns))
 

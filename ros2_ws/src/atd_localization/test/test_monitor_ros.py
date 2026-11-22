@@ -64,6 +64,10 @@ def test_ros_stamped_inputs_result_in_single_signed_observation_and_loss():
         # must request another only after both hint consumers have been discovered.
         spin_until(lambda: bool(requests))
         assert not any(m.state == 'tracking' for m in received)
+        # All remaining state changes, including the completed frame and loss,
+        # must be published by input callbacks without a heartbeat tick.
+        for timer in monitor.timers:
+            timer.cancel()
         stamp = driver.get_clock().now().to_msg()
         hint = PoseWithCovarianceStamped()
         hint.header.stamp, hint.header.frame_id = stamp, 'map'

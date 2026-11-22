@@ -149,6 +149,32 @@ def test_clock_gap_and_unchanged_stamp_do_not_refresh_drive():
     assert not run.gate.active
 
 
+@pytest.mark.parametrize('hz', (30, 90))
+def test_new_camera_frame_ready_once_at_camera_rate(hz):
+    run = Run()
+    run.start()
+    for index in range(1, hz + 1):
+        stamp = T + index * 10**9 // hz
+        for kind in ('steering', 'localization', 'speed', 'speed'):
+            ready = run.gate.receive(kind, message(kind, stamp), stamp, stamp)
+            if ready:
+                run.step(stamp, ARMED)
+        assert len(run.board.writes) == 2 + index
+
+
+def test_90hz_buffer_can_match_a_still_valid_late_speed_command():
+    run = Run()
+    run.start()
+    for index in range(1, 21):
+        stamp = T + index * 10**9 // 90
+        for kind in ('steering', 'localization'):
+            run.gate.receive(kind, message(kind, stamp), stamp, stamp)
+    first = T + 10**9 // 90
+    assert run.gate.receive('speed', message('speed', first), stamp, stamp)
+    run.step(stamp, ARMED)
+    assert run.gate.active and run.gate.speeds.latest(stamp, stamp)['stamp_ns'] == first
+
+
 def test_ch3_rc_directly_releases_without_braking():
     run = Run()
     run.start()

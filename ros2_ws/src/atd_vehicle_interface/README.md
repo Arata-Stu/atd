@@ -43,6 +43,8 @@ node / executable は `atd_vehicle_interface` / `atd_vehicle_interface_node`、c
 
 低速自動走行では専用の `auto_drive` が制御ポート CDC0 を開き、CH3 の HOST 許可中に同時刻の Pure Pursuit・速度 FF＋PID を実測校正に従って送る。Jetson ホストの `./scripts/bringup.sh autonomous` から使用する。[校正、手動への復帰、追跡喪失時の停止](../../../docs/bringup.md#低速前進の自動走行)
 
+新しい画像時刻の自己位置・操舵・速度指令がそろうたびに、Jetson は CH3 と有効期限を確認して送信する。次の組が届くまでの間も 20 ms 周期で状態を確認し、有効期限内の指令を維持する。Pico Rev6 のサーボ・ESC 用 PWM 出力はカメラと独立した 100 Hz で、安全判定は 1 kHz で行う。
+
 自動走行の `/vehicle/auto_drive/status` は JSON を載せた `std_msgs/msg/String`。`command.stamp_ns` は JPB1 フレーム全体を USB に書き込んだ Jetson 時刻、`pico.stamp_ns` は Pico の状態フレームを受信した Jetson 時刻。両フレームの連番は独立している。`command.steering` と `throttle` は実送信した千分率を正規化した値で、制動時のスロットルは負。指令から換算した `servo_us`・`esc_us` は HOST 解除で null になり、基板の報告値は引き続き `pico` に入る。
 
 `speed` は同じ地図・追跡区間・元観測時刻の目標速度と推定速度 [m/s]。CH3 がプロポ側でも表示でき、追跡喪失や期限切れで null になる。`last_stop` は最後に自動走行を停止または開始を抑止した時刻と理由で、プロポへの切替後も同じノードのセッション内で参照できる。

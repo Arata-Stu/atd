@@ -4,7 +4,7 @@ import math
 import re
 
 from atd_control.core import CONTROLLER, STANDSTILL_MPS
-from .auto_status import DriveSpeeds
+from .auto_status import DriveSpeeds, MAX_PENDING_FRAMES
 
 NS = 1_000_000_000
 MAX_AGE_NS = 250_000_000
@@ -101,9 +101,10 @@ class AutoDriveGate:
             if not -STANDSTILL_MPS <= msg.speed_mps <= self.max_speed:
                 self.invalidate('推定速度が低速前進の許可範囲外です')
                 return
-        if len(rows) >= 8:
+        if len(rows) >= MAX_PENDING_FRAMES:
             rows.pop(min(rows))
         rows[ns] = Observation(msg, steady + ttl - (wall - ns), signature)
+        return all(ns in stream for stream in self.samples.values())
 
     def trip(self, board, reason, wall, steady):
         if self.requested or self.rc_seen:

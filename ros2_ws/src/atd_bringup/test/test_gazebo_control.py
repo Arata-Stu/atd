@@ -77,6 +77,16 @@ def test_clock_trailing_frame_buffers_and_never_drives_on_misaligned_stamps():
     assert c.observe('localization', newer, START + 1) is None
 
 
+def test_delayed_plan_can_match_a_valid_90hz_pose():
+    c = gate()
+    for frame in range(21):
+        now = START + frame * 10**9 // 90
+        loc, _ = inputs(now)
+        assert c.observe('localization', loc, now) is None
+    _, plan = inputs(START)
+    assert c.observe('planning', plan, now)[0] == START
+
+
 @pytest.mark.parametrize('condition', ('loss', 'invalid_plan', 'wrong_map', 'wrong_line', 'new_session',
                                       'invalid_speed', 'invalid_offset', 'rewind'))
 def test_invalid_inputs_latch_stop_until_new_run(condition):

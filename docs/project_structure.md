@@ -206,6 +206,10 @@ Notebook では `ATD_PC_RECORD_DIR` / `ATD_PC_RESULT_DIR`、Jetson では `ATD_J
 setup の storage 操作は記録先・結果先の root を準備する。上記の用途別・ID 別ディレクトリは、その機能を初めて使用する時点で作成する。現段階で空のモデル置場やダミーの管理ファイルは作らず、既存データも自動移動しない。
 新しい bag は `rosbags/<bag_id>/` を保存・SCP 転送の単位とし、`metadata.yaml` と MCAP 等を含む内部構成を保つ。既存 bag のディレクトリ構成をこの整理のために書き換えない。
 
+Notebook の「地図とライン」で地図を選び、「地図を削除」「地図を複製」から範囲を指定する。地図全体の対象は `maps/<map_id>/`。HDMap 編集内容の削除は、境界・Custom 点・走行ライン・採用済みの校正制限・過去の書き出しを取り除く。地図 ID と取得済みの背景点群は再編集に使える。HDMap 編集内容の複製は、境界・走行ライン・校正制限と表示用点群を新しい手動 HDMap に保存する。NVIDIA 保存地図を使って自己位置推定する場合は「地図全体」を複製する。複製の進捗はジョブ一覧で確認できる。
+
+`atd gazebo map` で保存した HDMap のない cuVSLAM 地図は、同画面の「Gazebo 保存地図」から選ぶ。削除・複製は地図フォルダー全体に適用する。
+
 ### NVIDIA 地図と VGL モデル
 
 NVIDIA 公式の地図生成には `maps/<map_id>/nvidia/` を `map_dir` として渡す。公式チュートリアルにある出力例は `cuvslam_map/`、`cuvgl_map/`、`occupancy_map.yaml`、`ground_plane.yaml` であり、ATD 独自の `cuvslam/`・`vgl/` 等へ改名しない。`hdmap/` と `lines/` はその外側に分け、地図 ID で対応付ける。[公式地図作成](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/visual_global_localization/tutorials/tutorial_map_creation.html)

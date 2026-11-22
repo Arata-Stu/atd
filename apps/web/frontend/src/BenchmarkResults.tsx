@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { modeLabel, type Mode, type SimSettings } from './simulation';
 
 export interface Circuit {
@@ -33,7 +34,7 @@ export function BenchmarkResults({ latest, circuits }: { latest: string; circuit
     api<{items: typeof reports; baseline: boolean}>('simulation/benchmarks', undefined, undefined, controller.signal)
       .then(data => {
         setReports(data.items); setHasBaseline(data.baseline);
-        if (latest) setKey(latest);
+        if (latest && data.items.some(item => item.id === latest)) setKey(latest);
         else if (!data.baseline && data.items.length) setKey(data.items[0].id);
       }).catch(e => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
@@ -41,7 +42,7 @@ export function BenchmarkResults({ latest, circuits }: { latest: string; circuit
   useEffect(() => {
     const controller = new AbortController();
     setReport(undefined); setDetail('');
-    if (key !== 'baseline' || hasBaseline) {
+    if (key && (key !== 'baseline' || hasBaseline)) {
       setError('');
       api<Report>('simulation/benchmarks/' + key, undefined, undefined, controller.signal)
         .then(data => { if (!controller.signal.aborted) setReport(data); })
@@ -74,7 +75,13 @@ export function BenchmarkResults({ latest, circuits }: { latest: string; circuit
   </div>
     <div className="bench-actions"><label className="bench-report-picker">評価履歴<select aria-label="評価履歴" value={key} onChange={e => setKey(e.target.value)}>{options}</select></label>
       {reports.length > 0 && <label className="bench-report-picker">差分の比較元<select aria-label="差分の比較元" value={referenceKey} onChange={e => setReferenceKey(e.target.value)}>
-        <option value="">差分なし</option>{options}</select></label>}</div>
+        <option value="">差分なし</option>{options}</select></label>}
+      {reports.some(item => item.id === key) && <DeleteAnalysisButton key={key} path={'analysis-results/benchmark/' + encodeURIComponent(key)}
+        detail={`ベンチマーク「${key}」の全コース・全試行の結果を削除しますか？`} onDeleted={() => {
+          const remaining = reports.filter(item => item.id !== key);
+          setReports(remaining); setKey(hasBaseline ? 'baseline' : remaining[0]?.id ?? '');
+          if (referenceKey === key) setReferenceKey('');
+        }}/>}</div>
     {error && <p role="alert" className="sim-error">{error}</p>}
     {report && <>
       <p className="sim-note">{report.courses.length} コース · {report.options.source === 'sample' ? '同梱 HDMap' : '編集用 HDMap'} · {report.options.line} · 各方式 {report.options.trials} 試行 × {report.options.laps} 周</p>

@@ -149,6 +149,8 @@
 .transfer-error { color: #9a362f; font-size: 12px; }
 
 .vgl-library-button { margin-top: 8px; }
+.button.danger:not(:disabled) { color: #91382d; border-color: #c6a099; }
+.button.danger:not(:disabled):hover { background: #fcf1ef; border-color: #ac685d; }
 .vgl-export-list { list-style: none; margin: 0; padding: 0; }
 .vgl-export-list li { border-bottom: 1px solid var(--line); padding: 10px 0; overflow-wrap: anywhere; }
 .vgl-export-list strong { display: block; font-size: 13px; }

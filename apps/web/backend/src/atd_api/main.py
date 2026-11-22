@@ -1,6 +1,7 @@
 """Notebook の loopback API とビルド済み Web UI。"""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import math
 import os
 from pathlib import Path
@@ -48,6 +49,10 @@ class Connection(Strict):
 
 class TransferRequest(Strict):
     expected_connection: Connection | None = None
+
+
+class DeleteJobHistory(Strict):
+    ids: list[str] = Field(min_length=1)
 
 
 class Relative(TransferRequest):
@@ -172,8 +177,10 @@ def create_app(record_root=None, result_root=None, static_dir=None):
 
     @app.post('/api/calibration/runs')
     def start_calibration(body: CalibrationRun):
-        payload = calibration.payload(store, body.model_dump(exclude_none=True))
-        return jobs.start('calibration', payload, calibration.resources(payload), '車両校正: ' + payload['bag'])
+        lock = store.lock('analysis:calibration:' + body.reference_run) if body.reference_run else nullcontext()
+        with lock:
+            payload = calibration.payload(store, body.model_dump(exclude_none=True))
+            return jobs.start('calibration', payload, calibration.resources(payload), '車両校正: ' + payload['bag'])
 
     @app.get('/api/calibration/runs/{run_id}/candidates')
     def calibration_candidates(run_id: str):
@@ -194,11 +201,15 @@ def create_app(record_root=None, result_root=None, static_dir=None):
 
     @app.get('/api/maps')
     def maps():
-        return dict(items=store.list_maps())
+        from .map_library import gazebo_maps
+        with store.lock('maps'):
+            return dict(items=store.list_maps(), gazebo_maps=gazebo_maps(store))
 
     @app.post('/api/maps')
     def create_map(body: CreateMap):
-        return store.create_map(body.id, body.title)
+        with jobs.registry():
+            jobs.require_available(['map:' + body.id])
+            return store.create_map(body.id, body.title)
 
     @app.post('/api/maps/build')
     def build(body: Build):
@@ -340,17 +351,28 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     def job_list():
         return dict(items=jobs.list())
 
+    @app.get('/api/jobs/history')
+    def job_history():
+        return jobs.history()
+
+    @app.post('/api/jobs/history/delete')
+    def delete_job_history(body: DeleteJobHistory):
+        return jobs.delete_history(body.ids)
+
     @app.get('/api/jobs/{key}')
     def job_get(key: str):
-        return jobs.get(key)
+        with jobs.registry():
+            return jobs.get(key)
 
     @app.get('/api/jobs/{key}/log')
     def job_log(key: str, offset: int = 0, tail: bool = False, before: int | None = None):
-        return jobs.log(key, offset, tail=tail, before=before)
+        with jobs.registry():
+            return jobs.log(key, offset, tail=tail, before=before)
 
     @app.post('/api/jobs/{key}/cancel')
     def job_cancel(key: str):
-        return jobs.cancel(key)
+        with jobs.registry():
+            return jobs.cancel(key)
 
     from .localization_validation import router as validation_router
     from .localization_results import router as validation_results_router
@@ -367,6 +389,10 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     app.include_router(manual_drive_replay_router, prefix='/api')
     from .replay_results import router as replay_results_router
     app.include_router(replay_results_router, prefix='/api')
+    from .analysis_results import router as analysis_results_router
+    app.include_router(analysis_results_router, prefix='/api')
+    from .map_library import router as map_library_router
+    app.include_router(map_library_router, prefix='/api')
     from .live_input import router
     app.include_router(router, prefix='/api')
     static = Path(static_dir or os.environ.get('ATD_WEB_STATIC_DIR', Path(__file__).resolve().parents[3] / 'frontend/dist'))

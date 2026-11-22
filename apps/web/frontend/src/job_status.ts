@@ -4,3 +4,13 @@ export const STATUS: Record<string, string> = {
   succeeded: '完了', completed: '完了', failed: '失敗', cancelled: '中止', canceled: '中止',
   interrupted: '中断', orphaned: '要確認',
 };
+
+export function historyBoundary(date: string, time: string, end: boolean) {
+  if (!date) return end ? Infinity : -Infinity;
+  const local = new Date(date + 'T' + (time || '00:00'));
+  if (end) {
+    if (time) local.setTime(local.getTime() + 60000);
+    else local.setDate(local.getDate() + 1);
+  }
+  return local.getTime() / 1000;
+}

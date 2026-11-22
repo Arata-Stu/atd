@@ -147,7 +147,10 @@ def prepare(store, body):
 def start(body: Batch, request: Request):
     store = request.app.state.store
     payload = prepare(store, body)
-    return request.app.state.jobs.start('simulation_benchmark', payload, ['simulation-benchmark'],
+    resources = ['simulation-benchmark']
+    if body.source == 'workspace':
+        resources.extend('map:' + working_id(key) for key in body.course_ids)
+    return request.app.state.jobs.start('simulation_benchmark', payload, resources,
                                         f'走行ベンチマーク（{len(body.course_ids)} コース）')
 
 

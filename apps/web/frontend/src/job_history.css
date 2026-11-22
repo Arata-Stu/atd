@@ -1,0 +1,10 @@
+.job-history-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; margin: 16px 0; padding: 12px; border: 1px solid var(--line); }
+.job-history-range legend, .job-history-count { font-size: 12px; }
+.job-history-range .field { margin: 0; }
+.job-history-count { margin: 16px 0 8px; }
+.job-history-list { max-height: min(32vh, 320px); overflow-y: auto; }
+.job-history-entry { display: flex; align-items: center; gap: 10px; padding: 8px 3px; border-bottom: 1px solid var(--line); }
+.job-history-entry input { flex: none; width: 16px; height: 16px; }
+.job-history-entry strong, .job-history-entry small { display: block; overflow-wrap: anywhere; }
+.job-history-entry strong { font-size: 12px; font-weight: 500; }
+.job-history-entry small { margin-top: 3px; font-size: 10px; color: #57685b; }

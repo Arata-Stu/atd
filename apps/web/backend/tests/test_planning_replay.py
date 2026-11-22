@@ -323,3 +323,35 @@ def test_speed_recorded_manual_inputs_gaps_cache_and_source_changes(history, has
     rejected = at(.2)
     assert not rejected['valid'] and rejected['estimated_speed_mps'] is None
     assert rejected['calculated_raw'] is None and rejected['propo_raw'] is None and rejected['joy_throttle'] is None
+
+
+def test_remove_only_selected_analysis_or_entire_validation(history):
+    from atd_api import speed_replay
+    api, store, folder, _ = history
+    choice = speed_settings(store)
+    speed_url = URL.replace('planning', 'speed')
+    for line in ('raceline', 'centerline'):
+        assert build(api, line)['ready']
+    job = api.post(speed_url, json=choice).json()
+    api.app.state.jobs.children[job['job_id']].wait(timeout=10)
+    speed = speed_replay.source(store, 'drive', speed_replay.Comparison(**choice))
+    assert speed.index.is_relative_to(folder) and speed.index.is_file()
+    wrong_id = '0'*64
+    assert api.delete(speed_url, params=dict(choice, index_id=wrong_id)).status_code == 400 and speed.index.exists()
+    assert api.delete(speed_url, params=dict(choice, index_id=speed.index.stem)).is_success
+    assert not speed.index.exists() and api.get(URL, params={'line': 'raceline'}).json()['ready']
+    plan = replay.source(store, 'drive', 'raceline')
+    assert api.delete(URL, params=dict(line='raceline', index_id=wrong_id)).status_code == 400 and plan.index.exists()
+    assert api.delete(URL, params=dict(line='raceline', index_id=plan.index.stem)).is_success
+    assert not api.get(URL, params={'line':'raceline'}).json()['ready']
+
+    # An old worker put the selected result in the shared index directory.
+    src = replay.source(store, 'drive', 'centerline')
+    legacy = store.state_root / 'planning' / src.index.name
+    legacy.parent.mkdir(exist_ok=True)
+    src.index.rename(legacy)
+    assert api.get(URL, params={'line':'centerline'}).json()['ready']
+    assert api.delete('/api/analysis-results/localization/drive').is_success
+    assert not folder.exists() and not legacy.exists() and store.folder('course').is_dir()
+    assert api.get('/api/localization/runs').json()['items'] == []
+    assert api.get('/api/speed/tables').json()['items'][0]['proposal_sha256'] == choice['table_sha256']

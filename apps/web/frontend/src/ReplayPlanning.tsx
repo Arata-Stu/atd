@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { ACTIVE, STATUS } from './job_status';
 import { LINE_CHOICES, LINE_NAMES, planPose, usablePlan } from './planning_view';
 import { ControlReadout, ReplayControlConfig } from './ControlReadout';
@@ -12,7 +13,7 @@ import { ReplaySpeed, useReplaySpeed } from './ReplaySpeed';
 import type { SpeedSettings } from './ReplaySpeed';
 
 interface ReplayMeta {
-  id: string; line: LineKind; ready: boolean; duration_s: number; pose_samples: number;
+  id: string; line: LineKind; index_id: string; ready: boolean; duration_s: number; pose_samples: number;
   valid_samples: number | null; job_id: string | null; control_config?: ControlConfig;
 }
 interface FrameReply extends Omit<PlanFrame, 'vehicle_pose'> {
@@ -109,6 +110,10 @@ export function ReplayPlanControls({line, lines, choose, time, seek, selection, 
       </select>
       {!ready && <button className="button primary small" disabled={!!issue || plan.loading || !meta || plan.submitting || running}
         onClick={() => void plan.calculate()}>{plan.submitting ? '受付中…' : running ? '計算中…' : '前方軌道を計算'}</button>}
+      {ready && <DeleteAnalysisButton key={plan.id + line} label="前方軌道を削除"
+        path={'localization/runs/' + encodeURIComponent(plan.id) + '/planning?line=' + line + '&index_id=' + meta!.index_id}
+        detail={`自己位置検証「${plan.id}」の ${LINE_NAMES[line]} の前方軌道を削除しますか？`}
+        onDeleted={() => { setPlaying(false); plan.refresh(); }}/>}
       {job && <button className="button small" onClick={() => onLog(job.id)}>{STATUS[job.status] || job.status} · ログ</button>}
       {job && ACTIVE.has(job.status) && <button className="button small" disabled={plan.cancelling || job.cancel_requested}
         onClick={() => void plan.cancel()}>計算を中止</button>}

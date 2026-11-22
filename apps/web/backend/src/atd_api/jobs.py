@@ -13,11 +13,12 @@ import threading
 import time
 import uuid
 
-from .store import atomic_json, read_json, identifier
+from .store import atomic_json, confined, read_json, identifier
 
 ACTIVE = {'starting', 'running', 'queued'}
+FINISHED = {'succeeded', 'completed', 'failed', 'cancelled', 'canceled', 'interrupted'}
 LOG_PAGE_BYTES = 256 * 1024
-ACTIONS = {'generate', 'map_build', 'vgl', 'capture', 'pull', 'push', 'calibration', 'localization_validation',
+ACTIONS = {'generate', 'map_build', 'map_duplicate', 'vgl', 'capture', 'pull', 'push', 'calibration', 'localization_validation',
            'planning_replay', 'speed_replay', 'manual_drive_replay', 'manual_drive_vo', 'simulation_benchmark'}
 
 
@@ -54,7 +55,7 @@ def leased(path):
 class Jobs:
     def __init__(self, store):
         self.store = store
-        self.root = store.state_root / 'jobs'
+        self.root = confined(store.state_root, 'jobs', exists=False)
         self.root.mkdir(parents=True, exist_ok=True)
         self.children = {}
 
@@ -90,15 +91,50 @@ class Jobs:
         state['cancel_requested'] = (self.root / (key + '.cancel')).exists()
         return state
 
-    def list(self):
+    def _states(self):
         for key, child in list(self.children.items()):
             if child.poll() is not None:
                 self.children.pop(key)
-        states = [self.get(p.stem) for p in self.root.glob('*.json') if not p.name.endswith('.request.json')]
-        return sorted(states, key=lambda item: item['started'], reverse=True)[:200]
+        return [self.get(p.stem) for p in self.root.glob('*.json')
+                if not p.name.endswith('.request.json') and not p.is_symlink()]
+
+    def list(self):
+        with self.registry():
+            return sorted(self._states(), key=lambda item: item['started'], reverse=True)[:200]
+
+    def history(self):
+        with self.registry():
+            states = self._states()
+            items = [dict(id=s['id'], title=s.get('title') or s['id'], status=s['status'], started=s['started'])
+                     for s in states if s['status'] in FINISHED]
+        return dict(items=sorted(items, key=lambda item: item['started'], reverse=True),
+                    protected=len(states) - len(items))
+
+    def delete_history(self, keys):
+        # 削除対象は画面で確認したスナップショットの ID に限定する。
+        confined(self.store.result_root, self.root.relative_to(self.store.result_root))
+        with self.registry():
+            targets = []
+            for key in dict.fromkeys(keys):
+                identifier(key)
+                path = confined(self.root, key + '.json', exists=False)
+                if not path.exists():
+                    continue  # 別の画面ですでに削除された履歴
+                state = read_json(path)
+                if state.get('id') != key or state.get('status') not in FINISHED:
+                    raise ValueError('終了を確認できたジョブだけ削除できます: ' + key)
+                lease = confined(self.root, key + '.lease', exists=False)
+                if lease.exists() and leased(lease):
+                    raise ValueError('worker が終了処理中です: ' + key)
+                targets.append(key)
+            for key in targets:
+                # 結果ディレクトリとジョブ履歴は独立。状態ファイルを最後に消す。
+                for suffix in ('.log', '.cancel', '.lease', '.request.json', '.json'):
+                    (self.root / (key + suffix)).unlink(missing_ok=True)
+        return dict(deleted=len(targets))
 
     def require_available(self, resources):
-        for state in self.list():
+        for state in self._states():
             if state['status'] in ACTIVE | {'orphaned'} and set(resources) & set(state['resources']):
                 raise ValueError('対象はジョブで使用中です: ' + state['title'])
 

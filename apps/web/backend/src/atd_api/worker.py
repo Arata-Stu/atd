@@ -12,6 +12,9 @@ from .store import Store, read_json
 
 
 def execute(store, task, action, payload):
+    if action == 'map_duplicate':
+        from .map_library import duplicate_map
+        return duplicate_map(store, task, payload)
     if action == 'simulation_benchmark':
         from .simulation_benchmark import execute as benchmark
         return benchmark(store, task, payload)

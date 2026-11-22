@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, bytes } from './api';
+import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { CalibrationCandidates } from './CalibrationCandidates';
 import { bagFromHash, calibrationHash, displayedRun, referenceCandidates, requestedPoseFrame, topExclusions, validPoseFrame, wheelbaseMetres } from './calibration';
 import type { CalibrationOptions, CalibrationRun } from './calibration';
@@ -176,6 +177,10 @@ export function CalibrationWorkspace({ jobs, onTransfer, onLog, onOpenMap }: {
       <div className="calibration-card-body">{runs.length > 0 && <Field label="保存済みの解析"><select value={run?.id ?? ''} onChange={e => setSelectedRun(e.target.value)}>
           {!run && <option value="">履歴から選択してください</option>}
           {runs.map(item => <option key={item.id} value={item.id}>{item.id} · {item.bag}</option>)}</select></Field>}
+        {run && <DeleteAnalysisButton key={run.id} path={'analysis-results/calibration/' + encodeURIComponent(run.id)}
+          detail={`車両校正「${run.bag}」（${run.id}）の応答図・時系列・集計を削除しますか？`}
+          onDeleted={() => { setSelectedRun(''); if (reference === run.id) setReference('');
+            setOptions(data => data && ({...data, runs: data.runs.filter(item => item.id !== run.id)})); setRevision(n => n + 1); }}/>}
         {run ? <Result key={run.id} run={run} onOpenMap={onOpenMap}/> : <p className="small-note">{optionsError ? '結果一覧を取得できません。「一覧を更新」から再試行してください。' : !options ? '結果一覧を取得中…' : bag ? '選択した bag の解析結果はまだありません。' : '保存済みの解析結果はありません。'}</p>}</div>
     </section>
   </div>;

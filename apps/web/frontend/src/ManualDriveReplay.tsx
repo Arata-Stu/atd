@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, bytes } from './api';
 import { DriveTimeline } from './DriveTimeline';
+import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { ACTIVE, STATUS } from './job_status';
 import { adjacentChanges, STOP_BAND_MPS, windowAt, type DirectionChange, type DriveReplay,
   type DriveWindow, type RecordedDirection } from './manual_replay';
@@ -103,6 +104,11 @@ function ReplayBag({bag, jobs, onLog}: {bag: string} & JobProps) {
         {(meta.can_generate_vo || voRunning) && <button className="button small" disabled={voRunning || startingVo}
           onClick={() => void generateVo()}>{startingVo ? '受付中…' : voRunning ? 'VSLAM 速度を生成中…' : 'ステレオから VSLAM 速度を生成'}</button>}
         <button className="button small" onClick={() => setRefresh(n => n+1)}>出典を更新</button>
+        <DeleteAnalysisButton path={endpoint} body={{bag, index_id: meta.index_id}} label="抽出した時系列を削除"
+          detail={`「${bag}」から抽出した操作・PWM・IMU の時系列を削除します。元の rosbag から再度読み出せます。`}
+          disabled={running || voRunning || submitting || startingVo} onDeleted={() => {
+            requestedVo.current = null; chooseSpeed(null); setMeta(null); setRefresh(n => n + 1);
+          }}/>
         {voJob && <button className="button small" onClick={() => onLog(voJob.id)}>{STATUS[voJob.status] || voJob.status} · ログ</button>}
       </div>
       {!source && meta.speed_reason && <p className="drive-note">{meta.speed_reason}</p>}

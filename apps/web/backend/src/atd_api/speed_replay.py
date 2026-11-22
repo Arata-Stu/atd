@@ -31,6 +31,10 @@ class Comparison(BaseModel):
     kd: GAIN | None = None
 
 
+class Removal(Comparison):
+    index_id: str = Field(pattern=HASH)
+
+
 class Seek(Comparison):
     time_s: float = Field(ge=0, allow_inf_nan=False)
 
@@ -100,12 +104,12 @@ def source(store, run_id, choice):
     key = _key([_algorithms(), plan.index.stem, doc, asdict(config), fingerprint, issue])
     return Source(plan, _speed().FeedforwardTable.from_document(doc), config, bag,
                   directory / ('inputs-' + fingerprint + '.sqlite') if fingerprint else None,
-                  issue, directory / (key + '.sqlite'))
+                  issue, planning.result_index(store, plan.folder, 'speed', key + '.sqlite'))
 
 
 def _status(src, jobs):
     ready = src.index.is_file()
-    result = dict(id=src.plan.run_id, line=src.plan.line, duration_s=src.plan.duration,
+    result = dict(id=src.plan.run_id, line=src.plan.line, index_id=src.index.stem, duration_s=src.plan.duration,
                   table_sha256=src.table.proposal_sha256, table_run_id=src.table.run_id,
                   config=asdict(src.config), ready=ready, planning_ready=src.plan.index.is_file(),
                   propo_reason=src.input_reason, joy_reason=src.input_reason, job_id=None)
@@ -124,24 +128,37 @@ def status(request: Request, run_id: str, choice: Annotated[Comparison, Query()]
     return _status(source(request.app.state.store, run_id, choice), request.app.state.jobs)
 
 
+@router.delete('/localization/runs/{run_id}/speed')
+def remove(request: Request, run_id: str, choice: Annotated[Removal, Query()]):
+    store, jobs = request.app.state.store, request.app.state.jobs
+    with store.lock('analysis:localization:' + run_id), jobs.registry():
+        src = source(store, run_id, choice)
+        if src.index.stem != choice.index_id:
+            raise ValueError('速度比較の元データが変わりました。結果を再読み込みしてください。')
+        jobs.require_available([src.resource])
+        src.index.unlink(missing_ok=True)
+    return dict(deleted=run_id, line=choice.line)
+
+
 @router.post('/localization/runs/{run_id}/speed')
 def start(request: Request, run_id: str, choice: Comparison):
     store, jobs = request.app.state.store, request.app.state.jobs
-    src = source(store, run_id, choice)
-    if not src.plan.index.is_file():
-        raise ValueError('先にこの走行・ラインの前方軌道を計算してください')
-    with store.lock(src.resource):
+    with store.lock('analysis:localization:' + run_id):
+        src = source(store, run_id, choice)
+        if not src.plan.index.is_file():
+            raise ValueError('先にこの走行・ラインの前方軌道を計算してください')
         result = _status(src, jobs)
         if result['ready'] or (result['job_id'] and jobs.get(result['job_id'])['status'] in ACTIVE | {'orphaned'}):
             return result
         job = jobs.start('speed_replay', dict(run_id=run_id, selection=choice.model_dump(), resource=src.resource),
-                         [src.resource], f'速度制御の比較: {src.plan.report["bag"]} / {choice.line}')
+                         src.plan.job_resources(src.resource), f'速度制御の比較: {src.plan.report["bag"]} / {choice.line}')
         return dict(result, job_id=job['id'])
 
 
 def _extract(store, task, src, working):
     if src.input_index is None:
         return
+    src.input_index.parent.mkdir(parents=True, exist_ok=True)
     with store.lock(src.input_index):
         if src.input_index.exists():
             return

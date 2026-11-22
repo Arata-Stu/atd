@@ -3,6 +3,7 @@ from contextlib import closing
 from collections import Counter
 from pathlib import Path
 import sqlite3
+import time
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ import pytest
 
 from atd_api import manual_drive_replay as replay
 from atd_api.main import create_app
+from atd_api.store import atomic_json
 from atd_api.worker import execute
 
 URL = '/api/manual-drive/replay'
@@ -50,6 +52,33 @@ def extract(store, timeline, topics, messages, duration=2, stereo=False):
 
     execute(store, SimpleNamespace(run=run, check=lambda: None), 'manual_drive_replay',
             dict(bag=BAG, resource=src.resource))
+
+
+def test_delete_extracted_timeline_preserves_bag_and_checks_active_vo(history):
+    api, store, timeline = history
+    extract(store, timeline, {}, [])
+    src = replay.recording(store, BAG)
+    other_index = src.index.with_name('other.sqlite')
+    other_index.write_bytes(b'other recording')
+    state = dict(id='active-vo', started=time.time(), title='VO', status='running',
+                 resources=[replay._vo_resource(src)])
+    job_path = api.app.state.jobs.root / 'active-vo.json'
+    atomic_json(job_path, state)
+
+    def delete(bag, index_id=src.index.stem):
+        return api.request('DELETE', URL, json={'bag': bag, 'index_id': index_id})
+
+    assert delete('../outside').status_code == 400
+    assert delete(BAG).status_code == 400
+    assert src.index.is_file()
+    atomic_json(job_path, dict(state, status='succeeded'))
+    assert delete(BAG, '0' * 64).status_code == 400
+    assert src.index.is_file()
+    assert delete(BAG).json() == {'bag': BAG}
+    assert api.get(URL, params={'bag': BAG}).json()['ready'] is False
+    assert (src.directory / 'metadata.yaml').is_file()
+    assert other_index.is_file()
+    assert delete(BAG).status_code == 400
 
 
 def test_common_clock_handoff_gaps_seek_and_changed_bag(history):

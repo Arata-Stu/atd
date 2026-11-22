@@ -1,6 +1,6 @@
 """保存した別 bag の全観測を Jetson と共通の planner へ時刻順に入力する。"""
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import lru_cache
 import hashlib
 from importlib import import_module
@@ -68,6 +68,12 @@ class Source:
     def resource(self):
         return 'planning-replay:' + self.index.stem
 
+    def job_resources(self, resource):
+        resources = [resource]
+        if not confined(self.folder, 'hdmap.json', exists=False).is_file():
+            resources.append('map:' + self.report['map_id'])
+        return resources
+
     @property
     def duration(self):
         return (self.end - self.start) / 1e9
@@ -89,7 +95,13 @@ def source(store, run_id, line):
         map_dir = store.folder(report['map_id'])
         files.extend([confined(map_dir, 'hdmap/map.json'), confined(map_dir, 'vgl.json')])
     signature = (report_stat, *(_signature(path) for path in files))
-    return _reference(store, run_id, line, signature)
+    src = _reference(store, run_id, line, signature)
+    return replace(src, index=result_index(store, folder, 'planning', src.index.name))
+
+
+def result_index(store, folder, kind, filename):
+    legacy = confined(store.state_root, Path(kind) / filename, exists=False)
+    return legacy if legacy.is_file() else confined(folder, Path('derived') / kind / filename, exists=False)
 
 
 @lru_cache(maxsize=8)
@@ -110,7 +122,7 @@ def _reference(store, run_id, line, signature):
     reference = _core().ReferenceLine.from_document(document, line)
     # 元ファイルまたは計算実装の変更時は以前の派生結果を再利用しない。
     key = hashlib.sha256(json.dumps([1, _algorithm(), run_id, line, signature]).encode()).hexdigest()
-    index = confined(store.state_root, Path('planning') / (key + '.sqlite'), exists=False)
+    index = Path(key + '.sqlite')
     return Source(run_id, line, folder, report, start, end, reference, index)
 
 
@@ -119,7 +131,7 @@ def _open_index(path):
 
 
 def _info(src, jobs):
-    summary = dict(id=src.run_id, line=src.line, ready=src.index.is_file(), duration_s=src.duration,
+    summary = dict(id=src.run_id, line=src.line, index_id=src.index.stem, ready=src.index.is_file(), duration_s=src.duration,
                    pose_samples=src.report['pose_samples'], valid_samples=None, job_id=None,
                    control_config=dict(asdict(_core('atd_control').LookaheadConfig()), wheelbase_m=None))
     if summary['ready']:
@@ -137,16 +149,29 @@ def status(request: Request, run_id: str, line: Line):
     return _info(source(request.app.state.store, run_id, line), request.app.state.jobs)
 
 
+@router.delete('/localization/runs/{run_id}/planning')
+def remove(request: Request, run_id: str, line: Line, index_id: str = Query(pattern='^[0-9a-f]{64}$')):
+    from .analysis_results import require_idle
+    store, jobs = request.app.state.store, request.app.state.jobs
+    with store.lock('analysis:localization:' + run_id), jobs.registry():
+        src = source(store, run_id, line)
+        if src.index.stem != index_id:
+            raise ValueError('前方軌道の元データが変わりました。結果を再読み込みしてください。')
+        require_idle(jobs._states(), jobs, 'localization', run_id, line)
+        src.index.unlink(missing_ok=True)
+    return dict(deleted=run_id, line=line)
+
+
 @router.post('/localization/runs/{run_id}/planning')
 def start(request: Request, run_id: str, selection: Selection):
     store, jobs = request.app.state.store, request.app.state.jobs
-    src = source(store, run_id, selection.line)
-    with store.lock(src.resource):
+    with store.lock('analysis:localization:' + run_id):
+        src = source(store, run_id, selection.line)
         info = _info(src, jobs)
         if info['ready'] or (info['job_id'] and jobs.get(info['job_id'])['status'] in ACTIVE | {'orphaned'}):
             return info
         job = jobs.start('planning_replay', dict(run_id=run_id, line=src.line, resource=src.resource),
-                         [src.resource], f'前方軌道の検証: {src.report["bag"]} / {src.line}')
+                         src.job_resources(src.resource), f'前方軌道の検証: {src.report["bag"]} / {src.line}')
         return dict(info, job_id=job['id'])
 
 

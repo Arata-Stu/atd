@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from './api';
+import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { CourseMap, ErrorChart, metrics } from './ReplayErrorPlots';
 import { errorAt, nearest, recordedLaps, selectWindow } from './replay_errors';
 import type { ReplayDetail, ReplayRun } from './replay_errors';
@@ -124,7 +125,12 @@ export default function ReplayErrorsWorkspace() {
         {trackingLabel(item)} · {mapLimitLabel(item.slam_max_map_size)} · {item.bag} · {dateLabel(item.created_at)} · {statusLabel(item.status)}
       </option>)}
     </select>
-  </Field></div>;
+  </Field>
+    {selected && <DeleteAnalysisButton key={selected.id} path={'analysis-results/replay/' + encodeURIComponent(selected.id)}
+      disabled={selected.status === 'running'}
+      detail={`VSLAM 評価「${selected.bag}」の ${trackingLabel(selected)}（${dateLabel(selected.created_at)}）を削除しますか？\n実行 ID　${selected.id}\n保存した軌跡と誤差を削除します。`}
+      onDeleted={() => { setRuns(list => list?.filter(run => run.id !== selected.id) ?? null); setReload(n => n + 1); }}/>
+    }</div>;
   return <div className="content-page replay-errors-page">
     <div className="page-intro"><div><h2>VSLAM 軌跡誤差</h2><p>初期姿勢を合わせた Gazebo と cuVSLAM の車体位置・向きを、同じ画像時刻で比較します。</p></div>
       <button className="button" onClick={() => setReload(n => n+1)}><Icon name="refresh" size={16}/>更新</button></div>

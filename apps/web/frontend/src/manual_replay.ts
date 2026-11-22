@@ -15,6 +15,7 @@ export interface DriveWindow extends Span {
   speed_source: string | null; speed_issue: string; speed: VelocitySpan[]; imu: AccelSpan[]; propo: PropoSpan[];
 }
 export interface DriveReplay {
+  index_id: string;
   bag: string; ready: boolean; duration_s: number | null; max_window_s: number; job_id: string | null; warnings: string[];
   speed_sources: {id: string; label: string}[]; default_speed_source: string | null;
   speed_reason: string; imu_reason: string; can_generate_vo: boolean; vo_job_id: string | null; vo_reason: string;

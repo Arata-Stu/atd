@@ -60,8 +60,8 @@ class Store:
     def __init__(self, record_root, result_root):
         self.record_root = Path(record_root).resolve()
         self.result_root = Path(result_root).resolve()
-        self.maps_root = self.result_root / 'maps'
-        self.state_root = self.result_root / 'runs/web'
+        self.maps_root = confined(self.result_root, 'maps', exists=False)
+        self.state_root = confined(self.result_root, 'runs/web', exists=False)
         for directory in (self.record_root, self.maps_root, self.state_root):
             directory.mkdir(parents=True, exist_ok=True)
 

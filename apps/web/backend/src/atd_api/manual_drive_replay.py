@@ -32,6 +32,10 @@ class Selection(BaseModel):
     bag: str = Field(min_length=1)
 
 
+class TimelineRemoval(Selection):
+    index_id: str = Field(pattern='^[0-9a-f]{64}$')
+
+
 @lru_cache(maxsize=1)
 def _extractor_version():
     packages = Path(__file__).resolve().parents[5] / 'ros2_ws/src'
@@ -95,7 +99,7 @@ def _summary(db):
 
 
 def _status(src, jobs):
-    result = dict(bag=src.bag, ready=src.index.is_file(), duration_s=None, max_window_s=MAX_WINDOW_S,
+    result = dict(bag=src.bag, index_id=src.index.stem, ready=src.index.is_file(), duration_s=None, max_window_s=MAX_WINDOW_S,
                   warnings=[], job_id=None, vo_job_id=None, can_generate_vo=False, vo_reason='', imu_reason='',
                   speed_reason='', default_speed_source=None, speed_sources=[])
     history = jobs.list()
@@ -141,6 +145,21 @@ def _status(src, jobs):
 @router.get('')
 def status(request: Request, bag: str):
     return _status(recording(request.app.state.store, bag), request.app.state.jobs)
+
+
+@router.delete('')
+def delete_timeline(request: Request, choice: TimelineRemoval):
+    store, jobs = request.app.state.store, request.app.state.jobs
+    src = recording(store, choice.bag)
+    # 同じ走行から時系列を準備する処理・その時系列を読む VO ジョブと直列化する。
+    with store.lock(src.resource), store.lock(_vo_resource(src)), jobs.registry():
+        jobs.require_available([src.resource, _vo_resource(src)])
+        if src.index.stem != choice.index_id:
+            raise ValueError('選択後に走行データが更新されました。時系列を再読み込みしてください')
+        if not src.index.is_file():
+            raise ValueError('選択した走行に抽出済みの時系列がありません')
+        src.index.unlink()
+    return dict(bag=src.bag)
 
 
 @router.post('')

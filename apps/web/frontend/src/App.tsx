@@ -16,6 +16,7 @@ import { InputWorkspace } from './InputWorkspace';
 import { VehicleWorkspace } from './VehicleWorkspace';
 
 const ReplayErrorsWorkspace = lazy(() => import('./ReplayErrorsWorkspace'));
+const JobHistory = lazy(() => import('./JobHistory'));
 
 type Page = 'map' | 'transfer' | 'live' | 'input' | 'vehicle' | 'calibration' | 'localization' | 'esc' | 'simulation' | 'replay';
 const PAGES: { id: Page; icon: string; title: string; subtitle: string }[] = [
@@ -35,6 +36,7 @@ export function App() {
   const [capture, setCapture] = useState(() =>
     new URLSearchParams(window.location.hash.split('?')[1]).get('view') === 'capture');
   const [jobs, setJobs] = useState<Job[]>([]), [drawer, setDrawer] = useState(false), [jobId, setJobId] = useState('');
+  const [manageHistory, setManageHistory] = useState(false);
   const dirty = useRef(false);
   const notify = useCallback((message: string, error = false) => setNotice({ message, error }), []);
   const onDirty = useCallback((value: boolean) => { dirty.current = value; }, []);
@@ -92,12 +94,20 @@ export function App() {
     </main>
     {notice && <div className={'toast ' + (notice.error ? 'error' : '')} role={notice.error ? 'alert' : 'status'}><Icon name={notice.error ? 'info' : 'check'} size={19}/><span>{notice.message}</span><button className="icon-button" aria-label="通知を閉じる" onClick={() => setNotice(null)}><Icon name="close" size={16}/></button></div>}
     <button className={'jobs-trigger ' + (active.length ? 'running' : '')} onClick={() => setDrawer(!drawer)} aria-expanded={drawer}><Icon name="list" size={18}/><span>ジョブ</span><b>{active.length || jobs.length}</b><Icon name={drawer ? 'close' : 'chevron'} size={15}/></button>
-    {drawer && <section className="jobs-drawer" aria-label="ジョブとログ"><header><div><span className="eyebrow">ACTIVITY</span><h3>ジョブとログ</h3></div><button className="icon-button" aria-label="ジョブを閉じる" onClick={() => setDrawer(false)}><Icon name="close"/></button></header><div className="jobs-layout"><div className="jobs-list">{jobs.map(job => <button key={job.id} className={jobId === job.id ? 'selected' : ''} onClick={() => setJobId(job.id)}><span className={'job-state ' + job.status}>{job.cancel_requested && ACTIVE.has(job.status) ? '停止要求中' : STATUS[job.status] || job.status}</span><strong>{job.title || job.kind || job.id}</strong><small>{job.message || job.id}</small></button>)}{!jobs.length && <p className="panel-empty">実行した処理はここに表示されます。</p>}</div><JobLog key={jobId} jobId={jobId} title={selectedJob?.title || '実行ログ'}>
+    {drawer && <section className="jobs-drawer" aria-label="ジョブとログ"><header><div><span className="eyebrow">ACTIVITY</span><h3>ジョブとログ</h3></div><div className="button-row"><button className="button small" onClick={() => setManageHistory(true)}>履歴を整理</button><button className="icon-button" aria-label="ジョブを閉じる" onClick={() => setDrawer(false)}><Icon name="close"/></button></div></header><div className="jobs-layout"><div className="jobs-list">{jobs.map(job => <button key={job.id} className={jobId === job.id ? 'selected' : ''} onClick={() => setJobId(job.id)}><span className={'job-state ' + job.status}>{job.cancel_requested && ACTIVE.has(job.status) ? '停止要求中' : STATUS[job.status] || job.status}</span><strong>{job.title || job.kind || job.id}</strong><small>{job.message || job.id}</small></button>)}{!jobs.length && <p className="panel-empty">実行した処理はここに表示されます。</p>}</div><JobLog key={jobId} jobId={jobId} title={selectedJob?.title || '実行ログ'}>
         {received && page !== 'calibration' && <button className="button small" onClick={() => navigate('calibration', received)}>この bag を車両校正へ</button>}
         {selectedJob && ACTIVE.has(selectedJob.status) && <button className="button small" disabled={!!selectedJob.cancel_requested} onClick={async () => {
           try { await api(`jobs/${encodeURIComponent(jobId)}/cancel`, {}); await refreshJobs(); notify('停止を要求しました'); }
           catch (e) { notify((e as Error).message, true); }
         }}>{selectedJob.cancel_requested ? '停止要求中' : '停止を要求'}</button>}
       </JobLog></div></section>}
+    {manageHistory && <Suspense fallback={<p className="toast" role="status">ジョブ履歴を読み込んでいます…</p>}><JobHistory onClose={() => setManageHistory(false)} onDeleted={(ids, count) => {
+      const removed = new Set(ids);
+      setJobs(current => current.filter(job => !removed.has(job.id)));
+      if (removed.has(jobId)) setJobId('');
+      setManageHistory(false);
+      notify(`ジョブ履歴を ${count} 件削除しました`);
+      void refreshJobs().catch(e => notify(e.message, true));
+    }}/></Suspense>}
   </div>;
 }

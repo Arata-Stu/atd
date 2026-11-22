@@ -29,6 +29,8 @@ test('A fast job is opened only while its original selection is unchanged', () =
   assert.deepEqual(completionUpdate(job, undefined, tracked, 'course', false), { mapId: 'new-course', action: 'open' });
   assert.deepEqual(completionUpdate(job, undefined, tracked, 'other', false), { mapId: 'new-course', action: 'catalog' });
   assert.deepEqual(completionUpdate(job, undefined, tracked, 'course', true), { mapId: 'new-course', action: 'catalog' });
+  assert.deepEqual(completionUpdate(job, undefined, { ...tracked, catalogOnly: true }, 'course', false),
+    { mapId: 'new-course', action: 'catalog' });
 });
 test('Restored settings retain the two allowed optimizers and fixed region method', () => {
   assert.equal(restoredSettings({ ...blank, lines: { raceline: { points: [], settings: { optimizer: 'local', centerline_method: 'paired' } } } }, 'raceline').optimizer, 'mincurv');

@@ -24,12 +24,13 @@ export function generationIssue(doc: MapDocument | null, kind: LineKind, cloud: 
   if (kind === 'raceline' && doc.lines.centerline.method !== 'region_equal_distance_v1') return '領域方式でCenterlineを再生成してください';
   return '';
 }
-export interface TrackedMapJob { mapId: string; selectionId: string | null }
+export interface TrackedMapJob { mapId: string; selectionId: string | null; catalogOnly?: boolean }
 export interface CompletionUpdate { mapId: string; action: 'refresh' | 'open' | 'defer' | 'catalog' }
 export function completionUpdate(job: Job, previous: string | undefined, tracked: TrackedMapJob | undefined, currentMapId: string | null, dirty: boolean): CompletionUpdate | null {
   if (!SUCCEEDED.has(job.status) || (!tracked && (!previous || !ACTIVE_MAP_JOBS.has(previous)))) return null;
   const mapId = tracked?.mapId ?? job.result?.map ?? job.resources?.find(item => item.startsWith('map:'))?.slice(4);
   if (!mapId) return null;
+  if (tracked?.catalogOnly) return { mapId, action: 'catalog' };
   if (mapId === currentMapId) return { mapId, action: dirty ? 'defer' : 'refresh' };
   if (tracked && tracked.selectionId === currentMapId && !dirty) return { mapId, action: 'open' };
   return { mapId, action: 'catalog' };

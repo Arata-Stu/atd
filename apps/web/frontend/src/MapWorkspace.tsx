@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { api, bytes } from './api';
 import type { Bag, CaptureOptions, Cloud, EditTarget, GenerationSettings, Job, LineKind, MapDocument, RacelineLimitKey } from './types';
 import { MapCanvas } from './MapCanvas';
@@ -6,9 +6,11 @@ import { Field, Icon, Modal, Tag } from './workspace_ui';
 import { CaptureModal, PreparationPanel } from './MapPreparation';
 import { VglExportsModal } from './VglExportsModal';
 import { LineSettingsPanel } from './LineSettingsPanel';
+import type { GazeboMapEntry, MapScope } from './MapLibraryDialog';
 import { ACTIVE_MAP_JOBS, captureCloudNotes, completionUpdate, DEFAULT_GENERATION_SETTINGS, editingIssue, generationIssue, nvidiaMap, restoredSettings } from './map_workflow';
 import type { TrackedMapJob } from './map_workflow';
 
+const MapLibraryDialog = lazy(() => import('./MapLibraryDialog'));
 type Notice = (message: string, error?: boolean) => void;
 interface Props { notify: Notice; onDirty: (value: boolean) => void; onJob: () => void; jobs: Job[]; onTransfer: () => void }
 const BUILD_DEFAULTS = { id: '', bag: '', left_image: '/camera/camera/infra1/image_rect_raw', right_image: '/camera/camera/infra2/image_rect_raw', left_info: '/camera/camera/infra1/camera_info', right_info: '/camera/camera/infra2/camera_info', base_frame: 'base_link', left_frame: 'camera_infra1_optical_frame', right_frame: 'camera_infra2_optical_frame' };
@@ -24,6 +26,8 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
   const [kind, setKind] = useState<LineKind>(() => entry.get('line') === 'raceline' ? 'raceline' : entry.get('line') === 'custom' ? 'custom' : 'centerline');
   const [newId, setNewId] = useState(''), [showCreate, setShowCreate] = useState(false), [showBuild, setShowBuild] = useState(false), [showCapture, setShowCapture] = useState(false);
   const [build, setBuild] = useState(BUILD_DEFAULTS);
+  const [gazeboMaps, setGazeboMaps] = useState<GazeboMapEntry[]>([]), [gazeboKey, setGazeboKey] = useState('');
+  const [libraryAction, setLibraryAction] = useState<{ operation: 'duplicate' | 'delete'; item: { id: string; revision: number } | GazeboMapEntry } | null>(null);
   const [vglDialog, setVglDialog] = useState<'library' | 'prepare' | null>(null);
   const [capture, setCapture] = useState<CaptureOptions | null>(null), [captureLoading, setCaptureLoading] = useState(false), [captureError, setCaptureError] = useState('');
   const [captureBag, setCaptureBag] = useState(''), [captureModel, setCaptureModel] = useState(''), [captureRefresh, setCaptureRefresh] = useState(0);
@@ -34,8 +38,8 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
   cloudRef.current = cloud; docRef.current = doc; dirtyRef.current = dirty; kindRef.current = kind;
 
   const refresh = useCallback(async () => {
-    const [catalog, records] = await Promise.all([api<{ items: MapDocument[] }>('maps'), api<{ items: Bag[] }>('records')]);
-    setMaps(catalog.items); setBags(records.items);
+    const [catalog, records] = await Promise.all([api<{ items: MapDocument[]; gazebo_maps?: GazeboMapEntry[] }>('maps'), api<{ items: Bag[] }>('records')]);
+    setMaps(catalog.items); setGazeboMaps(catalog.gazebo_maps ?? []); setBags(records.items);
   }, []);
   const reload = useCallback(async (id: string, force = false, selection = docRef.current?.id ?? null) => {
     const sequence = ++loadSequence.current;
@@ -130,9 +134,9 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
     const saved = await api<MapDocument>('maps/' + encodeURIComponent(doc.id), doc, 'PUT');
     docRef.current = saved; dirtyRef.current = false; setDoc(saved); setDirty(false); await refresh(); return saved;
   }
-  async function queue(path: string, body: unknown, mapId: string) {
+  async function queue(path: string, body: unknown, mapId: string, catalogOnly = false) {
     const job = await api<Job>(path, body);
-    trackedJobs.current.set(job.id, { mapId, selectionId: docRef.current?.id ?? null });
+    trackedJobs.current.set(job.id, { mapId, selectionId: docRef.current?.id ?? null, catalogOnly });
     setLocalJobs(previous => ({ ...previous, [job.id]: mapId })); onJob();
   }
   function generate(nextKind: LineKind) {
@@ -177,7 +181,40 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
     await api<MapDocument>(`maps/${encodeURIComponent(current.id)}/cloud`, { revision: current.revision, frame: 'map', points: input.points });
     await reload(current.id, false, current.id); setFitKey(value => value + 1); await refresh(); notify('map座標の点群を読み込みました');
   }
+  function manageMap(scope: MapScope, destination: string) {
+    if (!libraryAction || busy) return;
+    const item = libraryAction.item;
+    const path = 'maps/' + encodeURIComponent(item.id);
+    const gazebo = 'gazebo_manifest_sha256' in item;
+    const selection = gazebo ? { scope, gazebo_manifest_sha256: item.gazebo_manifest_sha256 } : { scope, revision: item.revision };
+    void run(async () => {
+      if (libraryAction.operation === 'duplicate') {
+        const payload = { ...selection, destination };
+        await queue(path + '/duplicate', payload, destination, gazebo);
+        setLibraryAction(null);
+        notify(`${destination} への複製を開始しました`);
+        return;
+      }
+      await api(path, selection, 'DELETE');
+      setLibraryAction(null);
+      if (gazebo) {
+        setGazeboKey('');
+      } else if (scope === 'map' && docRef.current?.id === item.id) {
+        ++loadSequence.current;
+        docRef.current = null; cloudRef.current = null;
+        setDoc(null); setCloud(null); setDeferred(null);
+        undo.current = []; redo.current = []; setHistory([0, 0]);
+        window.history.replaceState(null, '', '#map');
+      } else if (scope === 'hdmap' && docRef.current?.id === item.id) {
+        await reload(item.id, true);
+      }
+      await refresh();
+      notify(`${item.id} の${scope === 'map' ? '地図全体' : 'HDMap編集内容'}を削除しました`);
+    });
+  }
 
+  const gazeboSelection = gazeboMaps.find(item => item.id === gazeboKey);
+  const gazeboBusy = busy || jobs.some(job => ACTIVE_MAP_JOBS.has(job.status) && job.resources?.includes('map:' + gazeboKey));
   return <div className="workspace-grid">
     <aside className="catalog-panel">
       <div className="panel-title"><span>マイライブラリ</span><button className="icon-button" aria-label="地図一覧を更新" disabled={busy} onClick={() => void run(refresh)}><Icon name="refresh" size={16}/></button></div>
@@ -186,6 +223,19 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
       <div className="catalog-heading"><span>保存済みの地図</span><span>{maps.length}</span></div>
       <div className="map-list">{maps.map(map => <button key={map.id} className={'map-card ' + (doc?.id === map.id ? 'selected' : '')} disabled={busy} onClick={() => void load(map.id)}><span className="map-card-icon"><Icon name="map" size={21}/></span><span><strong>{map.title || map.id}</strong><small>{map.id}</small><small>{nvidiaMap(map) && map.source?.pointcloud_status !== 'ready' ? '点群の取得待ち' : `${map.left.length + map.right.length} 境界点`} · rev {map.revision}</small></span><Icon name="chevron" size={15}/></button>)}{!maps.length && <p className="panel-empty">保存された地図がありません。<br/>地図の作成、または空のHDMapから編集を始められます。</p>}</div>
       <button className="button quiet full" disabled={busy} onClick={() => setShowCreate(true)}><Icon name="plus" size={16}/>空のHDMapを作成</button>
+      {doc && <div className="button-row" title={dirty ? '先に編集を保存するか、再読込してください' : doc.id}>
+        <button className="button" disabled={locked || dirty} onClick={() => setLibraryAction({ operation: 'duplicate', item: doc })}>地図を複製</button>
+        <button className="button" disabled={locked || dirty} onClick={() => setLibraryAction({ operation: 'delete', item: doc })}>地図を削除</button>
+      </div>}
+      {gazeboMaps.length > 0 && <details><summary>Gazebo 保存地図（{gazeboMaps.length}）</summary>
+        <Field label="HDMap のない cuVSLAM 地図"><select value={gazeboSelection?.id ?? ''} onChange={e => setGazeboKey(e.target.value)}>
+          <option value="">地図を選択</option>{gazeboMaps.map(item => <option key={item.id} value={item.id}>{item.id}</option>)}
+        </select></Field>
+        <div className="button-row">
+          <button className="button" disabled={!gazeboSelection || gazeboBusy} onClick={() => gazeboSelection && setLibraryAction({ operation: 'duplicate', item: gazeboSelection })}>地図を複製</button>
+          <button className="button" disabled={!gazeboSelection || gazeboBusy} onClick={() => gazeboSelection && setLibraryAction({ operation: 'delete', item: gazeboSelection })}>地図を削除</button>
+        </div>
+      </details>}
       <div className="sidebar-note"><Icon name="info" size={16}/><p>cuVSLAM・VGL地図を準備し、保存地図から点群を取得してHDMapを編集します。</p></div>
       <div className="storage-label"><Icon name="folder" size={15}/><span>maps / hdmap / lines</span></div>
     </aside>
@@ -214,6 +264,7 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
     {showCreate && <Modal title="空のHDMapを作成" subtitle="地図IDを指定して、境界の手動編集から始めます。" onClose={() => setShowCreate(false)}><form onSubmit={e => { e.preventDefault(); void run(async () => { if (dirty && !window.confirm('未保存の編集を破棄して新しいHDMapを開きますか？')) return; const created = await api<MapDocument>('maps', { id: newId, title: newId }); await refresh(); setShowCreate(false); await reload(created.id, true); }); }}><Field label="地図ID" hint="英数字、ハイフン、アンダースコア"><input required pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value={newId} onChange={e => setNewId(e.target.value)} placeholder="practice_course"/></Field><div className="modal-actions"><button className="button primary" disabled={busy}>作成する<Icon name="arrow" size={16}/></button></div></form></Modal>}
     {showBuild && <Modal title="rosbag から地図を作成" subtitle="最初にcuVSLAM地図を作成します。完了後、VGLと点群取得へ進めます。" onClose={() => setShowBuild(false)}><form onSubmit={e => { e.preventDefault(); void run(async () => { await queue('maps/build', build, build.id); setShowBuild(false); notify('cuVSLAM地図作成を開始しました。完了後に作成した地図を開きます'); }); }}><Field label="記録データ"><select required value={build.bag} onChange={e => setBuild({ ...build, bag: e.target.value })}><option value="">rosbagを選択</option>{bags.map(bag => <option key={bag.id} value={bag.id}>{bag.id} · {bytes(bag.bytes)}</option>)}</select></Field><Field label="新しい地図ID"><input required pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value={build.id} onChange={e => setBuild({ ...build, id: e.target.value })} placeholder="practice_course"/></Field><details><summary>画像トピック・frameの詳細</summary><div className="field-grid">{Object.entries(build).filter(([key]) => key !== 'id' && key !== 'bag').map(([key, value]) => <Field key={key} label={key}><input value={value} onChange={e => setBuild({ ...build, [key]: e.target.value })}/></Field>)}</div></details>{!bags.length && <p className="inline-note">bagがありません。「データ転送」からJetsonの記録を受信してください。</p>}<div className="modal-actions"><button className="button primary" disabled={busy || !bags.length}><Icon name="play" size={16}/>cuVSLAM地図作成を開始</button></div></form></Modal>}
     {vglDialog === 'library' && <VglExportsModal onClose={() => setVglDialog(null)}/>}
+    {libraryAction && <Suspense fallback={<p role="status">地図の管理画面を読み込んでいます…</p>}><MapLibraryDialog key={libraryAction.item.id} doc={libraryAction.item} action={libraryAction.operation} busy={busy} onClose={() => setLibraryAction(null)} onSubmit={manageMap}/></Suspense>}
     {vglDialog === 'prepare' && doc && <VglExportsModal key={doc.id} onClose={() => setVglDialog(null)}
       preparation={{ title: doc.title, busy: locked, start: modelDir => void run(async () => {
         await queue(`maps/${encodeURIComponent(doc.id)}/vgl`, { model_dir: modelDir }, doc.id);

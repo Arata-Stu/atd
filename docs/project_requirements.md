@@ -179,6 +179,8 @@ Notebook の VGL export は `vgl-export`、Web API は `web`、Raceline の最�
 
 地図画面は cuVSLAM 地図作成、VGL 地図準備、保存地図からの点群取得、HDMap 編集を一つの流れとして提供する。元 bag と VGL 準備時の Notebook 用モデルを原則として自動選択し、前工程や資産対応に不備があれば理由と必要な操作を示す。NVIDIA 地図は点群取得前に編集・生成を開始せず、空の手動 HDMap は点群なしで編集できる。成功したジョブの表示は自動更新し、未保存編集は破棄しない。
 
+Notebook の Web UI では、終了したジョブ履歴を個別・複数選択、開始日時の範囲、全件で削除できる。地図全体と HDMap 編集内容はそれぞれ削除・複製できる。保存した解析結果は実行単位で整理し、元の bag と独立して管理する。[操作方法](../apps/web/README.md#履歴地図解析結果の整理)
+
 Centerline は **領域・等距離線（region）のみ** とし、方式選択は設けない。格子間隔の初期値は 0.02 m、点数上限は 800。Raceline は **mincurv（既定）/ mincurv_iqp のみ** とし、旧 paired Centerline・local Raceline は生成方式から除外する。Centerline / Raceline は閉路向けで、Raceline は保存済みの領域方式 Centerline を参照する。Customline は編集点列から生成する。駐車は含めず、これらの初期寸法・速度値を実車検証済みとは扱わない。
 
 Joy は Jetson に接続し、ノート PC のブラウザでその入力を監視・設定する。車載 ROS 2 / DDS への直接参加を PC に要求しない。

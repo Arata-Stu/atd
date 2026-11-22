@@ -149,3 +149,24 @@ def test_real_recorder_to_ui_and_partial_result(tmp_path, monkeypatch, tracking)
     assert result['samples'][1]['along_m'] == .5 and result['samples'][1]['lateral_m'] == -1.
     assert result['samples'][1]['segment'] != result['samples'][0]['segment']
     assert result['reference'][-1]['x_m'] == 2. and result['reference'][-1]['lap'] is None
+
+
+def test_delete_saved_replay_blocks_writer_and_preserves_input_and_siblings(saved):
+    folder, api, summary, _ = saved
+    route = '/api/analysis-results/replay/'
+    bag = api.app.state.store.record_root / summary['bag']
+    bag.mkdir()
+    sibling = folder.parent / 'other-run'
+    sibling.mkdir()
+    atomic_json(sibling / 'summary.json', dict(summary, id=sibling.name, status='partial'))
+    (folder.parent / 'alias').symlink_to(folder)
+    assert api.delete(route + 'alias').status_code == 400
+    assert api.delete(route + folder.name).status_code == 409  # legacy running without a lease
+    atomic_json(folder / 'summary.json', dict(summary, status='complete', writer_lock='samples.jsonl'))
+    with (folder / 'samples.jsonl').open('a') as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        assert api.delete(route + folder.name).status_code == 409  # EOF can precede writer shutdown
+    assert api.delete(route + folder.name).json() == {'deleted': folder.name}
+    assert api.delete(route + folder.name).status_code == 404
+    assert bag.is_dir() and not folder.exists()
+    assert [run['id'] for run in api.get('/api/replay/runs').json()['items']] == [sibling.name]

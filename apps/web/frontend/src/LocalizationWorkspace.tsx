@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
+import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { ACTIVE, STATUS } from './job_status';
 import { LocalizationResult } from './LocalizationResult';
 import { OUTCOMES } from './localization_validation';
@@ -134,6 +135,9 @@ export function LocalizationWorkspace({jobs, onLog}: {jobs: Job[]; onLog: (id: s
         {!runs?.length && <option value="">{historyError ? '履歴を読み込めません' : runs ? '保存された検証結果がありません' : '履歴を読み込み中…'}</option>}
         {runs?.map(run => <option key={run.id} value={run.id}>{run.saved_at ? new Date(run.saved_at * 1000).toLocaleString('ja-JP') + ' · ' : ''}{run.map_id} · {run.bag} · {OUTCOMES[run.outcome] || run.outcome} · {run.id}</option>)}
       </select></Field>
+      {runs?.some(item => item.id === choice) && <DeleteAnalysisButton key={choice} path={'analysis-results/localization/' + encodeURIComponent(choice)}
+        detail={`自己位置検証「${runs.find(item => item.id === choice)?.bag}」（${choice}）を削除しますか？\n検証レポート・軌跡・この走行の前方軌道と速度比較が対象です。`}
+        onDeleted={() => { followJob.current = ''; setRunId(''); setRuns(list => list?.filter(item => item.id !== choice) ?? null); setReload(n => n + 1); }}/>}
     </div>
     {historyError && <p className="inline-note" role="alert">{historyError}</p>}
     {resultError && <p className="inline-note" role="alert">{resultError}</p>}

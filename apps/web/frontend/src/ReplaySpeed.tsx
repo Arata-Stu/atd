@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { ACTIVE, STATUS } from './job_status';
 import { GainsText, SpeedComparison, TableSelect, TablesNotice, useSpeedTables } from './SpeedComparison';
 import { finite, speedPoint } from './speed_view';
@@ -8,7 +9,7 @@ import type { Job, LineKind } from './types';
 
 export interface SpeedSettings extends SpeedGains {table_sha256:string}
 type ReplaySample = SpeedSample & {time_s:number; segment:number | null};
-interface SpeedMeta {id:string; line:LineKind; table_sha256:string; table_run_id:string; ready:boolean; job_id:string | null;
+interface SpeedMeta {id:string; index_id:string; line:LineKind; table_sha256:string; table_run_id:string; ready:boolean; job_id:string | null;
   duration_s:number; config:SpeedGains; propo_reason:string; joy_reason?:string}
 interface Frame {id:string; line:LineKind; table_sha256:string; time_s:number; sample:ReplaySample | null; history:ReplaySample[]}
 
@@ -59,7 +60,7 @@ export function useReplaySpeed(id:string, line:LineKind, time:number, planReady:
     finally { setSubmitting(false); }
   }
   const frame = planReady && meta?.ready && frameData?.key === timeKey ? frameData.data : null;
-  return {meta,job,frame,submitting,failure,frameFailure,calculate,refresh:() => setRefresh(n => n+1)};
+  return {meta,job,frame,submitting,failure,frameFailure,calculate,selectionPath:key,refresh:() => setRefresh(n => n+1)};
 }
 
 export function ReplaySpeed({speed, time, config, apply, onLog}: {
@@ -97,6 +98,8 @@ export function ReplaySpeed({speed, time, config, apply, onLog}: {
     </form>}
     {config && <div className="planning-action">
       <span className="planning-sample">比較中の設定　{speed.meta?.table_run_id || config.table_sha256.slice(0,8)} · <GainsText gains={config}/></span>
+      {ready && speed.meta && <DeleteAnalysisButton key={speed.selectionPath} label="速度比較を削除" path={speed.selectionPath + '&index_id=' + speed.meta.index_id}
+        detail={`自己位置検証「${speed.meta.id}」の速度比較を削除しますか？\n${speed.meta.line} · 校正表 ${config.table_sha256}\nKp ${config.kp} / Ki ${config.ki} / Kd ${config.kd}`} onDeleted={speed.refresh}/>}
       {speed.job && <button className="button small" onClick={() => onLog(speed.job!.id)}>{STATUS[speed.job.status] || speed.job.status} · ログ</button>}
       {(speed.failure || speed.frameFailure) && <button className="button small" onClick={speed.refresh}>速度比較を再読込</button>}
     </div>}

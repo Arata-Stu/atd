@@ -3,8 +3,8 @@
 .replay-errors-page .page-intro p { color: #52675d; font-size: 13px; }
 .replay-picker .field, .replay-selectors .field { margin: 0; }
 .replay-picker select, .replay-selectors select { width: 100%; min-width: 0; }
-.replay-picker { flex: 1 1 24rem; min-width: 0; }
-.replay-picker .field { max-width: 860px; }
+.replay-picker { flex: 1 1 24rem; min-width: 0; display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.replay-picker .field { flex: 1 1 18rem; max-width: 860px; }
 .replay-selectors { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 12px 0 18px; }
 .replay-selectors .field { min-width: 11rem; }
 .replay-run-meta { margin: 0 0 8px auto; color: #55665e; font-size: 12px; }

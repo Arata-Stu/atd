@@ -31,7 +31,7 @@ class GateTests(unittest.TestCase):
             self.subs[topic] = [endpoint(reader, kind)]
         self.pubs['/clock'] = [endpoint(self.player, 'rosgraph_msgs/msg/Clock')]
         self.subs['/clock'] = [endpoint('/visual_slam', 'rosgraph_msgs/msg/Clock')]
-        self.subs['/visual_slam/tracking/slam_path'] = [endpoint(self.rviz, 'nav_msgs/msg/Path')]
+        self.subs[SLAM_ODOMETRY] = [endpoint(self.rviz, 'nav_msgs/msg/Odometry')]
         self.subs['/visual_slam/vis/landmarks_cloud'] = [endpoint(self.rviz, 'sensor_msgs/msg/PointCloud2')]
 
         self.node = Mock()
@@ -62,13 +62,15 @@ class GateTests(unittest.TestCase):
         self.assertFalse(_missing_endpoints(self.node, self.player, self.rviz, vio=True))
 
     def test_waits_for_configured_rviz_displays_before_resuming(self):
-        path = '/visual_slam/tracking/slam_path'
-        ready = self.subs[path]
-        self.subs[path] = [endpoint('/another/rviz2', 'nav_msgs/msg/Path')]
+        ready = self.subs[SLAM_ODOMETRY]
+        self.subs[SLAM_ODOMETRY] = [
+            endpoint('/' + GROUND_TRUTH_NODE, 'nav_msgs/msg/Odometry'),
+            endpoint(self.rviz, 'nav_msgs/msg/Path'),
+        ]
 
         def enable_display(node, timeout_sec):
             self.resume.call_async.assert_not_called()
-            self.subs[path] = ready
+            self.subs[SLAM_ODOMETRY] = ready
 
         self.ros.spin_once.side_effect = enable_display
         wait_and_resume(self.node, self.player)
@@ -130,7 +132,6 @@ class GateTests(unittest.TestCase):
     def test_gazebo_overlay_needs_map_odometry_clock_and_matching_rviz_qos(self):
         overlay = '/' + GROUND_TRUTH_NODE
         self.pubs[SLAM_ODOMETRY] = [endpoint('/visual_slam', 'nav_msgs/msg/Odometry')]
-        self.subs[SLAM_ODOMETRY] = []
         self.pubs[GROUND_TRUTH_PATH] = [endpoint(overlay, 'nav_msgs/msg/Path')]
         self.subs[GROUND_TRUTH_PATH] = [endpoint(self.rviz, 'nav_msgs/msg/Path', 'incompatible')]
         self.pubs[GROUND_TRUTH_ERROR] = [endpoint(overlay, 'visualization_msgs/msg/Marker')]
@@ -140,7 +141,7 @@ class GateTests(unittest.TestCase):
                                   f'{SLAM_ODOMETRY} の {overlay} subscriber',
                                   f'{GROUND_TRUTH_PATH} の QoS が {self.rviz} と非互換'])
         self.subs['/clock'].append(endpoint(overlay, 'rosgraph_msgs/msg/Clock'))
-        self.subs[SLAM_ODOMETRY] = [endpoint(overlay, 'nav_msgs/msg/Odometry')]
+        self.subs[SLAM_ODOMETRY].append(endpoint(overlay, 'nav_msgs/msg/Odometry'))
         self.subs[GROUND_TRUTH_PATH] = [endpoint(self.rviz, 'nav_msgs/msg/Path')]
         self.assertFalse(_missing_endpoints(self.node, self.player, self.rviz, ground_truth=True))
         self.pubs[GROUND_TRUTH_PATH].append(endpoint('_NODE_NAMESPACE_UNKNOWN_/_NODE_NAME_UNKNOWN_', 'nav_msgs/msg/Path'))
@@ -154,7 +155,7 @@ class GateTests(unittest.TestCase):
 
     def test_headless_resumes_only_after_gt_clock_and_odometry_are_ready(self):
         overlay = '/' + GROUND_TRUTH_NODE
-        del self.subs['/visual_slam/tracking/slam_path'], self.subs['/visual_slam/vis/landmarks_cloud']
+        del self.subs['/visual_slam/vis/landmarks_cloud']
         self.pubs[SLAM_ODOMETRY] = [endpoint('/visual_slam', 'nav_msgs/msg/Odometry')]
         self.subs[SLAM_ODOMETRY] = []
         self.assertEqual(_missing_endpoints(self.node, self.player, None, ground_truth=True), [

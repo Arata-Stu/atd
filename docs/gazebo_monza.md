@@ -34,7 +34,7 @@ Ubuntu Notebook のデスクトップで使う。初回はホストで `atd dev 
 atd replay
 ```
 
-引数なしの `atd replay` または `atd` のメニューから `replay` を開き、追跡方式（VO は左右画像、VIO は左右画像と統合 IMU）、再生する bag の順に選ぶ。VIO には `/camera/camera/imu` を記録した bag を使う。cuVSLAM と RViz が起動し、左右の画像・CameraInfo と車体から両カメラへの静的 TF を記録から確認する。購読の準備が整うと 0.5 倍速の再生が始まる。RViz は左右の IR 画像を Best Effort で購読し、`map` 座標でのランドマークと軌跡も表示する。bag の末尾でも画面は開いたままで、RViz を閉じるか端末で Ctrl+C を押すと一式が終了する。地図はメモリ上で生成される。
+引数なしの `atd replay` または `atd` のメニューから `replay` を開き、追跡方式（VO は左右画像、VIO は左右画像と統合 IMU）、再生する bag の順に選ぶ。VIO には `/camera/camera/imu` を記録した bag を使う。cuVSLAM と RViz が起動し、左右の画像・CameraInfo と車体から両カメラへの静的 TF を記録から確認する。購読の準備が整うと 0.5 倍速の再生が始まる。RViz は左右の IR 画像を Best Effort で購読し、`map` 座標でのランドマークと直近の推定姿勢も表示する。bag の末尾でも画面は開いたままで、RViz を閉じるか端末で Ctrl+C を押すと一式が終了する。地図はメモリ上で生成される。
 
 旧形式の Gazebo bag も再生一覧に表示する。例えば名前に `20261121T125125Z` が入った記録は `2026-11-21 21:51:25 JST` と表示され、対応する走行ログがあれば解像度・撮影レート・IMU 設定も読める。パスを直接指定する際は元のディレクトリ名を使う。
 
@@ -43,12 +43,14 @@ Gazebo の bag を選ぶと、RViz に次の3つが表示される。
 | RViz の表示 | 読み方 |
 |---|---|
 | 青の **Gazebo ground truth** | Gazebo の物理ステップ後に測った後輪軸の軌跡。再生時計 `/clock` に沿って伸びる。 |
-| 橙の **SLAM trajectory** | ステレオ画像から cuVSLAM が推定した `map` 内の車体軌跡。 |
+| 橙の **SLAM odometry (recent)** | `/visual_slam/vis/slam_odometry` の直近の推定姿勢。矢印の根元が車体位置、矢印の向きが車体前方を示す。 |
 | 白の **Position error at latest estimate** | 直近の推定位置と、その**画像時刻**の正解位置を結ぶ。線の長さが位置誤差で、追跡が途切れると最後に比較できた時刻の線が残る。 |
 
-正解の記録区間で最初の有効な cuVSLAM 姿勢を受け取ると、その画像時刻に正解を補間し、初期位置と向きを一度だけ合わせる。以降は縮尺と変換を固定する。処理遅延があると青と橙の先端が示す時刻は異なるため、同時刻のずれは白線で読む。正解の配信先は `/atd/replay/ground_truth_path`、白線は `/atd/replay/position_error`。
+橙の矢印は既定で直近20姿勢を表示する。RViz の **Displays → SLAM odometry (recent) → Keep** を `1` にすると最新の1姿勢だけを追える。`Position Tolerance`（m）と `Angle Tolerance`（rad）は既定でともに `0`。履歴を間引くには両方を正の値にする。前回描画した姿勢からの移動距離か回転角のどちらかがしきい値に達すると、次の矢印が加わる。全周の軌跡は再生後に Web UI の「VSLAM 軌跡誤差」で比較できる。
 
-新しい `atd gazebo bag` は通常シミュレーション時間で 20 Hz を目安に正解を記録し、bag に `atd_ground_truth/rig_motion.jsonl` を同梱する。既存の Gazebo bag でも、元の名前の bag と、同じ試行の `run.json` および `scene/rig_motion.jsonl` が Notebook の結果ディレクトリに残っていれば自動で照合する。お台場の保存先は `/data/results/runs/gazebo/odaiba/<run-id>/`。古い記録では正解のサンプル間隔が約 0.5 秒になることがあり、コーナーのサンプル間は直線補間される。正解が見つからない場合は端末にその旨を表示し、推定軌跡を再生する。
+正解の記録区間で最初の有効な cuVSLAM 姿勢を受け取ると、その画像時刻に正解を補間し、初期位置と向きを一度だけ合わせる。以降は縮尺と変換を固定する。青線は再生時計に沿って進むため、推定姿勢と同じ画像時刻の位置誤差は白線で読む。正解の配信先は `/atd/replay/ground_truth_path`、白線は `/atd/replay/position_error`。
+
+新しい `atd gazebo bag` は通常シミュレーション時間で 20 Hz を目安に正解を記録し、bag に `atd_ground_truth/rig_motion.jsonl` を同梱する。既存の Gazebo bag でも、元の名前の bag と、同じ試行の `run.json` および `scene/rig_motion.jsonl` が Notebook の結果ディレクトリに残っていれば自動で照合する。お台場の保存先は `/data/results/runs/gazebo/odaiba/<run-id>/`。古い記録では正解のサンプル間隔が約 0.5 秒になることがあり、コーナーのサンプル間は直線補間される。正解が見つからない場合は端末にその旨を表示し、cuVSLAM の推定姿勢を表示する。
 
 `atd replay --rate 1` で等速になる。bag 名を指定する場合は `atd replay "親ディレクトリ/bag名" --rate 0.5` のように `/data/record/rosbags/` からの相対パスを渡す。コンテナ内の絶対パスも使える。再生用の domain は既定 75（`ATD_REPLAY_ROS_DOMAIN_ID` で変更可）。専用の Fast DDS 設定と bag の `/clock` を使う。
 
@@ -108,7 +110,7 @@ export FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds
 
 端末1は `ros2 launch atd_bringup bag_vslam.launch.py`。cuVSLAM を `component_container_mt` にロードする。ログに `Loaded node '/visual_slam'` が出たら準備完了。
 
-端末2は RViz の場合、次の ATD 設定を使う。Foxglove の場合は `ros2 launch foxglove_bridge foxglove_bridge_launch.xml address:=127.0.0.1 port:=8765 use_sim_time:=true` を起動し、Notebook のアプリで `ws://127.0.0.1:8765` に接続する。3D の基準フレームは `map`、点群は `/visual_slam/vis/landmarks_cloud`、軌跡は `/visual_slam/tracking/slam_path`。画像は `/camera/camera/infra1/image_rect_raw` を選ぶ。
+端末2は RViz の場合、次の ATD 設定を使う。Foxglove の場合は `ros2 launch foxglove_bridge foxglove_bridge_launch.xml address:=127.0.0.1 port:=8765 use_sim_time:=true` を起動し、Notebook のアプリで `ws://127.0.0.1:8765` に接続する。3D の基準フレームは `map`、点群は `/visual_slam/vis/landmarks_cloud`、車体の推定姿勢は `/visual_slam/vis/slam_odometry`。画像は `/camera/camera/infra1/image_rect_raw` を選ぶ。
 
 ```bash
 rviz2 -d "$(ros2 pkg prefix --share atd_bringup)/config/bag_vslam.rviz" \

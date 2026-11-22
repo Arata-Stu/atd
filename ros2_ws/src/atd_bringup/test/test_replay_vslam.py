@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import yaml
 
 from atd_bringup import replay_vslam as replay
-from atd_bringup.replay_inputs import ImuProfile
+from atd_bringup.replay_inputs import ImuProfile, SLAM_ODOMETRY
 
 
 class ReplaySessionTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class ReplaySessionTests(unittest.TestCase):
                          [self.player, self.rviz, self.launch])
         displays = yaml.safe_load(self.config.read_text())['Visualization Manager']['Displays']
         self.assertEqual({d['Topic']['Value'] for d in displays if d['Enabled'] and 'Topic' in d},
-                         {'/visual_slam/tracking/slam_path', '/visual_slam/vis/landmarks_cloud',
+                         {SLAM_ODOMETRY, '/visual_slam/vis/landmarks_cloud',
                           '/visual_slam/vis/loop_closure_cloud', '/atd/replay/ground_truth_path',
                           '/atd/replay/position_error',
                           '/camera/camera/infra1/image_rect_raw', '/camera/camera/infra2/image_rect_raw'})
@@ -65,11 +65,17 @@ class ReplaySessionTests(unittest.TestCase):
         self.assertEqual(len(eyes), 2)
         for topic in eyes:
             self.assertEqual((topic['Reliability Policy'], topic['Durability Policy']), ('Best Effort', 'Volatile'))
-        paths = {d['Topic']['Value']: d for d in displays if d['Class'] == 'rviz_default_plugins/Path'}
-        gt = paths['/atd/replay/ground_truth_path']
+        gt, = [d for d in displays if d['Class'] == 'rviz_default_plugins/Path']
+        self.assertEqual(gt['Topic']['Value'], '/atd/replay/ground_truth_path')
         self.assertEqual((gt['Topic']['Reliability Policy'], gt['Topic']['Durability Policy']),
                          ('Reliable', 'Transient Local'))
-        self.assertNotEqual(gt['Color'], paths['/visual_slam/tracking/slam_path']['Color'])
+        odom, = [d for d in displays if d['Class'] == 'rviz_default_plugins/Odometry']
+        self.assertEqual(odom['Topic']['Value'], SLAM_ODOMETRY)
+        self.assertEqual(odom['Topic']['Reliability Policy'], 'Best Effort')
+        self.assertEqual((odom['Keep'], odom['Position Tolerance'], odom['Angle Tolerance']), (20, 0., 0.))
+        self.assertEqual(odom['Shape']['Value'], 'Arrow')
+        self.assertNotEqual(gt['Color'], odom['Shape']['Color'])
+        self.assertFalse(odom['Covariance']['Value'])
         error_topic = next(d['Topic'] for d in displays if d['Class'] == 'rviz_default_plugins/Marker')
         self.assertEqual((error_topic['Value'], error_topic['Reliability Policy'], error_topic['Durability Policy']),
                          ('/atd/replay/position_error', 'Reliable', 'Transient Local'))
@@ -145,7 +151,7 @@ class ReplaySessionTests(unittest.TestCase):
             path = replay.estimated_only_config(self.config, directory)
             displays = yaml.safe_load(path.read_text())['Visualization Manager']['Displays']
         topics = {d['Topic']['Value'] for d in displays if 'Topic' in d}
-        self.assertIn('/visual_slam/tracking/slam_path', topics)
+        self.assertIn(SLAM_ODOMETRY, topics)
         self.assertNotIn('/atd/replay/ground_truth_path', topics)
         self.assertNotIn('/atd/replay/position_error', topics)
 

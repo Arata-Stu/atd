@@ -108,7 +108,7 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=Fal
 
     if rviz_name:
         # RViz creates both display subscriptions while loading the preset, before the first TF.
-        for topic, kind in (('/visual_slam/tracking/slam_path', 'nav_msgs/msg/Path'),
+        for topic, kind in ((SLAM_ODOMETRY, 'nav_msgs/msg/Odometry'),
                             ('/visual_slam/vis/landmarks_cloud', 'sensor_msgs/msg/PointCloud2')):
             if not _endpoints(node.get_subscriptions_info_by_topic(topic), kind, rviz_name):
                 missing.append(f'{topic} の {rviz_name} subscriber')

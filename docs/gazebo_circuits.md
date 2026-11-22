@@ -21,9 +21,9 @@ atd build --packages-up-to atd_bringup
 atd replay --tracking vo
 ```
 
-2周目のピット前で RViz の青い Gazebo 正解軌跡と橙の SLAM 推定軌跡を見比べる。ピンクの `Loop closure landmarks` は cuVSLAM が閉じ込み処理に使う点群。各周で最初に非空点群を観測した地点が端末に出る。[cuVSLAM の ROS 出力](https://nvidia-isaac-ros.github.io/v/release-5.0/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_cuvslam/index.html)
+2周目のピット前で、RViz の橙の矢印が青い Gazebo 正解軌跡のどこにあり、どちらを向いているかを見る。矢印は直近の推定姿勢を表し、表示数は **SLAM odometry (recent) → Keep** で調整できる。ピンクの `Loop closure landmarks` は cuVSLAM が閉じ込み処理に使う点群。各周で最初に非空点群を観測した地点が端末に出る。[cuVSLAM の ROS 出力](https://nvidia-isaac-ros.github.io/v/release-5.0/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_cuvslam/index.html)
 
-bag の末尾で、同時刻の姿勢グラフの頂点・辺を、cuVSLAM の時刻付き姿勢と照合する。半周以上離れた別の周の姿勢を直接結ぶ辺があり、短い時間間隔の辺をたどっても両端がつながると、端末に「周回間の閉路を姿勢グラフで確認」と出る。表示された周回内距離と GT 上の隔たりから、コースのどの場所同士が結ばれたかを確認できる。よく似た隣のレーンを誤って結ぶ場合もあるため、青・橙の軌跡と合わせて読む。
+bag の末尾で、同時刻の姿勢グラフの頂点・辺を、cuVSLAM の時刻付き姿勢と照合する。半周以上離れた別の周の姿勢を直接結ぶ辺があり、短い時間間隔の辺をたどっても両端がつながると、端末に「周回間の閉路を姿勢グラフで確認」と出る。表示された周回内距離と GT 上の隔たりから、コースのどの場所同士が結ばれたかを確認できる。よく似た隣のレーンを誤って結ぶ場合もあるため、RViz の正解軌跡と推定姿勢、または Web UI の周回別軌跡と合わせて確認する。
 
 端末に出る結果ディレクトリの `summary.json` に判定を保存する。`loop_closure_graph.status` は、閉路を確認した場合が `cross_lap_cycle`、照合できた範囲で見つからなかった場合が `not_observed`、データ不足などで照合できなかった場合が `unavailable`。点群の更新数と初出地点は `loop_closure_cloud` に保存する。[姿勢グラフの配信実装](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_visual_slam/blob/release-5.0/isaac_ros_cuvslam/src/impl/posegraph_vis_helper.cpp)・[時刻付き姿勢の取得実装](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_visual_slam/blob/release-5.0/isaac_ros_cuvslam/src/visual_slam_node.cpp)
 

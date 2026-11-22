@@ -36,15 +36,27 @@ Visualization Manager:
       Size (Pixels): 5
       Color Transformer: FlatColor
       Color: 255; 100; 218
-    - Class: rviz_default_plugins/Path
-      Name: SLAM trajectory
+    - Class: rviz_default_plugins/Odometry
+      Name: SLAM odometry (recent)
       Enabled: true
       Topic:
-        Value: /visual_slam/tracking/slam_path
+        Value: /visual_slam/vis/slam_odometry
         Reliability Policy: Best Effort
         Durability Policy: Volatile
-      Line Style: Lines
-      Color: 255; 180; 65
+        History Policy: Keep Last
+        Depth: 5
+      Keep: 20
+      Position Tolerance: 0.0
+      Angle Tolerance: 0.0
+      Shape:
+        Value: Arrow
+        Color: 255; 180; 65
+        Shaft Length: 0.32
+        Shaft Radius: 0.055
+        Head Length: 0.18
+        Head Radius: 0.14
+      Covariance:
+        Value: false
     - Class: rviz_default_plugins/Path
       Name: Gazebo ground truth
       Enabled: true

@@ -102,8 +102,9 @@ class ReplayResult:
         self.progress = CourseProgress(trace, course)
         self.segment = 0
         self.last_stamp = None
+        self.last_cloud_stamp = None
         self.next_checkpoint = 0.
-        self.committed = 0
+        self.committed = None
         self.summary = dict(version=1, id=run_id, bag=str(bag), rate=rate, created_at=now.isoformat(),
                             slam_max_map_size=slam_max_map_size, tracking='vio' if imu else 'vo',
                             imu_frame=imu.frame if imu else None, imu_hz=imu.frequency if imu else None,
@@ -111,7 +112,11 @@ class ReplayResult:
                             circuit=course.get('circuit'), laps=course.get('laps') if self.progress.boundaries else None,
                             lap_length_m=self.progress.lap_length, gap_threshold_s=GAP_NS / 1e9,
                             gt_start_stamp_ns=str(trace.stamps[0]), gt_finish_stamp_ns=str(trace.stamps[-1]),
-                            anchor_stamp_ns=None, writer_lock='samples.jsonl')
+                            anchor_stamp_ns=None, writer_lock='samples.jsonl',
+                            loop_closure_graph=dict(status='not_checked' if len(self.progress.boundaries) >= 3
+                                                    else 'no_lap_comparison'),
+                            loop_closure_cloud=dict(updates=0, nonempty_updates=0,
+                                                    first_nonempty_by_lap=[], last_nonempty=None))
         reference = [self.progress.point(stamp, pose) for stamp, pose in zip(trace.stamps, trace.poses)]
         _write_json(self.directory / 'reference.json', reference)
         self.file = (self.directory / 'samples.jsonl').open('x', encoding='utf-8')
@@ -145,13 +150,55 @@ class ReplayResult:
         self.last_stamp = stamp
         self.summary['sample_count'] += 1
 
+    def record_closure_cloud(self, stamp, point_count):
+        """閉じ込み用点群の更新を画像時刻で周回に照合する。1更新は1回の閉じ込みを意味しない。"""
+        if self.last_cloud_stamp is not None and stamp <= self.last_cloud_stamp:
+            return
+        bounds = self.progress.boundaries
+        if bounds and not bounds[0] <= stamp <= bounds[-1]:
+            return
+        pose = self.progress.trace.at(stamp)
+        if pose is None:
+            return
+        self.last_cloud_stamp = stamp
+        cloud = self.summary['loop_closure_cloud']
+        cloud['updates'] += 1
+        if not point_count:
+            return
+        row = self.progress.point(stamp, pose)
+        row.update(stamp_ns=str(stamp), point_count=point_count)
+        cloud['nonempty_updates'] += 1
+        cloud['last_nonempty'] = row
+        first = cloud['first_nonempty_by_lap']
+        if not first or first[-1]['lap'] != row['lap']:
+            first.append(row)
+            return row
+
+    def closure_report(self):
+        cloud = self.summary['loop_closure_cloud']
+        lines = [f"ループ閉じ込み用点群（GT走行区間内）: 非空 {cloud['nonempty_updates']} / 受信 {cloud['updates']} 更新"]
+        graph = self.summary['loop_closure_graph']
+        if graph['status'] == 'cross_lap_cycle':
+            edge = graph['example']
+            lines.append(f"周回間の閉路を姿勢グラフで確認: {edge['from_lap']} 周目 {edge['from_station_m']:.1f} m と "
+                         f"{edge['to_lap']} 周目 {edge['to_station_m']:.1f} m を結ぶ辺（GT上の距離 "
+                         f"{edge['gt_separation_m']:.2f} m）")
+        elif graph['status'] == 'no_lap_comparison':
+            lines.append('姿勢グラフの周回間照合には2周以上のGTが必要です。')
+        else:
+            reason = graph.get('reason', '照合できたグラフに周回間の閉路がありません' if
+                               graph['status'] == 'not_observed' else '再生末尾のグラフ検査を実行していません')
+            lines.append(f"姿勢グラフの周回間閉路は未確認（{reason}）")
+        return '\n'.join(lines)
+
     def checkpoint(self, *, force=False):
         now = time.monotonic()
-        if force or (now >= self.next_checkpoint and self.committed != self.summary['sample_count']):
+        counts = self.summary['sample_count'], self.summary['loop_closure_cloud']['updates']
+        if force or (now >= self.next_checkpoint and self.committed != counts):
             self.file.flush()
             _write_json(self.directory / 'summary.json', self.summary)
             self.next_checkpoint = now + 1.
-            self.committed = self.summary['sample_count']
+            self.committed = counts
 
     def mark_eof(self):
         self.summary.update(status='complete', reason=None)

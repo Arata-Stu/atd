@@ -57,7 +57,7 @@ class AtdMenuTests(unittest.TestCase):
         for filename in ('build', 'dev', 'setup', 'webui', 'gazebo', 'replay', 'bluetooth', 'hotspot',
                          'bringup', 'vgl', 'jetson_display_mode', 'jetson_max_performance'):
             wrapper = self.scripts / (filename + '.sh')
-            list_stub = 'if [[ "$1" = list ]]; then printf "monza\\nspa\\n"; exit; fi\n' if filename == 'gazebo' else ''
+            list_stub = 'if [[ "$1" = list ]]; then printf "monza\\nodaiba\\nspa\\n"; exit; fi\n' if filename == 'gazebo' else ''
             wrapper.write_text('#!/bin/bash\n' + list_stub +
                                'printf "%s\\0" "${0##*/}" "$@" >> "$MENU_TEST_CALLS"\n'
                                'exit "${MENU_TEST_RC:-0}"\n')
@@ -168,6 +168,9 @@ exit 130
             self.menu('gazebo', picks=[mode, 'spa', '848x480', '60', '200'], keys=b'1.75\n3\n')
             self.assert_call('gazebo.sh', mode, '--route', 'lap', '--circuit', 'spa',
                              '--speed', '1.75', '--laps', '3', '--resolution', '848x480', '--camera-hz', '60', '--imu', '200')
+        self.menu('gazebo', picks=['bag', 'odaiba', '1280x720', '30', 'off'], keys=b'5\n2\n')
+        self.assert_call('gazebo.sh', 'bag', '--route', 'lap', '--circuit', 'odaiba', '--speed', '5',
+                         '--laps', '2', '--resolution', '1280x720', '--camera-hz', '30', '--imu', 'off')
         self.menu('gazebo', picks=['video', 'monza', 'lap', '640x480', '90', 'off'], keys=b'\n\n')
         self.assert_call('gazebo.sh', 'video', '--route', 'lap', '--circuit', 'monza',
                          '--resolution', '640x480', '--camera-hz', '90', '--imu', 'off')

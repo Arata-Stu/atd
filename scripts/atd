@@ -45,7 +45,7 @@ elif [[ "$location" = ホスト || "$(uname -m)" = x86_64 ]]; then
         add_command bringup bringup.sh 'Gazebo の時計とステレオ画像で Visual Odometry を起動'
         add_command replay replay.sh 'ステレオ rosbag を再生し cuVSLAM を RViz で表示'
         if [[ "$location" = ホスト ]]; then
-            add_command gazebo gazebo.sh 'F1 コースの周回・rosbag 記録・ステレオ動画・受信計測'
+            add_command gazebo gazebo.sh 'サーキットの周回・rosbag 記録・ステレオ動画・受信計測'
         fi
     fi
 fi
@@ -145,7 +145,11 @@ gazebo_from_menu() {
     catalog="$("$@" list)" || return
     local -a options=(monza 'Monza')
     while IFS= read -r circuit; do
-        if [[ -n "$circuit" && "$circuit" != monza ]]; then options+=("$circuit" 'GP コース'); fi
+        case "$circuit" in
+            ''|monza) ;;
+            odaiba) options+=("$circuit" 'お台場・シティサーキット東京ベイ（1/5）') ;;
+            *) options+=("$circuit" 'GP コース') ;;
+        esac
     done <<< "$catalog"
     circuit="$(choose "$title / コース" "${options[@]}" back '前のメニューへ')" || return 0
     [[ "$circuit" != back ]] || return 0

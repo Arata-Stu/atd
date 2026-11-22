@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from atd_bringup.replay_inputs import (
-    GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, SLAM_ODOMETRY, STEREO_WORKFLOW,
+    GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, LOOP_CLOSURE_CLOUD, SLAM_ODOMETRY, STEREO_WORKFLOW,
 )
 from atd_bringup.replay_readiness import _missing_endpoints, wait_and_resume
 
@@ -162,6 +162,7 @@ class GateTests(unittest.TestCase):
         ])
         self.subs['/clock'].append(endpoint(overlay, 'rosgraph_msgs/msg/Clock'))
         self.subs[SLAM_ODOMETRY].append(endpoint(overlay, 'nav_msgs/msg/Odometry'))
+        self.assertNotIn(LOOP_CLOSURE_CLOUD, self.pubs)
         wait_and_resume(self.node, self.player, rviz_name=None, ground_truth=True)
         self.resume.call_async.assert_called_once()
 

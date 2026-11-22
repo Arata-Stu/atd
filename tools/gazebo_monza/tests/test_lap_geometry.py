@@ -104,8 +104,9 @@ class LapGeometryTests(unittest.TestCase):
                 continue  # Independent boundary rings, covered above.
             with self.subTest(circuit=circuit):
                 edges, poses, _ = load_lap(circuit)
-                course, = [f for f in track_data(circuit)["features"] if f["properties"]["kind"] == "course"]
-                width = course["properties"]["width_m"] * SCALE
+                data = track_data(circuit)
+                course, = [f for f in data["features"] if f["properties"]["kind"] == "course"]
+                width = course["properties"]["width_m"] * data.get("horizontal_scale", SCALE)
                 left, right = edges["left"], edges["right"]
                 for i, (a, b) in enumerate(zip(left, right)):
                     j = (i + 1) % len(left)

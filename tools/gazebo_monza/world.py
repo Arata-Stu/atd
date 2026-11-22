@@ -1,4 +1,4 @@
-"""Generate a 1:10 circuit and its stereo camera route from local map data."""
+"""Generate a scaled circuit and its stereo camera route from local map data."""
 
 import argparse
 from hashlib import sha256
@@ -16,6 +16,7 @@ import monza_ascari
 import monza_lesmo
 import monza_start_grid
 import monza_trackside
+import odaiba_scenery
 import scenery
 from rig_imu import GRAVITY_M_S2
 from sensor_profile import CAMERA_RATES, DEFAULT_CAMERA_HZ, IMU_FRAME, IMU_MODES, IMU_TOPIC, RESOLUTIONS, imu_streams
@@ -144,18 +145,39 @@ def alternate_pavement(points, width):
         yield [a, b, d, c]
 
 
-def track(world, output, source, lap, circuit, data, kerb_intervals, far):
-    _, link = model(world, "circuit")
-    # Keep the ground in view even on the most distant part of the full lap.
+def road_ribbon(edges):
+    """Join left/right edges sampled at the same centreline stations."""
+    left, right = edges["left"], edges["right"]
+    for i, (a, b) in enumerate(zip(left, right)):
+        j = (i + 1) % len(left)
+        yield [(*a, 0), (*b, 0), (*right[j], 0), (*left[j], 0)]
+
+
+def ground_extent(source, lap, margin):
     if lap:
         xs, ys = zip(*(source["left"] + source["right"]))
-        # At an oblique heading, the corner of the front clipping plane extends farther than its centre.
-        margin = far / cos(HFOV/2) + FORWARD_M + BASELINE_M/2 if circuit == "monza" else far
         west, east = min(xs)-margin, max(xs)+margin
         south, north = min(ys)-margin, max(ys)+margin
     else:
         west, east, south, north = -65, 65, -65, 65
-    grass = [(x, y, -.004) for x, y in ((west, south), (east, south), (east, north), (west, north))]
+    return [(x, y, -.004) for x, y in ((west, south), (east, south), (east, north), (west, north))]
+
+
+def odaiba_track(world, output, source, project, far):
+    _, link = model(world, "circuit")
+    # The facility is paved across the infield and the open pit bays.
+    ground = ground_extent(source, True, far / cos(HFOV/2) + FORWARD_M + BASELINE_M/2)
+    surface(link, output, "apron", [ground], (.8, .8, .8), 2.4, texture_name="monza_asphalt.jpg")
+    surface(link, output, "floor", road_ribbon(source), (1, 1, 1), 2.4, texture_name="monza_asphalt.jpg")
+    for name, color, faces in odaiba_scenery.geometry(source, project):
+        surface(link, output, name, faces, color, face_up=False)
+
+
+def track(world, output, source, lap, circuit, data, kerb_intervals, far):
+    _, link = model(world, "circuit")
+    # At an oblique heading, the corner of the front clipping plane extends farther than its centre.
+    margin = far / cos(HFOV/2) + FORWARD_M + BASELINE_M/2 if circuit == "monza" else far
+    grass = ground_extent(source, lap, margin)
     if circuit in ("sakhir", "yasmarina"):
         surface(link, output, "dry_ground", [grass], (.62, .53, .38))
     else:
@@ -187,9 +209,7 @@ def track(world, output, source, lap, circuit, data, kerb_intervals, far):
     if circuit == "monza":
         road = pavement(left, right)
     else:
-        # Each edge pair came from the same centreline station.
-        road = [[(*a, 0), (*b, 0), (*c, 0), (*d, 0)]
-                for a, b, c, d in zip(left, right, right[1:] + right[:1], left[1:] + left[:1])]
+        road = road_ribbon(source)
     surface(link, output, "floor", road, (1, 1, 1), asphalt_span, texture_name=asphalt_texture)
     paint = []
     pit_straight = monza_start_grid.PitStraight(source) if circuit == "monza" and lap else None
@@ -380,8 +400,9 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                                          "Junior circuit merge width"])
     else:
         source, points, project = circuits.load_lap(circuit)
-        kerbs = circuits.estimated_kerbs(source, points)
-        data = scenery.Features([circuits.ROOT / circuit / "scenery.geojson"], project)
+        if circuit != "odaiba":
+            kerbs = circuits.estimated_kerbs(source, points)
+            data = scenery.Features([circuits.ROOT / circuit / "scenery.geojson"], project)
         geography = circuits.metadata(circuit)
     length = points[-1][0]
     travel_seconds, speed_mps = circuits.route_timing(circuit, route, length, travel_seconds, speed_mps)
@@ -394,10 +415,11 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     focal = width / (2 * tan(HFOV/2))
     scene = {
         "course": circuit, "environment": "outdoor_circuit",
-        "scenery": ("monza_gp_osm" if lap else "monza_prima_variante_osm") if circuit == "monza" else circuit + "_gp",
+        "scenery": {"monza": "monza_gp_osm" if lap else "monza_prima_variante_osm",
+                    "odaiba": "odaiba_sky_track"}.get(circuit, circuit + "_gp"),
         "geography": geography,
         "trajectory": {"route": route, "wait_for_capture": wait_for_capture, "physics_step_s": physics_step_s,
-                       "reference": "Motorcar course, rear axle in local east/north map, metres and radians",
+                       "reference": "Rear axle in local map, metres and radians; axes in geography.axes",
                        "samples_s_x_y_yaw": points, "end_s_m": length, "speed_mps": speed_mps,
                        "travel_seconds": travel_seconds, "repeat": repeat,
                        "laps": None if repeat else laps,
@@ -442,7 +464,10 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     field(light, "intensity", 1.25)
     field(light, "specular", "0.20 0.20 0.19 1")
     field(light, "direction", "0.42 -0.52 -0.74")
-    track(world, output, source, lap, circuit, data, kerbs, far)
+    if circuit == "odaiba":
+        odaiba_track(world, output, source, project, far)
+    else:
+        track(world, output, source, lap, circuit, data, kerbs, far)
     rig, link = model(world, "d455_rig", fixed=False)
     _, x, y, yaw = points[0]
     field(rig, "pose", vector(x, y, 0, 0, 0, yaw))

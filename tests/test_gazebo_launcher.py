@@ -140,10 +140,10 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
 
     def test_all_circuits_can_be_selected_from_the_host(self):
         command = ["bash", str(ROOT / "scripts/gazebo.sh")]
-        expected = sorted(p.name for p in (ROOT / "samples/f1tenth/maps").iterdir() if p.is_dir())
+        gp_circuits = [p.name for p in (ROOT / "samples/f1tenth/maps").iterdir() if p.is_dir()]
+        expected = sorted([*gp_circuits, "odaiba"])
         listed = subprocess.check_output([*command, "list"], text=True).splitlines()
         self.assertEqual(listed, expected)
-        self.assertEqual(len(listed), 20)
         for circuit in listed:
             out = subprocess.check_output([*command, "video", "--dry-run", "--circuit", circuit], text=True)
             self.assertIn(f"--circuit {circuit}", out)

@@ -43,6 +43,20 @@ class ReplayResultTests(unittest.TestCase):
                               ('lateral_m', -.4), ('heading_deg', 2.)):
             self.assertAlmostEqual(row[key], expected, places=10)
 
+    def test_closure_cloud_uses_source_time_and_reports_only_observed_landmarks(self):
+        with self.run_writer() as run:
+            for stamp, count in [(-1, 100), (50_000_000, 0), (60_000_000, 5), (60_000_000, 5),
+                                 (80_000_000, 9), (1_500_000_000, 2), (2_000_000_001, 100)]:
+                run.record_closure_cloud(stamp, count)
+            run.checkpoint(force=True)
+            summary = json.loads((run.directory / 'summary.json').read_text())['loop_closure_cloud']
+            self.assertEqual((summary['updates'], summary['nonempty_updates']), (4, 3))
+            first, second = summary['first_nonempty_by_lap']
+            self.assertEqual((first['lap'], first['point_count'], first['stamp_ns']), (1, 5, '60000000'))
+            self.assertEqual((second['lap'], second['station_m'], second['point_count']), (2, 2., 2))
+            self.assertEqual(summary['last_nonempty'], second)
+            self.assertIn('閉路は未確認', run.closure_report())
+
     def test_station_from_measured_distance_through_lap_boundary(self):
         route = CourseProgress(self.trace, self.course)
         for stamp, expected in [(0, (1, 0., 0.)), (750_000_000, (1, 3., 3.)),

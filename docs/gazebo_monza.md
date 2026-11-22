@@ -1,6 +1,6 @@
 # Monza の D455 ステレオ試作
 
-全20コースの一覧と出典は[F1サーキットの周回ガイド](gazebo_circuits.md)にあります。Notebook ホストで `atd gazebo list` を実行するとコースIDを確認できます。例として `atd gazebo video --circuit spa` はスパを1周して左右の車載動画を保存します。
+お台場（1/5）と F1 開催20会場（1/10）の一覧と出典は[サーキットの周回ガイド](gazebo_circuits.md)にあります。Notebook ホストで `atd gazebo list` を実行するとコースIDを確認できます。例として `atd gazebo video --circuit spa` はスパを1周して左右の車載動画を保存します。
 
 モンツァの GP コースを周回する `lap` と、第1シケインを試す `chicane` を選べる。動画の既定は第1シケイン。地図作成用の `bag` は既定で GP コースを1周し、`--laps` で周回数を変更できる。
 

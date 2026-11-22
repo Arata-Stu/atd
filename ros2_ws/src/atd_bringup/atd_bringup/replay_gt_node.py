@@ -5,11 +5,17 @@ from bisect import bisect_right
 from contextlib import contextmanager
 import math
 import sys
+from typing import NamedTuple, Callable
 
 from atd_mapping.frames import stamp_ns
 
 from .replay_gt_geometry import Alignment, Trace
 from .replay_result import ReplayRewound
+
+
+class ReplayObserver(NamedTuple):
+    spin_once: Callable
+    inspect_loop_graph: Callable
 
 
 class GroundTruthPath:
@@ -32,7 +38,8 @@ class GroundTruthPath:
     def set_clock(self, stamp_ns):
         rewind = self.clock_ns is not None and stamp_ns < self.clock_ns
         if rewind:
-            if self.result is not None and self.result.last_stamp is not None:
+            if self.result is not None and (self.result.last_stamp is not None
+                                            or self.result.last_cloud_stamp is not None):
                 raise ReplayRewound('再生時計が戻ったため、直前までの比較結果を保存しました')
             self._reset()
         self.clock_ns = stamp_ns
@@ -103,9 +110,12 @@ def ground_truth_viewer(trace, result=None, *, visualize=True):
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from rosgraph_msgs.msg import Clock
+    from sensor_msgs.msg import PointCloud2
     from visualization_msgs.msg import Marker
 
-    from .replay_inputs import GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, SLAM_ODOMETRY
+    from .replay_inputs import (
+        GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, LOOP_CLOSURE_CLOUD, SLAM_ODOMETRY,
+    )
 
     def set_header(header, stamp):
         header.frame_id = 'map'
@@ -185,12 +195,38 @@ def ground_truth_viewer(trace, result=None, *, visualize=True):
         # RViz 用の長い Path の送信中も小さい姿勢メッセージをキューに残す。
         node.create_subscription(Odometry, SLAM_ODOMETRY, on_odometry,
                                  QoSProfile(depth=256, reliability=ReliabilityPolicy.BEST_EFFORT))
+        loop_graph = None
+        if result is not None:
+            def on_closure_cloud(msg):
+                if msg.header.frame_id != 'map':
+                    return
+                first = result.record_closure_cloud(stamp_ns(msg.header.stamp), msg.width * msg.height)
+                if first is not None:
+                    station = (f"{first['lap']} 周目 {first['station_m']:.1f} m" if first['lap'] is not None
+                               else f"累積 {first['distance_m']:.1f} m")
+                    node.get_logger().info(f"ループ閉じ込み用点群を観測: {station}、{first['point_count']} 点")
+
+            node.create_subscription(PointCloud2, LOOP_CLOSURE_CLOUD, on_closure_cloud,
+                                     QoSProfile(depth=8, reliability=ReliabilityPolicy.BEST_EFFORT))
+            if len(result.progress.boundaries) >= 3:
+                from .replay_loop_graph import ReplayLoopGraph
+                loop_graph = ReplayLoopGraph(node, result.progress,
+                                            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+
+        def inspect_loop_graph():
+            if loop_graph is not None:
+                try:
+                    result.summary['loop_closure_graph'] = loop_graph.finish(executor.spin_once)
+                # optional な診断でサービスや middleware が失敗しても、収集済みの比較結果を確定する。
+                except Exception as exc:
+                    result.summary['loop_closure_graph'] = dict(status='unavailable', reason=str(exc))
+
         node.create_subscription(Clock, '/clock', on_clock, QoSProfile(
             depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         # 一時停止や EOF 後にも、最後に受信した時計までの描画を反映する。
         node.create_timer(0.2, on_timer, clock=WallClock(clock_type=ClockType.STEADY_TIME))
         executor.add_node(node)
-        yield executor.spin_once
+        yield ReplayObserver(executor.spin_once, inspect_loop_graph)
     finally:
         executor.shutdown()
         node.destroy_node()
@@ -201,9 +237,9 @@ def _run(trace):
     from rclpy.executors import ExternalShutdownException
     rclpy.init(args=[])
     try:
-        with ground_truth_viewer(trace) as spin:
+        with ground_truth_viewer(trace) as observer:
             while rclpy.ok():
-                spin(timeout_sec=0.2)
+                observer.spin_once(timeout_sec=0.2)
     except (ExternalShutdownException, KeyboardInterrupt):
         pass
     finally:

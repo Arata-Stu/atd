@@ -219,6 +219,22 @@ class MonzaWorldTest(unittest.TestCase):
             self.assertAlmostEqual(route["total_travel_seconds"], 3 * length / 3.5)
             self.assertEqual(samples[0][1:], samples[-1][1:])
 
+    def test_odaiba_two_lap_bag_scene(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scene = world.build(tmp, circuit="odaiba", speed_mps=5, laps=2, resolution="1280x720",
+                                camera_hz=30, record_ground_truth=True, wait_for_capture=True)
+            self.assertEqual(scene["geography"]["horizontal_scale"], .2)
+            self.assertNotIn("origin_lon_lat_deg", scene["geography"])
+            route = scene["trajectory"]
+            self.assertAlmostEqual(route["end_s_m"], 80, delta=.5)
+            self.assertEqual(route["total_travel_seconds"], 2 * route["end_s_m"] / 5)
+            self.assertTrue(route["wait_for_capture"])
+            self.assertLessEqual(route["trace_interval_s"], .05)
+            self.assertEqual(route["samples_s_x_y_yaw"][0][1:], route["samples_s_x_y_yaw"][-1][1:])
+            sdf = ET.parse(Path(tmp) / "world.sdf")
+            for name in ("odaiba_pit_columns", "odaiba_terrace_deck", "odaiba_grid_paint"):
+                self.assertIsNotNone(sdf.find(f".//visual[@name='{name}']"))
+
     def test_invalid_motion_settings_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "scene"

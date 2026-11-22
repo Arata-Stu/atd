@@ -1,10 +1,37 @@
-# Gazebo ステレオ走行の全20コース
+# Gazebo ステレオ走行のコース
 
-Notebook ホストの `atd gazebo` から、F1TENTH の [2D ベンチマーク](../samples/f1tenth/README.md) に採用した20会場の全周を選べる。Gazebo の走路は各サーキットの地理座標を水平 1/10 にしたもの。カメラ台が指定の軌跡をたどるため、同じコース、同じ発着位置で D455 相当のステレオ画像を繰り返し取得できる。
+Notebook ホストの `atd gazebo` から、お台場のカートコース（1/5）と F1 開催20会場の GP コース（1/10）を選べる。カメラ台が同じ発着位置から周回し、D455 相当のステレオ画像と走行軌跡を取得できる。GP の20会場は F1TENTH の [2D ベンチマーク](../samples/f1tenth/README.md) でも使える。
 
 ![地面から12 cmのカメラで見た20会場の周回風景](images/gazebo-circuits.jpg)
 
 各コマは Gazebo で左眼と同じ位置から撮影したカラー参考画像。VO にはモノクロの左右画像を使う。地理データは © OpenStreetMap contributors および Tomislav Bacinger。[沿道の地物・ライセンス](../tools/gazebo_monza/reference/scenery-sources.md)・[走路データの出典](../tools/gazebo_monza/reference/track-sources.md)
+
+## お台場を2周して再訪時の追跡を確認する
+
+`odaiba` はシティサーキット東京ベイの屋外 SKY TRACK。施設の走行ガイドから計時線・走行方向・中心線を読み取り、公称400 mを基準に1/5とした。代表幅は図から推定した1.4 m、平滑化したカメラ台の経路は1周79.66 m。5 m/sでは2周31.86シミュレーション秒、1280×720・30 Hzの左右生画像は走行区間で約1.76 GBになる。[公式走行ガイド](https://city-circuit.com/beginners/)・[屋外コースの公称距離](https://city-circuit.com/private/)
+
+ピット・テラス・ブリーフィングルームの位置は2025年12月の大会施設図を走行ガイドに合わせた。屋根の開口と柱、デッキの手すり、青白の低いバリアは施設写真を参考にした。建物の高さ・奥行き・支柱間隔は描画用の概算で、カメラは既存のRC車載設定（光学中心高12 cm、左右基線9.5 cm）を使う。[大会施設図](https://kart-ev-div.city-kart.jp/wp-content/uploads/2025/12/b93fd2f6f6482e8449159fbfb90ace03.pdf)・[屋外コースの写真](https://city-circuit.com/wp-content/themes/city-circuit/assets/img/home/facility01-1.jpg)・[テラスの写真](https://city-circuit.com/wp-content/themes/city-circuit/assets/img/home/facility05.jpg)
+
+![左・右の光学中心から見たピットとテラス。生成したSDFをVTKで描画した形状プレビュー](images/gazebo-odaiba.jpg)
+
+準備済みの Ubuntu Notebook ホストで記録する。メニューからは `atd gazebo` → `bag` → `odaiba` を選ぶ。
+
+```bash
+atd gazebo bag --course odaiba --speed 5 --laps 2 --resolution 1280x720 --camera-hz 30 --imu off
+```
+
+Notebook の Isaac ROS 開発コンテナで、次を実行する。ビルドは今回の変更を取り込んだときに一度行う。bag の選択画面では `gazebo-odaiba` で絞り込み、先ほどの記録を選ぶ。
+
+```bash
+atd build --packages-up-to atd_bringup
+atd replay --tracking vo
+```
+
+2周目のピット前で RViz の青い Gazebo 正解軌跡と橙の SLAM 推定軌跡を見比べる。ピンクの `Loop closure landmarks` は cuVSLAM が閉じ込み処理に使う点群。各周で最初に非空点群を観測した地点が端末に出る。[cuVSLAM の ROS 出力](https://nvidia-isaac-ros.github.io/v/release-5.0/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_cuvslam/index.html)
+
+bag の末尾で、同時刻の姿勢グラフの頂点・辺を、cuVSLAM の時刻付き姿勢と照合する。半周以上離れた別の周の姿勢を直接結ぶ辺があり、短い時間間隔の辺をたどっても両端がつながると、端末に「周回間の閉路を姿勢グラフで確認」と出る。表示された周回内距離と GT 上の隔たりから、コースのどの場所同士が結ばれたかを確認できる。よく似た隣のレーンを誤って結ぶ場合もあるため、青・橙の軌跡と合わせて読む。
+
+端末に出る結果ディレクトリの `summary.json` に判定を保存する。`loop_closure_graph.status` は、閉路を確認した場合が `cross_lap_cycle`、照合できた範囲で見つからなかった場合が `not_observed`、データ不足などで照合できなかった場合が `unavailable`。点群の更新数と初出地点は `loop_closure_cloud` に保存する。[姿勢グラフの配信実装](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_visual_slam/blob/release-5.0/isaac_ros_cuvslam/src/impl/posegraph_vis_helper.cpp)・[時刻付き姿勢の取得実装](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_visual_slam/blob/release-5.0/isaac_ros_cuvslam/src/visual_slam_node.cpp)
 
 ## 実行方法
 
@@ -22,7 +49,7 @@ Monza の例は 1/10 コース上の **2.5 m/s（シミュレーション時刻�
 
 | 引数 | 指定方法と既定の動作 |
 |---|---|
-| `--course ID` | `atd gazebo list` に表示される20コースから選ぶ。既定は `monza`。既存の `--circuit ID` も使える。 |
+| `--course ID` | `atd gazebo list` の一覧から選ぶ。既定は `monza`。`--circuit ID` も使える。 |
 | `--speed m/s` | カメラ台が走行軌跡に沿って進む速さ。省略時は従来のコース別設定を使う。Monza 全周の既定は1周240シミュレーション秒、約2.41 m/s。 |
 | `--laps N` | 正の整数。指定すると Monza でも自動で全周を選ぶ。動画・bag・地図は最終周のゴールで完了する。全周の `serve` は省略すると連続周回、指定するとその周回数で配信を終了する。 |
 | `--resolution WxH` | 片眼あたり `424x240`、`640x480`（既定）、`848x480`、`1280x720`。 |
@@ -137,6 +164,7 @@ macOS のネイティブ Gazebo Jetty 10.7／OGRE 2 で、追加19コースを�
 | `montreal` | ノートルダム島の本線。水際、林、ピット棟。 | 4.361 | 436.11 | [2019 カナダ GP](https://www.formula1.com/en/racing/2019/canada) | [OSM](https://www.openstreetmap.org/relation/284595/history/19) |
 | `monza` | 両側の走路境界あり。第1シケインは区間指定も可能。 | 5.793 | 579.20 | [Monza GP](https://www.monzanet.it/en/circuit/) | [OSM・両境界](../tools/gazebo_monza/reference/README.md#走路の根拠) |
 | `nuerburgring` | GP ロングのタイトな最終シケイン。Nordschleife は対象外。 | 5.148 | 513.39 | [2020 アイフェル GP](https://www.fia.com/sites/default/files/2020_eifel_grand_prix_preview.pdf) | [OSM](https://www.openstreetmap.org/relation/38567/history/35) |
+| `odaiba` | SKY TRACK。ピット・テラスがある屋外カートコース、縮尺1/5。 | 0.400 | 79.66 | [公式案内](https://city-circuit.com/beginners/) | [施設図から復元した中心線](../tools/gazebo_monza/reference/circuits/odaiba/track.json) |
 | `sakhir` | 通常の GP 本線。砂地と Batelco 観客席。 | 5.412 | 541.02 | [2019 バーレーン GP](https://www.formula1.com/en/racing/2019/bahrain) | [OSM](https://www.openstreetmap.org/relation/284538/history/16) |
 | `saopaulo` | 反時計回り。Senna S とインフィールドを通る。 | 4.309 | 429.92 | [2019 ブラジル GP](https://www.formula1.com/en/racing/2019/brazil) | [OSM](https://www.openstreetmap.org/relation/6781071/history/6) |
 | `sepang` | 平行する2本のストレート、観客席、ピット棟。 | 5.543 | 553.89 | [2017 マレーシア GP](https://www.fia.com/sites/default/files/2017_malaysian_preview_1.pdf) | [OSM](https://www.openstreetmap.org/relation/284496/history/5) |

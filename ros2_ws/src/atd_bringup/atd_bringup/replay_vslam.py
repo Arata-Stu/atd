@@ -59,7 +59,8 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                           '-p', 'use_sim_time:=true', '-r', '__node:=rviz2'])
         spin_overlay = None
         if ground_truth is not None:
-            spin_overlay = children.enter_context(ground_truth_viewer(ground_truth, result, visualize=rviz is not None))
+            observer = children.enter_context(ground_truth_viewer(ground_truth, result, visualize=rviz is not None))
+            spin_overlay = observer.spin_once
         player_name = f'atd_replay_player_{os.getpid()}'
         player = start(['ros2', 'bag', 'play', str(bag), '--start-paused', '--disable-keyboard-controls',
                         '--clock', '--rate', str(rate), '--qos-profile-overrides-path', str(qos),
@@ -106,13 +107,15 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                                 deadline = time.monotonic() + 2.
                         if stamp is None:
                             raise RuntimeError('GT と時刻を照合できた cuVSLAM の推定姿勢が 0 件です')
+                    finished = True
+                    if result is not None:
+                        observer.inspect_loop_graph()
                         result.mark_eof()
+                        print(result.closure_report(), flush=True)
+                    if rviz is None:
                         print(f'bag の末尾に到達しました。比較結果を保存しました: {result.directory}', flush=True)
                         return
                     print('bag の末尾に到達しました。RViz で最終表示を確認できます。', flush=True)
-                    finished = True
-                    if result is not None:
-                        result.mark_eof()
                 check_viewer()
                 if spin_overlay is None:
                     time.sleep(.15)

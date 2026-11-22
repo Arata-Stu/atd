@@ -21,6 +21,7 @@ Linux Notebook の Isaac ROS コンテナで cuVSLAM と RViz を起動し、ros
 BAG を省略すると対話端末で記録を選べます。直接指定する場合はコンテナ内の bag パスを使います。
 Gazebo の正解軌跡がある記録では、青の正解と橙の cuVSLAM 推定を RViz に重ねます。
 画像時刻ごとの誤差は /data/results/runs/replay/ に保存し、Notebook UI の「VSLAM 軌跡誤差」で確認できます。
+正解軌跡が2周以上ある周回記録では、再生末尾に cuVSLAM の姿勢グラフで周回間の閉路を照合します。
 --rate 0.5 は半速再生、--dry-run は起動コマンドの表示です。
 --tracking vio は左右画像と /camera/camera/imu を使用します。既定の vo はステレオ画像で追跡します。
 --headless は RViz を開かずに Gazebo の正解軌跡との誤差を保存し、再生の末尾で終了します。

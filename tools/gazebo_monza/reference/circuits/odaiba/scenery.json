@@ -1,0 +1,39 @@
+{
+  "attribution": "CITY CIRCUIT TOKYO BAY 公式施設案内・走行ガイド、2025 AUTOBACS 全日本カート選手権 EV部門 第7/8戦 公式通知 No.5",
+  "sources": {
+    "site_plan": "https://kart-ev-div.city-kart.jp/wp-content/uploads/2025/12/b93fd2f6f6482e8449159fbfb90ace03.pdf",
+    "pit_and_grid": "https://city-circuit.com/beginners/",
+    "trackside_appearance": "https://city-circuit.com/wp-content/themes/city-circuit/assets/img/home/facility01-1.jpg",
+    "terrace": "https://city-circuit.com/wp-content/themes/city-circuit/assets/img/home/facility05.jpg",
+    "building_uses": "https://city-circuit.com/"
+  },
+  "placement": "2025-12-21の施設図のピット側の建屋、斜辺のVIPルーム・テラス、ブリーフィングルームを、走行ガイドと共通の計時線とコース外周で位置合わせした概略値。各施設の前面の両端を走行ガイドの局所座標（実寸換算m）で示す。奥行き方向は前面の始点→終点の左。",
+  "modelled": [
+    "建物の平面位置と奥行きは施設図から読み取った概略値",
+    "建物・バリアの高さや厚み、屋根勾配、開口と柱の間隔、デッキの家具は施設写真に基づく推定",
+    "走路の縁に沿う個々の青白パネルとピット開口幅、グリッドと駐車枠の細部はモデル寸法",
+    "北ゲートは施設図の位置を参照。金属柵の長さ、タイヤや照明柱の個別位置・個数は屋外コース写真の外観を基にした概略配置"
+  ],
+  "facilities": {
+    "pit": {"front_m": [[32.2,61.3],[32.2,30.6]], "depth_m": 52.2, "height_m": 5.8},
+    "terrace": {"front_m": [[50.0,10.6],[32.9,-5.6]], "depth_m": 4.2, "height_m": 2.8},
+    "briefing": {"front_m": [[81.9,19.3],[61.5,19.3]], "depth_m": 4.7, "height_m": 3.0}
+  },
+  "pit_lane": {
+    "entry_m": [26.0,60.4],
+    "exit_m": [42.0,13.5],
+    "bay_columns_m": [33.2,36.8,40.3],
+    "bay_y_range_m": [32.3,53.2]
+  },
+  "north_gate_fence_m": [
+    [[-46.0,-2.0],[-46.0,5.5]],
+    [[-46.0,10.0],[-46.0,32.0]]
+  ],
+  "lighting_masts_m": [[0.0,5.6],[20.2,69.0]],
+  "tyre_rows_m": [
+    [[-18.4,5.9],[-15.7,5.9]],
+    [[2.3,5.5],[5.5,5.5]],
+    [[11.7,53.8],[15.1,53.8]],
+    [[-13.3,47.7],[-13.3,50.2]]
+  ]
+}

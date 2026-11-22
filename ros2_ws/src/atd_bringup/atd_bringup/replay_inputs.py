@@ -25,6 +25,7 @@ STEREO_WORKFLOW = {
 STEREO_TOPICS = tuple(STEREO_WORKFLOW.values())
 IMU_TOPIC = '/camera/camera/imu'
 SLAM_ODOMETRY = '/visual_slam/vis/slam_odometry'
+LOOP_CLOSURE_CLOUD = '/visual_slam/vis/loop_closure_cloud'
 GROUND_TRUTH_PATH = '/atd/replay/ground_truth_path'
 GROUND_TRUTH_ERROR = '/atd/replay/position_error'
 GROUND_TRUTH_NODE = 'atd_replay_ground_truth'

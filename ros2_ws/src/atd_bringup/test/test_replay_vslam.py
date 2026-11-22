@@ -76,7 +76,8 @@ class ReplaySessionTests(unittest.TestCase):
 
     def test_gazebo_replay_starts_overlay_before_resume_and_keeps_it_after_eof(self):
         trace, result, spin = Mock(), Mock(), Mock()
-        overlay = self.stack.enter_context(patch.object(replay, 'ground_truth_viewer', return_value=nullcontext(spin)))
+        observer = Mock(spin_once=spin)
+        overlay = self.stack.enter_context(patch.object(replay, 'ground_truth_viewer', return_value=nullcontext(observer)))
 
         def resume(node, *, player_name, check_running, ground_truth, vio, rviz_name):
             check_running()
@@ -95,6 +96,7 @@ class ReplaySessionTests(unittest.TestCase):
         with patch.object(replay.time, 'monotonic', side_effect=[1., 1.2, 2.]):
             self.session(trace, result)
         self.assertEqual(spin.call_count, 2)
+        observer.inspect_loop_graph.assert_called_once_with()
         self.assertEqual([c.args[0] for c in self.stop.call_args_list],
                          [self.player, self.rviz, self.launch])
 
@@ -113,8 +115,9 @@ class ReplaySessionTests(unittest.TestCase):
             elif clock[0] >= 1.5:
                 result.last_stamp = 100
 
+        observer = Mock(spin_once=spin)
         with patch.object(replay.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(
-                replay, 'ground_truth_viewer', return_value=nullcontext(spin)) as overlay:
+                replay, 'ground_truth_viewer', return_value=nullcontext(observer)) as overlay:
             self.session(trace, result)
         self.assertEqual(result.last_stamp, 200)
         self.assertTrue(self.ready.call_args.kwargs['ground_truth'])
@@ -123,6 +126,7 @@ class ReplaySessionTests(unittest.TestCase):
         self.assertEqual([call.args[0][0] for call in self.spawn.call_args_list], ['ros2', 'ros2'])
         self.assertEqual([call.args[0] for call in self.stop.call_args_list], [self.player, self.launch])
         result.mark_eof.assert_called_once_with()
+        observer.inspect_loop_graph.assert_called_once_with()
 
     def test_headless_empty_comparison_is_a_failure(self):
         self.config = None

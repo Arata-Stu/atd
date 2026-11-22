@@ -23,6 +23,7 @@ class CommandPlant:
         self.reason = ""
         self.first_active_ns = None
         self.command_stamp_ns = None
+        self.command_applied_ns = None
 
     def stop(self, reason, *, before_start=False, wait_for_command=False):
         self.vehicle.steering_setpoint = 0.
@@ -51,6 +52,7 @@ class CommandPlant:
         if self.first_active_ns is None:
             self.first_active_ns = now_ns
         self.command_stamp_ns = stamp_ns
+        self.command_applied_ns = now_ns
         self.state, self.reason = "driving", ""
         self.vehicle.steering_setpoint = steering
         self.vehicle.throttle_setpoint = throttle
@@ -165,6 +167,7 @@ class ClosedLoopMotion:
         sample = dict(sim_time_s=seconds, x_m=pose.x(), y_m=pose.y(), yaw_rad=pose.yaw(),
                       speed_mps=v.speed, steering_rad=v.steering, throttle=v.throttle_setpoint,
                       requested_steering_rad=v.steering_setpoint, command_stamp_ns=plant.command_stamp_ns,
+                      command_applied_ns=plant.command_applied_ns,
                       first_active_ns=plant.first_active_ns, actuator_state=plant.state,
                       actuator_reason=plant.reason, control_state=self.control_state)
         with self.trace.open("a") as stream:

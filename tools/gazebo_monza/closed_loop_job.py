@@ -2,6 +2,7 @@
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shlex
@@ -208,7 +209,7 @@ def host(args):
         raise ValueError('Gazebo 起動コマンドを指定してください')
     launch = ['ros2', 'launch', 'atd_bringup', 'gazebo_closed_loop.launch.py',
               f'map_id:={args.map}', f'line:={args.line}', f'max_speed_mps:={args.speed}',
-              f'rviz:={str(args.rviz).lower()}']
+              f'rviz:={str(args.rviz).lower()}', f'run_dir:={remote}']
     if args.engine_dir:
         launch.append('engine_dir:=' + args.engine_dir)
     if args.min_lookahead is not None:
@@ -273,6 +274,15 @@ def main():
             print('\t'.join(choice))
         return 0
     if args.role == 'worker':
+        from ament_index_python.packages import PackageNotFoundError, get_package_prefix
+        message = 'Notebook の Isaac ROS コンテナ内で atd build --packages-up-to atd_bringup を実行してください'
+        try:
+            prefix = Path(get_package_prefix('atd_bringup'))
+        except PackageNotFoundError as error:
+            raise RuntimeError(message) from error
+        recorder = prefix / 'lib/atd_bringup/gazebo_closed_loop_log'
+        if not recorder.is_file() or not os.access(recorder, os.X_OK):
+            raise RuntimeError('解析ログ記録ノードが未ビルドです。' + message)
         return worker(args.output, args.command[1:], cancel_name='closed_loop.cancel')
     return host(args)
 

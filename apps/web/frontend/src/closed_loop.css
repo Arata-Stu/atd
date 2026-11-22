@@ -1,0 +1,32 @@
+.cl-page > .field { max-width: 68rem; margin: 0 0 12px; }
+.cl-page > .field select { width: 100%; min-width: 0; }
+.cl-summary, .cl-timebar, .cl-window, .cl-chart-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
+.cl-summary { color: #4d6658; font-size: 13px; }
+.cl-summary strong { color: #243c30; }
+.cl-summary p { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+.cl-warnings { margin: 8px 0; color: #79521f; font-size: 12px; }
+.cl-warnings summary { cursor: pointer; }
+.cl-warnings ul { padding-left: 20px; margin: 6px 0; }
+.cl-timebar { margin: 18px 0 12px; }
+.cl-window { gap: 4px; }
+.cl-window .button[aria-pressed=true] { background: #e0eee6; border-color: #7d9b8c; color: #23593e; }
+.cl-jump { color: #a73532; }
+.cl-course { position: sticky; top: 0; }
+.cl-legend .cl-reference::before { border-color: #577743; border-top-style: dotted; }
+.cl-legend .cl-wall::before { border-color: #8b9990; border-top-width: 2px; }
+.cl-toggle { display: flex; align-items: center; gap: 6px; margin: 8px 0; font-size: 12px; }
+.cl-toggle input { width: auto; accent-color: #236a55; }
+.cl-guide, .cl-missing { display: block; color: #54665b; font-size: 12px; line-height: 1.5; margin: 6px 0; }
+.cl-missing { background: #f2f5f1; border-radius: 4px; padding: 7px 10px; }
+.cl-state { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; margin-bottom: 12px; padding: 12px 0; border-block: 1px solid var(--line); font-size: 12px; }
+.cl-state dt { color: #52675b; }
+.cl-state dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.cl-chart { border-top: 1px solid var(--line); padding-top: 10px; }
+.cl-chart-legend { gap: 3px 14px; margin: 4px 0; font-size: 11px; color: #384d40; }
+.cl-chart-legend b, .cl-course output { font-variant-numeric: tabular-nums; }
+.cl-chart-legend i { display: inline-block; vertical-align: middle; width: 15px; border-top-width: 2px; margin-right: 4px; }
+.cl-chart svg { overflow: hidden; }
+.cl-chart .cl-guide { font-size: 11px; }
+@media (max-width: 1050px) {
+  .cl-course { position: static; }
+}

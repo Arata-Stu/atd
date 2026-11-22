@@ -109,3 +109,16 @@ atd gazebo closed-loop --course odaiba --map gazebo --line raceline --speed 1.5 
 自己位置と計画の更新が一時的に途切れると模擬車両はニュートラルで減速し、同じ追跡区間で新しい有効な組がそろうと走行を再開する。明示的な追跡喪失は試行の停止理由になる。車両は前進用の運動学的自転車モデルで、既定のスロットル FF 表と操舵・速度応答はシミュレーション用の設定値。
 
 端末に表示される `runs/gazebo/odaiba/<run-id>/` の `closed_loop.result.json` で完走周回数、周回タイム、境界への接触や停止理由を確認できる。`scene/rig_motion.jsonl` は Gazebo の車体姿勢と制御状態の時系列、`closed_loop.ros.log` は初期位置推定・追跡・制御のログ。初期化中に終了した場合は `closed_loop.host.json` にも理由が残る。
+
+### 走行後に接触直前を確認する
+
+Notebook の Web UI で「走行評価 → Gazebo 閉ループ」を開き、該当する Raceline の走行結果を選ぶ。境界に達した走行では接触直前のグラフとコース図を同じ時刻で確認できる。[Gazebo 閉ループの結果画面](http://127.0.0.1:8766/#closed-loop)
+
+- 推定の横ずれ・向きの誤差は、最初の対応する観測で座標系を合わせ、その後の画像時刻で GT と照合する。向きが先にずれたか、GT と推定が一緒にラインを外れたかを見比べる。発進時からある地図上の絶対位置誤差はこの照合には表れない。
+- 境界までの距離は GT に載せた車体外形から実際のコース境界まで測る。グラフは各観測時点の距離で、試行の接触判定には観測と観測の間を車体が通過した範囲も含む。操舵角は Gazebo の車両モデルが応答した角度を表示する。
+- 画像から制御指令までの経過はシミュレーション時計で測る。cuVSLAM のトラッキング処理時間は実時間であり、双方の差をそのまま通信遅延には換算できない。
+- 過去の走行で走行ラインのスナップショットがない場合は、参照元を確認して現在の地図のラインを参考表示できる。地図を編集した場合、当時のラインと異なる可能性がある。
+
+更新後の `atd gazebo closed-loop` は、`hdmap.json` に検証済みの走行地図、`closed_loop.reference.json` に選択ラインと地図の SHA-256、`scene/scene.json` の `course_evaluation` に採点に使った舗装境界と車体寸法（m）を保存する。
+`closed_loop.localization.jsonl` は初期位置探索・追跡・喪失などの状態を記録し、追跡中だけ画像時刻と地図上の後輪軸の姿勢を含む。`closed_loop.vslam.jsonl` は各ステレオ観測の VO 追跡とノードのコールバックの実時間（秒）。[NVIDIA のメッセージ定義](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_visual_slam/blob/release-5.0/isaac_ros_visual_slam_interfaces/msg/VisualSlamStatus.msg)
+`scene/rig_motion.jsonl` の `command_stamp_ns` は指令の元画像時刻、`command_applied_ns` は Gazebo がその指令を採用したシミュレーション時刻（ns）。初回採用前は両方とも `null`。

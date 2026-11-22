@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import runpy
 import sys
+from tempfile import TemporaryDirectory
 import types
 import unittest
 from unittest.mock import patch
@@ -73,7 +74,7 @@ class CompositionTests(unittest.TestCase):
         route = dict(points=points, profile=[[i, x, y, 0., 0., 1., 0.] for i, (x, y) in enumerate(points)])
         hdmap = dict(frame='map', closed=True, lines=dict(raceline=route, centerline=route))
         with fake_launch(), patch('atd_localization.assets.map_metadata', return_value=metadata), \
-                patch('atd_localization.assets.verified_hdmap', return_value=json.dumps(hdmap)), \
+                patch('atd_localization.assets.verified_hdmap', return_value=json.dumps(hdmap).encode()), \
                 patch('ament_index_python.packages.get_package_share_directory',
                       side_effect=lambda name: str(path.parents[1]) if name == 'atd_bringup' else '/share/' + name):
             module = runpy.run_path(str(path))
@@ -93,6 +94,15 @@ class CompositionTests(unittest.TestCase):
             self.assertTrue(node.parameters[0]['use_sim_time'])
             self.assertEqual(node.parameters[0]['map_sha256'].args[0], metadata['map_sha256'])
             self.assertEqual(node.parameters[0]['min_lookahead_m'], .65)
+            with TemporaryDirectory() as directory:
+                folder = Path(directory)
+                *_, recorder = module['setup'](dict(context, run_dir=directory))
+                self.assertEqual((recorder.executable, recorder.arguments), ('gazebo_closed_loop_log', [directory]))
+                self.assertEqual((folder / 'hdmap.json').read_bytes(), json.dumps(hdmap).encode())
+                self.assertEqual(json.loads((folder / 'closed_loop.reference.json').read_text()),
+                                 dict(metadata, line='raceline', frame='map'))
+                with self.assertRaises(FileExistsError):
+                    module['setup'](dict(context, run_dir=directory))
             for options, expected in ((dict(line='centerline'), .35), (dict(min_lookahead_m='.8'), .8)):
                 self.assertEqual(module['setup'](dict(context, **options))[-1].parameters[0]['min_lookahead_m'], expected)
             with self.assertRaisesRegex(ValueError, 'custom'):

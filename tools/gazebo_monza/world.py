@@ -197,6 +197,8 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                          "Combined acceleration is linearly interpolated between 200 Hz samples."},
     }
     if command_driven:
+        from closed_loop_eval import FOOTPRINT
+        scene["course_evaluation"] = {"frame": "gazebo_world", **source, "footprint": FOOTPRINT.copy()}
         scene["actuation"] = {"topic": "/atd/gazebo/actuators",
                               "spawn_x_y_yaw": points[0][1:], "model": "rear_axle_kinematic_bicycle",
                               "drive_timeout_s": 0.30, "trace_interval_s": 0.05}

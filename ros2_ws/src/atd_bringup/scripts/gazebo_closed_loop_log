@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Gazebo 閉ループ試行の自己位置と cuVSLAM の処理時間を観測時刻付きで保存する。"""
+import argparse
+import json
+import math
+from pathlib import Path
+import sys
+
+from atd_mapping.frames import stamp_ns
+from atd_planning.core import yaw_from_quaternion
+
+
+def localization_row(msg, now, reference):
+    stamp = stamp_ns(msg.header.stamp)
+    row = dict(header_stamp_ns=stamp, received_sim_ns=now, image_stamp_ns=None,
+               state=msg.state, reason=msg.reason, session_id=msg.session_id, epoch=msg.epoch)
+    if (msg.header.frame_id != reference['frame'] or not msg.session_id or
+            any(getattr(msg, key) != reference[key] for key in ('map_id', 'map_sha256', 'hdmap_sha256'))):
+        return dict(row, state='invalid', reason='自己位置の地図・座標系・セッションが一致しません')
+    if msg.state == 'tracking':
+        p, q = msg.pose.position, msg.pose.orientation
+        orientation = [q.x, q.y, q.z, q.w]
+        try:
+            yaw = yaw_from_quaternion(*orientation)
+            if stamp <= 0 or not all(map(math.isfinite, (p.x, p.y, p.z, msg.speed_mps))):
+                raise ValueError('追跡中の観測時刻・姿勢・速度が不正です')
+        except ValueError as error:
+            return dict(row, state='invalid', reason=str(error))
+        row.update(image_stamp_ns=stamp, x_m=p.x, y_m=p.y, z_m=p.z, orientation_xyzw=orientation,
+                   yaw_rad=yaw, estimated_speed_mps=msg.speed_mps)
+    return row
+
+
+def vslam_row(msg):
+    def duration(value):
+        return value if math.isfinite(value) and value >= 0 else None
+
+    # VisualSlamStatus (Isaac ROS 5) reports elapsed wall seconds for both intervals.
+    return dict(image_stamp_ns=stamp_ns(msg.header.stamp), vo_state=msg.vo_state,
+                track_execution_time_s=duration(msg.track_execution_time),
+                node_callback_execution_time_s=duration(msg.node_callback_execution_time))
+
+
+def write_row(stream, row):
+    stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(',', ':')) + '\n')
+
+
+def main():
+    import rclpy
+    from atd_interfaces.msg import LocalizationStatus
+    from isaac_ros_visual_slam_interfaces.msg import VisualSlamStatus
+    from rclpy.executors import ExternalShutdownException
+    from rclpy.node import Node
+    from rclpy.utilities import remove_ros_args
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('run_dir', type=Path)
+    folder = parser.parse_args(remove_ros_args(args=sys.argv)[1:]).run_dir
+    reference = json.loads((folder / 'closed_loop.reference.json').read_text())
+    with rclpy.init(), Node('atd_gazebo_closed_loop_log') as node, \
+            (folder / 'closed_loop.localization.jsonl').open('x', encoding='utf-8', buffering=1) as loc, \
+            (folder / 'closed_loop.vslam.jsonl').open('x', encoding='utf-8', buffering=1) as timing:
+        def record_localization(msg):
+            write_row(loc, localization_row(msg, node.get_clock().now().nanoseconds, reference))
+
+        node.create_subscription(LocalizationStatus, '/localization/status', record_localization, 100)
+        node.create_subscription(VisualSlamStatus, '/visual_slam/status',
+                                 lambda msg: write_row(timing, vslam_row(msg)), 100)
+        try:
+            rclpy.spin(node)
+        except (KeyboardInterrupt, ExternalShutdownException):
+            pass
+
+
+if __name__ == '__main__':
+    main()

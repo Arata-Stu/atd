@@ -9,7 +9,7 @@ from types import SimpleNamespace as Message
 
 import pytest
 
-for package in ('atd_bringup', 'atd_control', 'atd_planning'):
+for package in ('atd_bringup', 'atd_control', 'atd_mapping', 'atd_planning'):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / package))
 
 from atd_bringup.gazebo_control import COMMAND_TTL_NS, GazeboController, default_min_lookahead, simulation_table
@@ -32,6 +32,22 @@ def inputs(stamp=START, y=0., speed=0., target=1.5):
 
 def gate():
     return GazeboController(ROUTE, 'raceline', 1.5, simulation_table())
+
+
+def test_gazebo_log_keeps_source_stamps_and_distinguishes_unavailable_pose_and_timing():
+    recorder = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'scripts/gazebo_closed_loop_log'))
+    loc, _ = inputs(y=2.)
+    ref = dict(frame='map', map_id=ROUTE[0], map_sha256=ROUTE[1], hdmap_sha256=ROUTE[2])
+    row = recorder['localization_row'](loc, START + 50_000_000, ref)
+    assert (row['image_stamp_ns'], row['received_sim_ns'], row['y_m']) == (START, START + 50_000_000, 2.)
+    assert row['orientation_xyzw'] == [0., 0., 0., 1.]
+    assert recorder['localization_row'](loc, START, dict(ref, hdmap_sha256='wrong'))['state'] == 'invalid'
+    loc.state, loc.pose = 'lost', None
+    lost = recorder['localization_row'](loc, START + 50_000_000, ref)
+    assert lost['image_stamp_ns'] is None and 'x_m' not in lost and lost['header_stamp_ns'] == START
+    status = Message(header=loc.header, vo_state=2, track_execution_time=.002, node_callback_execution_time=math.nan)
+    assert recorder['vslam_row'](status) == dict(image_stamp_ns=START, vo_state=2,
+                                                track_execution_time_s=.002, node_callback_execution_time_s=None)
 
 
 def run(c, stamp=START, **kwargs):

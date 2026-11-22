@@ -390,6 +390,8 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     app.include_router(planning_replay.router, prefix='/api')
     from .simulation_benchmark import router as benchmark_router
     app.include_router(benchmark_router, prefix='/api')
+    from .gazebo_results import router as gazebo_results_router
+    app.include_router(gazebo_results_router, prefix='/api')
     from .speed_replay import router as speed_replay_router
     app.include_router(speed_replay_router, prefix='/api')
     from .speed_tables import router as speed_tables_router

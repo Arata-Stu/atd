@@ -17,6 +17,22 @@ import closed_loop_job as job
 
 
 class ClosedLoopJobTests(unittest.TestCase):
+    def test_worker_requires_installed_executable_in_selected_overlay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            packages = SimpleNamespace(get_package_prefix=lambda name: tmp, PackageNotFoundError=KeyError)
+            argv = ['closed_loop_job.py', 'worker', '--output', tmp, '--', 'ros2', 'launch']
+            with patch.dict(sys.modules, {'ament_index_python.packages': packages}), \
+                    patch.object(sys, 'argv', argv), patch.object(job, 'worker', return_value=0) as launch:
+                with self.assertRaisesRegex(RuntimeError, 'atd build --packages-up-to atd_bringup'):
+                    job.main()
+                binary = folder / 'lib/atd_bringup/gazebo_closed_loop_log'
+                binary.parent.mkdir(parents=True)
+                binary.touch()
+                binary.chmod(0o755)
+                self.assertEqual(job.main(), 0)
+                launch.assert_called_once_with(folder, ['ros2', 'launch'], cancel_name='closed_loop.cancel')
+
     def test_host_selects_map_resolution_and_routes_speed_to_controller(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -40,6 +56,7 @@ class ClosedLoopJobTests(unittest.TestCase):
             self.assertIn('rviz:=false', stack)
             self.assertIn('map_id:=odaiba_1p5', stack)
             self.assertIn('gazebo_closed_loop.launch.py', stack)
+            self.assertIn('run_dir:=' + stack[stack.index('--output') + 1], stack)
             self.assertNotIn('autonomous.launch.py', stack)
             self.assertIn('--ipc=host', gazebo)
             for option, setting in [('--rviz', 'true'), ('--no-rviz', 'false')]:

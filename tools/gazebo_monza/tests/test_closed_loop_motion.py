@@ -91,6 +91,11 @@ class CommandMotionTests(unittest.TestCase):
             base = Path(tmp)
             normal = world.build(base/"bag")
             scene = world.build(base/"drive", command_driven=True, laps=2)
+            geometry = json.loads((base/"drive/scene.json").read_text())["course_evaluation"]
+            self.assertEqual(geometry["frame"], "gazebo_world")
+            self.assertEqual(len(geometry["left"]), len(scene["trajectory"]["samples_s_x_y_yaw"]) - 1)
+            self.assertEqual(len(geometry["left"]), len(geometry["right"]))
+            self.assertEqual(geometry["footprint"]["vehicle_width"], .19)
             self.assertEqual(normal["camera"], scene["camera"])
             self.assertIsNone(scene["trajectory"]["speed_mps"])
             self.assertIsNone(scene["trajectory"]["travel_seconds"])
@@ -117,10 +122,13 @@ class CommandMotionTests(unittest.TestCase):
                                              pose=SimpleNamespace(position=SimpleNamespace(),
                                                                   orientation=SimpleNamespace()))
             info = Mock(paused=False, **{"sim_time.total_seconds.return_value": .033333})
+            plugin.plant.receive(30_000_000, 20_000_000, JOINTS, [0., .2, 1.])
+            plugin.plant.receive(32_000_000, 20_000_000, JOINTS, [0., .3, 1.])
             plugin.post_update(info, None)
             plugin.ground_truth.publish.assert_called_once_with(plugin.gt_pose)
             pose, stamp = plugin.gt_pose.pose, plugin.gt_pose.header.stamp
             sample = json.loads(plugin.trace.read_text())
+            self.assertEqual((sample["command_stamp_ns"], sample["command_applied_ns"]), (20_000_000, 30_000_000))
             self.assertEqual(stamp.sec * 10**9 + stamp.nanosec, round(sample["sim_time_s"] * 1e9))
             self.assertEqual((pose.position.x, pose.position.y, pose.position.z), (3., -2., REAR_AXLE_HEIGHT_M))
             self.assertAlmostEqual(2 * math.atan2(pose.orientation.z, pose.orientation.w), sample["yaw_rad"])

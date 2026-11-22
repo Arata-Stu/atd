@@ -1,0 +1,41 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { around, chartsFor, controlObservations, timeBounds, valueAt, windowRows } from '../src/closed_loop.ts';
+
+test('短い区間を補間し、終了後・欠測・追跡区間の切り替わり・方位角の折返しを結ばない',()=>{
+  const rows = [{t:10, v:1, segment:1},{t:10.125,v:3,segment:1},{t:10.25,v:4,segment:2},
+    {t:11,v:7,segment:2},{t:11.125,v:null,segment:2}];
+  const get = p => p.v;
+  assert.equal(valueAt(rows,10.0625,get),2);
+  assert.equal(valueAt(rows,10.0625,get,'step'),1);
+  assert.equal(valueAt(rows,10.25,get),4);
+  for (const t of [0,10.2,10.375,11.0625,12]) assert.equal(valueAt(rows,t,get),null);
+  assert.equal(valueAt([{t:0,v:-179},{t:.1,v:179}],.05,get,'degrees'),null);
+});
+
+test('一周未満の境界接触も独立した時刻として保持し、前後3秒を保存範囲に収める',()=>{
+  const data = {samples:[{t:9},{t:11}],estimates:[{t:10}],vslam:[],contact_s:10.875};
+  assert.deepEqual(timeBounds(data),[9,11]);
+  assert.deepEqual(around(data.contact_s,[0,11]),[7.875,11]);
+  assert.deepEqual(around(1,[0,2]),[0,2]);
+  assert.deepEqual(windowRows(data.samples,[10,10.875]),[]);
+  assert.deepEqual(windowRows(data.samples,[10,10.875],true),data.samples);
+  assert.equal(timeBounds({samples:[],estimates:[],vslam:[],contact_s:null}),null);
+});
+
+test('制御状態を元画像時刻に一度だけ登録し、GT時刻と指令生成時刻を取り違えない',()=>{
+  const control = {t:5,control_image_s:4.9,tracking_lateral_error_m:.1,image_to_control_ms:30,
+    image_to_apply_ms:null,command_age_ms:100,steering_rad:.2,requested_steering_rad:.3};
+  const samples = [control,{...control,t:5.05},{...control,t:5.1,control_image_s:null},
+    {...control,t:5.2,control_image_s:5.1,tracking_lateral_error_m:-.15}];
+  const rows = controlObservations(samples);
+  assert.deepEqual(rows.map(r=>[r.t,r.segment,r.lateral,r.delay]),[[4.9,1,.1,30],[5.1,2,-.15,30]]);
+  const charts = chartsFor({samples,estimates:[],vslam:[]});
+  const s = charts[0].series[1];
+  assert.equal(valueAt(s.rows,4.9,s.get),.1);
+  assert.equal(valueAt(s.rows,5,s.get),null);
+  const timing = charts.find(c=>c.label==='画像からの遅れ').series;
+  assert.equal(valueAt(timing[1].rows,4.9,timing[1].get),30);
+  assert.equal(valueAt(timing[2].rows,5,timing[2].get),null);
+  assert.equal(valueAt(timing[3].rows,5,timing[3].get),100);
+});

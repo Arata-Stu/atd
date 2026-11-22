@@ -225,3 +225,27 @@
 .vgl-export-list li { border-bottom: 1px solid var(--line); padding: 10px 0; overflow-wrap: anywhere; }
 .vgl-export-list strong { display: block; font-size: 13px; }
 .vgl-export-list code, .vgl-export-root { font-size: 11px; color: #56695e; overflow-wrap: anywhere; }
+
+.evaluation-nav {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 1.25rem;
+  padding: 0 clamp(14px, 3vw, 32px);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+.evaluation-nav a {
+  padding: 10px 2px 8px;
+  border-bottom: 2px solid transparent;
+  color: #52655e;
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.evaluation-nav a[aria-current] {
+  color: #146247;
+  border-color: currentColor;
+  font-weight: 650;
+}
+.evaluation-nav a:focus-visible { outline-offset: -3px; }

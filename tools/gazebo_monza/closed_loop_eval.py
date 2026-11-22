@@ -17,6 +17,7 @@ class CourseEvaluation:
         if type(requested_laps) is not int or requested_laps < 1:
             raise ValueError('周回数には正の整数を指定してください')
         self.left, self.right = boundaries['left'], boundaries['right']
+        self.footprint = boundaries.get('footprint', FOOTPRINT)
         if len(self.left) != len(self.right) or len(samples) != len(self.left) + 1:
             raise ValueError('Gazebo の走路境界と周回経路の対応が不正です')
         self.walls = [(a, b, bounds((a, b))) for side in (self.left, self.right)
@@ -43,11 +44,11 @@ class CourseEvaluation:
     def _touches_boundary(self, previous, pose):
         # The footprint starts on the road. After that, any departure must intersect a wall.
         if self.previous is None:
-            for corner in rectangle(pose[:2], pose[2], FOOTPRINT):
+            for corner in rectangle(pose[:2], pose[2], self.footprint):
                 if inside(corner, self.left) == inside(corner, self.right):
                     return True
         arc_padding = math.dist(previous[:2], pose[:2]) * abs(math.remainder(pose[2] - previous[2], math.tau)) / 4
-        for _, hull, pad in swept([previous[:2], pose[:2]], False, FOOTPRINT, [previous[2], pose[2]]):
+        for _, hull, pad in swept([previous[:2], pose[:2]], False, self.footprint, [previous[2], pose[2]]):
             box = bounds(hull)
             sides = edges(hull, True)
             pad += arc_padding

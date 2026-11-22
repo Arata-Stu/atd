@@ -55,8 +55,8 @@ def setup(context):
 
     root, key, line = arg('results_root'), arg('map_id'), arg('line')
     metadata = map_metadata(root, key)
-    document = json.loads(verified_hdmap(root, metadata))
-    ref = ReferenceLine.from_document(document, line)
+    hdmap = verified_hdmap(root, metadata)
+    ref = ReferenceLine.from_document(json.loads(hdmap), line)
     if not ref.closed:
         raise ValueError('周回評価には選択した保存地図上の閉じた走行ラインが必要です')
     table = simulation_table(arg('feedforward_path'))
@@ -90,13 +90,30 @@ def setup(context):
         Node(package='atd_bringup', executable='gazebo_control', output='screen', parameters=[control],
              on_exit=[Shutdown(reason='Gazebo の車両制御ノードが終了しました')]),
     ]
+    if arg('run_dir'):
+        directory = Path(arg('run_dir'))
+        reference = directory / 'closed_loop.reference.json'
+        if reference.exists() or reference.is_symlink():
+            raise FileExistsError(reference)
+        # Freeze the same verified bytes from which the selected line was loaded.
+        with (directory / 'hdmap.json').open('xb') as stream:
+            stream.write(hdmap)
+        identity = {k: metadata[k] for k in ('map_id', 'map_sha256', 'hdmap_sha256')}
+        pending = reference.with_suffix('.tmp')
+        with pending.open('x', encoding='utf-8') as stream:
+            json.dump(dict(identity, frame='map', line=line), stream, ensure_ascii=False)
+            stream.write('\n')
+        pending.replace(reference)
+        actions.append(Node(package='atd_bringup', executable='gazebo_closed_loop_log', output='screen',
+                            arguments=[str(directory)], parameters=[{'use_sim_time': True}],
+                            on_exit=[Shutdown(reason='Gazebo の解析ログ記録が終了しました')]))
     if arg('rviz') == 'true':
         actions.extend(rviz_nodes(root, key, line, ref))
     return actions
 
 
 def generate_launch_description():
-    defaults = dict(line='raceline', results_root='/data/results', engine_dir='', feedforward_path='',
+    defaults = dict(line='raceline', results_root='/data/results', engine_dir='', feedforward_path='', run_dir='',
                     max_speed_mps='1.5', **asdict(LookaheadConfig()),
                     **{'speed_' + k: v for k, v in asdict(PIDConfig()).items()})
     defaults['min_lookahead_m'] = ''

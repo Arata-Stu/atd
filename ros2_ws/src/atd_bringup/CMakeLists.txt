@@ -6,6 +6,7 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(atd_bringup)
 install(PROGRAMS scripts/choose_localization_map scripts/esc_trial_session scripts/gazebo_lap_map
   scripts/replay_vslam scripts/replay_ground_truth scripts/gazebo_control scripts/gazebo_closed_loop_paths
+  scripts/gazebo_closed_loop_log
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})

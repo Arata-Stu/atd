@@ -62,7 +62,10 @@ class Trial:
 
 
 def run_trial(children, out, scene, report, start_stream, wait_for, check_children):
-    boundaries, samples, _ = load_lap(scene["course"])
+    if "course_evaluation" in scene:
+        boundaries, samples = scene["course_evaluation"], scene["trajectory"]["samples_s_x_y_yaw"]
+    else:
+        boundaries, samples, _ = load_lap(scene["course"])
     evaluator = CourseEvaluation(boundaries, samples, scene["trajectory"]["laps"])
     trial = Trial(evaluator)
     cancel = out / "closed_loop.cancel"

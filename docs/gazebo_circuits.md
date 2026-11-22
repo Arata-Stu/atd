@@ -69,3 +69,27 @@ atd gazebo map --course odaiba --speed 3 --laps 2 --resolution 1280x720 --camera
 ```
 
 Gazebo と cuVSLAM がステレオ通信・初期追跡を確認してから発進し、指定周回の最終ゴールで地図を保存する。結果先の `maps/gazebo-odaiba-<run-id>/` に地図本体と `mapping.json` ができる。途中の追跡に途切れがある場合は `save.tracking.coverage` を確認する。次に VGL 地図や点群・HDMap まで作る場合は、元の bag と保存画像を利用できるオフラインの手順を使う。[Notebook の地図作成手順](../apps/web/README.md)
+
+## 保存地図とステレオ画像で閉ループ走行する
+
+Notebook の Gazebo が計時線で静止した車両から左右の画像を配信する。Isaac ROS は VGL で初期位置を求め、cuVSLAM で保存地図上の位置を追跡する。Planner がその位置から前方の軌道と速度を出し、Pure Pursuit と FF＋PID の指令で車両が動く。次の画像はその車両位置から描画される。Gazebo の正解姿勢は周回・境界の採点に使う。
+
+1. お台場の走行 bag を Notebook の Web UI「地図とライン」で選び、cuVSLAM 地図を作る。以下では地図 ID を `odaiba_1p5` とする。
+2. 同じ地図で VGL 地図と対応する Notebook 用 engine を準備し、点群を取得する。点群に合わせてコース境界を編集し、閉路の速度付き Centerline、Raceline または Customline を保存する。同梱の2Dサンプルの座標は Gazebo 基準なので、保存地図と重ねるには位置合わせが必要になる。[地図とラインの操作](../apps/web/README.md)
+3. Notebook ホストで `atd dev` を起動し、開いたコンテナ内で変更をビルドする。
+
+```bash
+atd build --packages-up-to atd_bringup
+```
+
+別の端末で、**Ubuntu Notebook ホスト**から起動する。`--speed` はラインに設定した目標速度の上限（m/s）。解像度は保存した VGL 地図から選び、撮影レートは既定で30 Hz。地図とラインを対話的に選ぶ場合は `atd gazebo closed-loop` を使う。
+
+```bash
+atd gazebo closed-loop --course odaiba --map odaiba_1p5 --line centerline --speed 1.5 --laps 2
+```
+
+同じ計時線から Raceline を試すときは `--line raceline` に切り替える。シミュレーションでの Pure Pursuit の最短先読み距離は Centerline・Customline が0.35 m、Raceline が0.65 m。同梱のお台場の Raceline は計時線中央から約0.49 mずれており、停止時にも先読み円とラインが交わるようにした。編集したラインに合わせて `--min-lookahead` で上書きできる。
+
+車両は保存地図上で追跡が成立し、有効な計画・制御指令を受けると発進する。走行中の追跡喪失や指令途絶ではスロットルをゼロにして減速する。車両は前進用の運動学的自転車モデルで、既定のスロットル FF 表と操舵・速度応答はシミュレーション用の設定値。
+
+端末に表示される `runs/gazebo/odaiba/<run-id>/` の `closed_loop.result.json` で完走周回数、周回タイム、境界への接触や停止理由を確認できる。`scene/rig_motion.jsonl` は Gazebo の車体姿勢と制御状態の時系列、`closed_loop.ros.log` は初期位置推定・追跡・制御のログ。初期化中に終了した場合は `closed_loop.host.json` にも理由が残る。

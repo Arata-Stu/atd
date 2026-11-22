@@ -48,7 +48,8 @@ def setup(context):
     monitor = {key: ParameterValue(assets[key], value_type=str) for key in ('map_id', 'map_sha256', 'hdmap_sha256')}
     monitor.update({key: ParameterValue(workflow[key], value_type=str) for key in (
         'base_frame', 'left_info', 'right_info', 'left_frame', 'right_frame')})
-    monitor.update(use_sim_time=sim_time, image_height=assets['input_shape'][2], image_width=assets['input_shape'][3])
+    monitor.update(simulation_freshness=ParameterValue(LaunchConfiguration('simulation_freshness'), value_type=bool),
+                   use_sim_time=sim_time, image_height=assets['input_shape'][2], image_width=assets['input_shape'][3])
     print(f"ATD localization map={assets['map_id']} engine={assets['model_dir']} stereo={assets['input_shape'][2:]}",
           flush=True)
     return [
@@ -64,5 +65,6 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('map_id'), DeclareLaunchArgument('results_root', default_value='/data/results'),
         DeclareLaunchArgument('engine_dir', default_value=''), DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument('simulation_freshness', default_value='false', choices=['true', 'false']),
         OpaqueFunction(function=setup),
     ])

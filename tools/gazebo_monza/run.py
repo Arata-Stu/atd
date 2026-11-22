@@ -324,6 +324,7 @@ def run(args, report):
     mode = "benchmark" if diagnose else args.mode
     out = args.output
     scene_dir = out / "scene"
+    closed_loop = mode == "closed-loop"
     lap_video = mode == "video"
     finite_serve = mode == "serve" and args.laps is not None
     finite_run = mode in ("video", "map", "bag") or finite_serve
@@ -336,10 +337,10 @@ def run(args, report):
         lap_bag.check_destination(args.bag_output)
     scene = world.build(scene_dir, height=args.camera_height, pitch_deg=args.camera_pitch_deg,
                         travel_seconds=args.duration if finite_run else None, speed_mps=args.speed,
-                        laps=args.laps or 1, repeat=not finite_run, circuit=args.circuit, route=args.route,
+                        laps=args.laps or 1, repeat=not (finite_run or closed_loop), circuit=args.circuit, route=args.route,
                         wait_for_capture=(lap_video or finite_serve or mode in ("map", "bag")),
                         record_ground_truth=mode == "bag", resolution=args.resolution,
-                        camera_hz=args.camera_hz, imu_hz=imu_hz)
+                        camera_hz=args.camera_hz, imu_hz=imu_hz, command_driven=closed_loop)
     trajectory = scene["trajectory"]
     total_seconds = trajectory["total_travel_seconds"]
     duration = total_seconds if finite_run else args.duration
@@ -347,11 +348,14 @@ def run(args, report):
                   laps_requested=trajectory["laps"],
                   lap_duration_s=trajectory["travel_seconds"],
                   total_travel_seconds=total_seconds)
-    if finite_run:
+    if closed_loop:
+        print(f"{args.circuit} / {args.route}  操舵・スロットル指令で {trajectory['laps']}周を評価", flush=True)
+    elif finite_run:
         schedule = f"{trajectory['laps']}周  走行時間 {duration:.2f} シミュレーション秒"
     else:
         schedule = "繰り返し走行"
-    print(f"{args.circuit} / {args.route}  RC速度 {trajectory['speed_mps']:.3g} m/s  {schedule}", flush=True)
+    if not closed_loop:
+        print(f"{args.circuit} / {args.route}  RC速度 {trajectory['speed_mps']:.3g} m/s  {schedule}", flush=True)
     inertial = f"加速度 200 Hz・ジャイロ／統合 {imu_hz} Hz" if imu_hz else "OFF"
     print(f"ステレオ {width}×{height} @ {args.camera_hz} Hz  IMU {inertial}", flush=True)
     if mode == "bag":
@@ -379,7 +383,7 @@ def run(args, report):
             children[name] = proc
             return proc
 
-        clock_param = "use_sim_time:=true" if mode in ("bag", "map", "serve") else "use_sim_time:=false"
+        clock_param = "use_sim_time:=true" if mode in ("bag", "map", "serve", "closed-loop") else "use_sim_time:=false"
         start("gazebo", ["gz", "sim", "-s", "-v", "4", "--headless-rendering", str(scene_dir / "world.sdf")])
         start("bridge", ["ros2", "run", "ros_gz_bridge", "parameter_bridge", "--ros-args",
                          "-p", f"config_file:={config}", "-p", clock_param,
@@ -390,6 +394,9 @@ def run(args, report):
                                   "--x", str(x), "--y", str(y), "--z", str(z),
                                   "--roll", str(roll), "--pitch", str(pitch), "--yaw", str(yaw),
                                   "--ros-args", "-p", clock_param])
+        if closed_loop:
+            from closed_loop_trial import run_trial
+            return run_trial(children, out, scene, report, start_stream, wait_for, check_children)
         if mode == "map":
             return map_laps(children, out, args.circuit, scene, report)
         if mode == "bag":
@@ -495,7 +502,7 @@ def run(args, report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--mode", choices=("benchmark", "video", "diagnose", "serve", "map", "bag"), required=True)
+    parser.add_argument("--mode", choices=("benchmark", "video", "diagnose", "serve", "map", "bag", "closed-loop"), required=True)
     parser.add_argument("--bag-output", type=Path, help="bag の確定保存先（rosbags/直下の新規ディレクトリ）")
     parser.add_argument("--circuit", "--course", choices=world.circuits.circuit_ids(), default="odaiba")
     parser.add_argument("--route", choices=("lap",), default="lap")
@@ -509,6 +516,11 @@ def main():
     parser.add_argument("--camera-hz", type=int, choices=CAMERA_RATES, default=DEFAULT_CAMERA_HZ)
     parser.add_argument("--imu", choices=IMU_MODES, default="off", help="ジャイロ・統合IMUのHz。加速度は200 Hz")
     args = parser.parse_args()
+    if args.mode == "closed-loop":
+        if args.duration is not None or args.speed is not None:
+            parser.error("closed-loop の速度は制御指令から決まります。周回数は --laps で指定してください")
+        if args.laps is None:
+            args.laps = 2
     if (args.mode == "bag") != (args.bag_output is not None):
         parser.error("--bag-output は --mode bag で指定してください")
     if args.laps is not None:
@@ -525,7 +537,7 @@ def main():
             parser.error("--speed は有限の正数を m/s で指定してください")
         if args.duration is not None and args.mode in ("video", "bag", "map"):
             parser.error("--speed と1周あたりの --duration は同時に指定できません")
-    if args.mode != "serve" and args.duration is None:
+    if args.mode not in ("serve", "closed-loop") and args.duration is None:
         if args.mode == "benchmark":
             args.duration = 60.
         elif args.mode == "diagnose":
@@ -539,13 +551,16 @@ def main():
     if any(args.output.iterdir()):
         parser.error("既存の結果を保護するため、新しい空の出力先を指定してください")
     report = {"circuit": args.circuit, "mode": args.mode, "route": args.route, "requested_duration_s": args.duration}
-    if args.mode in ("bag", "serve", "map"):
+    if args.mode in ("bag", "serve", "map", "closed-loop"):
         # docker run --init forwards both sigint from the terminal and docker stop's SIGTERM.
         signal.signal(signal.SIGINT, signal.default_int_handler)
         signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         result = run(args, report)
-        report["status"] = "complete" if result == 0 else "below_target"
+        if args.mode == "closed-loop":
+            report["status"] = report["closed_loop"]["status"]
+        else:
+            report["status"] = "complete" if result == 0 else "below_target"
     except KeyboardInterrupt:
         report.update(status="stopped")
         result = 0 if args.mode == "serve" and args.laps is None else 130

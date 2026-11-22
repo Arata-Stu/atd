@@ -42,9 +42,9 @@ def wait_exit(process, timeout):
         process.wait()
 
 
-def worker(directory, launch):
+def worker(directory, launch, cancel_name="mapping.cancel"):
     """docker exec のクライアントが止まっても、この試行の ROS launch に終了を伝える。"""
-    cancel = directory / "mapping.cancel"
+    cancel = directory / cancel_name
     if cancel.exists():
         return 1
     proc = subprocess.Popen(launch, start_new_session=True)

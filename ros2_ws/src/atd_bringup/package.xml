@@ -13,7 +13,8 @@
   <exec_depend>atd_esc_trials</exec_depend>
   <exec_depend>atd_localization</exec_depend>
   <exec_depend>atd_planning</exec_depend>
-  <exec_depend>atd_control</exec_depend>
+  <exec_depend>atd_control</exec_depend><exec_depend>atd_interfaces</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>atd_recording</exec_depend>
   <exec_depend>atd_mapping</exec_depend><exec_depend>ros2bag</exec_depend>
   <exec_depend>rosbag2_interfaces</exec_depend>

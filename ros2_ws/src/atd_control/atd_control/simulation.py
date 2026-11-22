@@ -1,11 +1,12 @@
 """Notebook 用の前進 2D 閉ループ比較。ここでの寸法・応答・FF 表はすべて模擬値。"""
-from dataclasses import dataclass
 from functools import partial
 import heapq
 import math
 
 from atd_planning.core import Planner, ReferenceLine
 
+from .bicycle import (ACCEL_MPS2, DECEL_MPS2, FULL_SPEED_MPS, SPEED_TAU_S, STEERING_LIMIT,
+                      STEERING_TAU_S, WHEELBASE_M, Bicycle as _Vehicle)
 from .core import LookaheadConfig, pure_pursuit
 from .speed import FeedforwardTable, SpeedController
 
@@ -18,21 +19,21 @@ _PARAMETERS = {
     'lookahead_time_s': (.4, 0., 2.),
     'steering_delay_ms': (0., 0., 1000.),
     'throttle_delay_ms': (0., 0., 1000.),
-    'steering_tau_s': (.12, .02, 2.),
-    'speed_tau_s': (.5, .02, 2.),
+    'steering_tau_s': (STEERING_TAU_S, .02, 2.),
+    'speed_tau_s': (SPEED_TAU_S, .02, 2.),
 }
 _DT_NS = 20_000_000
 _LAPS = 2
 _TIME_LIMIT_S = 90
-_WHEELBASE_M = .257
-_STEERING_LIMIT = math.radians(28.)
-_ACCEL_MPS2 = 2.4
-_DECEL_MPS2 = 1.8
 
 # Simulated CH2 raw scale and equilibrium speed at full forward throttle.
-_NEUTRAL_RAW = 992
-_FORWARD_SPAN_RAW = 800
-_FULL_SPEED_MPS = 3.2
+NEUTRAL_RAW = 992
+FORWARD_SPAN_RAW = 800
+
+
+def simulation_feedforward():
+    """2D と Gazebo の同じ前進車両モデルに対応する模擬 FF 表。"""
+    return FeedforwardTable('simulation', '', (.2, 1.6, 3.2), (1042, 1392, 1792), 1)
 
 
 def validate_settings(overrides):
@@ -95,31 +96,6 @@ def _sample_course():
     return points, ReferenceLine(points, speeds, closed=True)
 
 
-@dataclass
-class _Vehicle:
-    x: float
-    y: float
-    yaw: float
-    speed: float = 0.
-    steering: float = 0.
-    steering_setpoint: float = 0.
-    throttle_setpoint: float = 0.
-
-    def advance(self, dt, settings):
-        # Rear-axle kinematic bicycle, first-order actuators and bounded acceleration.
-        next_steering = self.steering + (self.steering_setpoint - self.steering) * (
-            -math.expm1(-dt / settings['steering_tau_s']))
-        equilibrium = self.throttle_setpoint * _FULL_SPEED_MPS
-        dv = (equilibrium - self.speed) * -math.expm1(-dt / settings['speed_tau_s'])
-        next_speed = self.speed + max(-_DECEL_MPS2 * dt, min(_ACCEL_MPS2 * dt, dv))
-        distance = (self.speed + next_speed) * .5 * dt
-        dyaw = distance * math.tan((self.steering + next_steering) * .5) / _WHEELBASE_M
-        self.x += distance * math.cos(self.yaw + .5 * dyaw)
-        self.y += distance * math.sin(self.yaw + .5 * dyaw)
-        self.yaw = math.remainder(self.yaw + dyaw, 2 * math.pi)
-        self.speed, self.steering = next_speed, next_steering
-
-
 def _drive_interval(vehicle, pending, now, steering, throttle, settings, contact=None):
     # Split a physics interval at actual command arrival times, including delays shorter than dt.
     heapq.heappush(pending, (now + round(settings['steering_delay_ms'] * 1e6), 'steering', steering))
@@ -148,8 +124,7 @@ def _run(reference, steer, mode, settings, *, laps=_LAPS, time_limit_s=_TIME_LIM
          start_offset_m=.06, start_yaw_rad=0., contact=None, sample_stride=5, check=lambda: None):
     planner = Planner(reference, horizon_m=2.5)
     # This synthetic feedforward table lives in memory and is never read from or written to calibration.
-    table = FeedforwardTable('simulation', '', (.2, 1.6, 3.2), (1042, 1392, 1792), 1)
-    speed_controller = SpeedController(table)
+    speed_controller = SpeedController(simulation_feedforward())
     edge = reference.segments[0]
     vehicle = _Vehicle(edge.x - start_offset_m * edge.uy, edge.y + start_offset_m * edge.ux,
                        math.atan2(edge.uy, edge.ux) + start_yaw_rad)
@@ -187,7 +162,7 @@ def _run(reference, steer, mode, settings, *, laps=_LAPS, time_limit_s=_TIME_LIM
             progress += delta
         previous_station = station
         steering = steer(plan['trajectory'], x=vehicle.x, y=vehicle.y, yaw=vehicle.yaw,
-                         speed_mps=vehicle.speed, wheelbase_m=_WHEELBASE_M)
+                         speed_mps=vehicle.speed, wheelbase_m=WHEELBASE_M)
         speed = speed_controller.update(stamp, plan['target_speed_mps'], vehicle.speed)
         if steering['valid'] is not True or not speed['valid']:
             outcome = 'controller_error'
@@ -197,8 +172,8 @@ def _run(reference, steer, mode, settings, *, laps=_LAPS, time_limit_s=_TIME_LIM
         if isinstance(command, bool) or not math.isfinite(command):
             outcome, reason = 'controller_error', '操舵アルゴリズムの指令角が不正です'
             break
-        throttle = (speed['calculated_raw'] - _NEUTRAL_RAW) / _FORWARD_SPAN_RAW
-        limited = max(-_STEERING_LIMIT, min(_STEERING_LIMIT, command))
+        throttle = (speed['calculated_raw'] - NEUTRAL_RAW) / FORWARD_SPAN_RAW
+        limited = max(-STEERING_LIMIT, min(STEERING_LIMIT, command))
         error = plan['lateral_error_m']
         peak_error = max(peak_error, abs(error))
         if sample_stride:
@@ -247,9 +222,9 @@ def default_controllers(settings=None):
 
 
 def _model(laps):
-    return dict(wheelbase_m=_WHEELBASE_M, steering_limit_deg=math.degrees(_STEERING_LIMIT),
-                dt_s=_DT_NS * 1e-9, laps=laps, accel_limit_mps2=_ACCEL_MPS2,
-                decel_limit_mps2=_DECEL_MPS2, full_throttle_speed_mps=_FULL_SPEED_MPS)
+    return dict(wheelbase_m=WHEELBASE_M, steering_limit_deg=math.degrees(STEERING_LIMIT),
+                dt_s=_DT_NS * 1e-9, laps=laps, accel_limit_mps2=ACCEL_MPS2,
+                decel_limit_mps2=DECEL_MPS2, full_throttle_speed_mps=FULL_SPEED_MPS)
 
 
 def compare(config):

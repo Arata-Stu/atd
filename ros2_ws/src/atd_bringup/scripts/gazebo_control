@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""保存地図に追跡中の仮想車両に Pure Pursuit と FF＋PID の出力を渡す。"""
+from dataclasses import asdict
+from functools import partial
+import json
+
+import rclpy
+from atd_interfaces.msg import LocalizationStatus, PlanningStatus
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
+from sensor_msgs.msg import JointState
+from std_msgs.msg import String
+
+from atd_bringup.gazebo_control import GazeboController, default_min_lookahead, simulation_table
+from atd_control.core import LookaheadConfig
+from atd_control.speed import PIDConfig
+
+
+class GazeboControlNode(Node):
+    def __init__(self, **kwargs):
+        super().__init__('atd_gazebo_control', **kwargs)
+        if not self.get_parameter('use_sim_time').value:
+            raise ValueError('Gazebo の /clock が必要です')
+        route = tuple(self.declare_parameter(k, '').value for k in ('map_id', 'map_sha256', 'hdmap_sha256'))
+        line = self.declare_parameter('line', 'raceline').value
+        speed = self.declare_parameter('max_speed_mps', 1.5).value
+        table = simulation_table(self.declare_parameter('feedforward_path', '').value)
+        defaults = LookaheadConfig(min_lookahead_m=default_min_lookahead(line))
+        lookahead = {k: self.declare_parameter(k, v).value for k, v in asdict(defaults).items()}
+        pid = {k: self.declare_parameter('speed_' + k, v).value for k, v in asdict(PIDConfig()).items()}
+        self.controller = GazeboController(route, line, speed, table, lookahead=LookaheadConfig(**lookahead),
+                                           pid=PIDConfig(**pid))
+        self.actuators = self.create_publisher(JointState, '/atd/gazebo/actuators', 1)
+        status_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.status = self.create_publisher(String, '/atd/gazebo/control_state', status_qos)
+        self.last_status = None
+        self.observers = [
+            self.create_subscription(LocalizationStatus, '/localization/status', partial(self.observe, 'localization'), 10),
+            self.create_subscription(PlanningStatus, '/planning/status', partial(self.observe, 'planning'), 10),
+        ]
+        self.create_timer(.05, self.watch)
+
+    def check_sources(self):
+        return self.controller.check_sources(*(sub.get_publisher_count() for sub in self.observers))
+
+    def observe(self, kind, msg):
+        now = self.get_clock().now().nanoseconds
+        self.publish(now, self.controller.observe(kind, msg, now) if self.check_sources() else None)
+
+    def watch(self):
+        now = self.get_clock().now().nanoseconds
+        self.publish(now, self.controller.ready(now) if self.check_sources() else None)
+
+    def publish(self, now, drive):
+        controller = self.controller
+        if drive is not None or controller.state != 'driving':
+            message = JointState()
+            ns, steer, throttle = (now, 0., 0.) if drive is None else drive
+            message.header.stamp.sec, message.header.stamp.nanosec = divmod(ns, 1_000_000_000)
+            message.header.frame_id = 'base_link'
+            message.name = ['steering', 'throttle', 'enable']
+            message.position = [steer, throttle, float(drive is not None)]
+            self.actuators.publish(message)
+        status = (controller.state, controller.reason)
+        if status != self.last_status or drive is not None:
+            if status != self.last_status:
+                self.last_status = status
+                self.get_logger().info(f'{status[0]} {status[1]}')
+            report = dict(state=status[0], reason=status[1], stamp_ns=now, map_id=controller.route[0],
+                          line=controller.line)
+            if drive is not None:
+                report.update(controller.observation)
+            self.status.publish(String(data=json.dumps(report, ensure_ascii=False, allow_nan=False)))
+
+
+def main():
+    rclpy.init()
+    try:
+        node = GazeboControlNode()
+        try:
+            rclpy.spin(node)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            node.destroy_node()
+    finally:
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()

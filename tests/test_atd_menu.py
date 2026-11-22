@@ -1,4 +1,5 @@
 """日常操作メニューを、実機や Docker を起動せずに確認する。"""
+import json
 import os
 from pathlib import Path
 import pty
@@ -186,6 +187,27 @@ exit 130
             result = self.invoke('bringup', 'gazebo', MENU_TEST_CONTAINER=container)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assert_call('bringup.sh', 'gazebo')
+
+    def test_closed_loop_menu_selects_a_saved_map_and_line_and_previews_both_containers(self):
+        fixture = self.root / 'maps' / 'odaiba_saved'
+        (fixture / 'hdmap').mkdir(parents=True)
+        sample = json.loads((PROJECT / 'samples/odaiba/hdmap/map.json').read_text())
+        sample.update(id=fixture.name, source={'kind': 'nvidia_offline'})
+        (fixture / 'hdmap/map.json').write_text(json.dumps(sample))
+        (fixture / 'vgl.json').write_text(json.dumps({'status': 'complete', 'input_shape': [1, 3, 720, 1280]}))
+        for tool in ('python3', 'id'):
+            (self.bin / tool).symlink_to(shutil.which(tool))
+        # The real menu invokes our real host launcher in dry-run mode, with no Docker executable on PATH.
+        script = shlex.quote(str(PROJECT / 'scripts/gazebo.sh'))
+        (self.scripts / 'gazebo.sh').write_text(
+            f'#!/bin/bash\nif [[ "$1" = list ]]; then exec bash {script} list; fi\n'
+            f'exec bash {script} "$@" --dry-run > "$MENU_TEST_CALLS"\n')
+        self.menu('gazebo', picks=['closed-loop', 'odaiba', '30', fixture.name, 'centerline'],
+                  keys=b'1.25\n2\n', ATD_RESULT_DIR=str(self.root))
+        result = self.calls.read_text()
+        self.assertIn('map_id:=odaiba_saved line:=centerline max_speed_mps:=1.25', result)
+        self.assertIn('--mode closed-loop', result)
+        self.assertIn('--resolution 1280x720 --camera-hz 30 --imu off --laps 2', result)
         self.assertNotIn('bringup\t', self.invoke('--list', MENU_TEST_OS='Darwin').stdout)
 
     def test_replay_menu_and_notebook_launcher(self):

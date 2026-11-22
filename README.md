@@ -37,7 +37,7 @@ Jetson ではホスト・Docker のどちらからも `bluetooth`、`hotspot`、
 | `scripts/bringup.sh` | Jetson の車載 profile・Notebook の Gazebo ステレオ VO を選択・実行 |
 | `scripts/replay.sh`（`atd replay`） | Linux Notebook で記録済みのステレオ bag を選び、cuVSLAM の推定軌跡を RViz で確認 |
 | `scripts/webui.sh` | Notebook の Web UI を起動 |
-| `scripts/gazebo.sh` | Linux Notebook 専用。[お台場で2周記録・再生](docs/gazebo_circuits.md#お台場を2周して再訪時の追跡を確認する)、[オフラインでの cuVSLAM 地図作成](docs/gazebo_circuits.md#1周でcuvslam地図を作る)、左右車載動画・30／60／90 Hz のステレオ受信計測・専用イメージの容量計測。[手順](docs/gazebo_monza.md) |
+| `scripts/gazebo.sh` | Linux Notebook 専用。[お台場の記録・再生](docs/gazebo_circuits.md#お台場を2周して再訪時の追跡を確認する)、[地図作成](docs/gazebo_circuits.md#1周でcuvslam地図を作る)、[保存地図での閉ループ自動走行](docs/gazebo_circuits.md#保存地図とステレオ画像で閉ループ走行する)、車載動画・ステレオ配信・容量の計測。[手順](docs/gazebo_monza.md) |
 
 ```bash
 ./scripts/setup.sh

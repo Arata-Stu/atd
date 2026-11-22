@@ -136,7 +136,7 @@ def cameras(link, height, pitch, circuit, far, width, image_height, camera_hz):
 
 def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
           circuit="odaiba", route=None, wait_for_capture=False, speed_mps=None, laps=1, record_ground_truth=False,
-          resolution="640x480", imu_hz=0, camera_hz=DEFAULT_CAMERA_HZ):
+          resolution="640x480", imu_hz=0, camera_hz=DEFAULT_CAMERA_HZ, command_driven=False):
     if resolution not in RESOLUTIONS:
         raise ValueError("unsupported stereo resolution: " + str(resolution))
     if type(camera_hz) is not int or camera_hz not in CAMERA_RATES:
@@ -161,13 +161,18 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     geography = circuits.metadata(circuit)
     far = CAMERA_FAR_M
     length = points[-1][0]
-    travel_seconds, speed_mps = circuits.route_timing(circuit, route, length, travel_seconds, speed_mps)
-    try:
-        total_seconds = travel_seconds * laps
-    except OverflowError as exc:
-        raise ValueError("requested run duration is too large") from exc
-    if not isfinite(total_seconds):
-        raise ValueError("requested speed and run duration must be finite")
+    if command_driven:
+        if travel_seconds is not None or speed_mps is not None or repeat or wait_for_capture:
+            raise ValueError("指令走行の速度と姿勢は制御入力から決まります")
+        total_seconds = None
+    else:
+        travel_seconds, speed_mps = circuits.route_timing(circuit, route, length, travel_seconds, speed_mps)
+        try:
+            total_seconds = travel_seconds * laps
+        except OverflowError as exc:
+            raise ValueError("requested run duration is too large") from exc
+        if not isfinite(total_seconds):
+            raise ValueError("requested speed and run duration must be finite")
     focal = width / (2 * tan(HFOV/2))
     scene = {
         "course": circuit, "environment": "outdoor_circuit",
@@ -191,7 +196,11 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                          "Both optical IMU frames are at the stereo midpoint. No sensor noise or bias. "
                          "Combined acceleration is linearly interpolated between 200 Hz samples."},
     }
-    if record_ground_truth:
+    if command_driven:
+        scene["actuation"] = {"topic": "/atd/gazebo/actuators",
+                              "spawn_x_y_yaw": points[0][1:], "model": "rear_axle_kinematic_bicycle",
+                              "drive_timeout_s": 0.30, "trace_interval_s": 0.05}
+    elif record_ground_truth:
         scene["trajectory"]["trace_interval_s"] = min(.05, travel_seconds / 120)
     output.mkdir(exist_ok=True, parents=True)
     scene_file = output / "scene.json"
@@ -227,7 +236,7 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     cameras(link, height, radians(pitch_deg), circuit, far, width, image_height, camera_hz)
     motion = ET.SubElement(rig, "plugin", filename="gz-sim-python-system-loader-system",
                            name="gz::sim::systems::PythonSystemLoader")
-    field(motion, "module_name", "monza_motion")
+    field(motion, "module_name", "closed_loop_motion" if command_driven else "monza_motion")
     field(motion, "scene_file", str(scene_file))
     ET.indent(root)
     ET.ElementTree(root).write(output / "world.sdf", encoding="UTF-8", xml_declaration=True)

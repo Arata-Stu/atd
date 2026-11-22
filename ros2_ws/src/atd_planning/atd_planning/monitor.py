@@ -21,6 +21,10 @@ class PlanningMonitor(Node):
         defaults = dict(results_root='/data/results', map_id='', line='raceline',
                         horizon_m=DEFAULT_HORIZON_M, max_offset_m=.75)
         cfg = {key: self.declare_parameter(key, value, descriptor).value for key, value in defaults.items()}
+        sim_freshness = self.declare_parameter('simulation_freshness', False, descriptor).value
+        if sim_freshness and not self.get_parameter('use_sim_time').value:
+            raise ValueError('模擬時間での鮮度検査には use_sim_time が必要です')
+        self.arrival_time = (lambda: self.get_clock().now().nanoseconds * 1e-9) if sim_freshness else time.monotonic
         self.line = cfg['line']
         self.identity = dict(map_id=cfg['map_id'], map_sha256='', hdmap_sha256='')
         self.asset_issue = ''
@@ -39,7 +43,7 @@ class PlanningMonitor(Node):
         self.source = None
         self.publisher = self.create_publisher(PlanningStatus, '/planning/status', 10)
         self.subscription = self.create_subscription(LocalizationStatus, '/localization/status', self.observe, 10)
-        self.create_timer(.1, self.watch, clock=Clock(clock_type=ClockType.STEADY_TIME))
+        self.create_timer(.1, self.watch, clock=self.get_clock() if sim_freshness else Clock(clock_type=ClockType.STEADY_TIME))
 
     def publish(self, data):
         msg = PlanningStatus()
@@ -72,7 +76,7 @@ class PlanningMonitor(Node):
             self.invalidate('自己位置の配信元が複数あります')
         elif self.last_observation is None:
             self.invalidate('自己位置の入力待ちです')
-        elif time.monotonic() - self.changed_at > MAX_AGE_S:
+        elif self.arrival_time() - self.changed_at > MAX_AGE_S:
             self.invalidate('自己位置の新しい観測が届いていません')
         elif self.source.state == 'tracking' and not self.fresh_stamp(self.last_observation[-1]):
             self.invalidate('自己位置の観測時刻が現在時刻と整合しません')
@@ -90,14 +94,14 @@ class PlanningMonitor(Node):
         repeated = key == self.last_observation
         if not repeated:
             self.last_observation = key
-            self.changed_at = time.monotonic()
+            self.changed_at = self.arrival_time()
         if self.count_publishers('/localization/status') > 1:
             return self.invalidate('自己位置の配信元が複数あります')
         if source.header.frame_id != 'map' or any(getattr(source, k) != v for k, v in self.identity.items()):
             return self.invalidate('自己位置と計画ラインの地図 ID・地図版・座標系が一致しません')
         if source.state != 'tracking':
             return self.invalidate(f'{source.state}: {source.reason}')
-        if not self.fresh_stamp(stamp_ns) or time.monotonic() - self.changed_at > MAX_AGE_S:
+        if not self.fresh_stamp(stamp_ns) or self.arrival_time() - self.changed_at > MAX_AGE_S:
             return self.invalidate('自己位置の元観測が古いか、時刻が不正です')
         if repeated:
             # Localization periodically republishes its last pose; replay CSV stores each stamp once.

@@ -65,6 +65,34 @@ class CompositionTests(unittest.TestCase):
     def groups(self, manual):
         return [value for value in self.generate(manual) if hasattr(value, 'actions')]
 
+    def test_gazebo_closed_loop_loads_saved_map_and_uses_only_simulated_actuators(self):
+        path = Path(__file__).resolve().parents[1] / 'launch/gazebo_closed_loop.launch.py'
+        metadata = dict(map_id='odaiba', map_sha256='a' * 64, hdmap_sha256='b' * 64)
+        points = [[0., 0.], [1., 0.], [1., 1.]]
+        route = dict(points=points, profile=[[i, x, y, 0., 0., 1., 0.] for i, (x, y) in enumerate(points)])
+        hdmap = dict(frame='map', closed=True, lines=dict(raceline=route, centerline=route))
+        with fake_launch(), patch('atd_localization.assets.map_metadata', return_value=metadata), \
+                patch('atd_localization.assets.verified_hdmap', return_value=json.dumps(hdmap)):
+            module = runpy.run_path(str(path))
+            entities = module['generate_launch_description']().entities
+            context = {e.args[0]: e.default_value for e in entities if hasattr(e, 'default_value')}
+            context['map_id'] = 'odaiba'
+            loc, plan, node = module['setup'](context)
+            self.assertEqual([g.actions[0].args[0].args[0] for g in (loc, plan)], [
+                '/share/atd_localization/launch/localization.launch.py', '/share/atd_planning/launch/planning.launch.py'])
+            for group in (loc, plan):
+                params = dict(group.actions[0].launch_arguments)
+                self.assertEqual((params['use_sim_time'], params['simulation_freshness'], params['map_id']),
+                                 ('true', 'true', 'odaiba'))
+            self.assertEqual((node.package, node.executable), ('atd_bringup', 'gazebo_control'))
+            self.assertTrue(node.parameters[0]['use_sim_time'])
+            self.assertEqual(node.parameters[0]['map_sha256'].args[0], metadata['map_sha256'])
+            self.assertEqual(node.parameters[0]['min_lookahead_m'], .65)
+            for options, expected in ((dict(line='centerline'), .35), (dict(min_lookahead_m='.8'), .8)):
+                self.assertEqual(module['setup'](dict(context, **options))[-1].parameters[0]['min_lookahead_m'], expected)
+            with self.assertRaisesRegex(ValueError, 'custom'):
+                module['setup'](dict(context, line='custom'))
+
     def test_gazebo_profile_runs_only_stereo_vo_with_the_simulation_clock(self):
         path = Path(__file__).resolve().parents[1] / 'launch/gazebo.launch.py'
         with fake_launch():

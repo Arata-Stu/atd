@@ -82,6 +82,7 @@ usage() {
     atd web prepare
     atd gazebo
     atd gazebo bag --course odaiba --speed 3 --laps 2
+    atd gazebo closed-loop
     atd gazebo video --route lap
     atd gazebo serve
     atd bringup gazebo
@@ -133,6 +134,7 @@ gazebo_from_menu() {
     local title="$1" action catalog circuit speed laps resolution camera_hz imu
     shift
     action="$(choose "$title" bag 'ステレオ rosbag を記録' map '走行中に cuVSLAM 地図を作成' \
+        closed-loop '保存地図で自己位置推定・計画・制御して自動走行' \
         video '左右の車載動画を保存' serve 'ステレオ画像と /clock を配信' \
         run '動画を保存し、別の試行で受信速度を測定' benchmark 'ステレオの配信レートを測定' \
         diagnose 'Gazebo と ROS の画像受信を比較' prepare '専用イメージを準備・容量を測定' \
@@ -153,17 +155,27 @@ gazebo_from_menu() {
     circuit="$(choose "$title / コース" "${options[@]}" back '前のメニューへ')" || return 0
     [[ "$circuit" != back ]] || return 0
     local -a args=("$action" --route lap --circuit "$circuit")
-    printf '走行速度 [RC m/s]（Enter でコース既定、q で戻る）> ' >&2
+    if [[ "$action" = closed-loop ]]; then
+        printf '速度上限 [m/s]（Enter で 1.5、q で戻る）> ' >&2
+    else
+        printf '走行速度 [RC m/s]（Enter でコース既定、q で戻る）> ' >&2
+    fi
     IFS= read -r speed || return 0
     [[ "$speed" != q ]] || return 0
     if [[ -n "$speed" ]]; then args+=(--speed "$speed"); fi
     if [[ "$action" != benchmark && "$action" != diagnose ]]; then
         local default_laps='1周'
         if [[ "$action" = serve ]]; then default_laps='連続配信'; fi
+        if [[ "$action" = closed-loop ]]; then default_laps='2周'; fi
         printf '周回数（Enter で%s、q で戻る）> ' "$default_laps" >&2
         IFS= read -r laps || return 0
         [[ "$laps" != q ]] || return 0
         if [[ -n "$laps" ]]; then args+=(--laps "$laps"); fi
+    fi
+    if [[ "$action" = closed-loop ]]; then
+        camera_hz="$(choose "$title / カメラの撮影レート" 30 'Hz（既定）' 60 'Hz' 90 'Hz')" || return 0
+        "$@" "${args[@]}" --camera-hz "$camera_hz"
+        return
     fi
     resolution="$(choose "$title / ステレオ解像度" 640x480 '既定' 424x240 '' 848x480 '' 1280x720 '')" || return 0
     camera_hz="$(choose "$title / カメラの撮影レート" 90 'Hz（既定）' 60 'Hz' 30 'Hz')" || return 0

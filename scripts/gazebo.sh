@@ -15,11 +15,17 @@ usage() {
   video       左右の車載動画を保存（走行時間はコース・速度・周回数で決定）
   bag         指定周回のステレオ rosbag を record/rosbags に保存（既定1周）。名前に開始日時（日本時間）・撮影設定・周回数・RC速度を含む
   map         指定周回のステレオ画像で cuVSLAM 地図を保存（既定1周）。Notebook の起動済み atd_pc_dev を使用
+  closed-loop  保存地図で自己位置を推定し、操舵・スロットルを Gazebo に戻して自動走行（既定2周）
   benchmark   録画を止めた状態で ROS 2 の受信を計測（既定 60 実時間秒）
   diagnose    同じ計測区間に Gazebo 側でも画像とシミュレーション時刻を観測（既定 20 実時間秒）
   serve       /clock・ステレオ画像・CameraInfo・固定 TF を配信（既定 Ctrl+C まで）
   --course ID         コースを選択（既定 odaiba、--circuit ID も使用可）
   --speed m/s         RC スケールの走行速度（シミュレーション時間）。省略時はコース既定
+                      closed-loop では制御目標の速度上限（既定 1.5 m/s）
+  --map ID            closed-loop で使う cuVSLAM・VGL・速度付き HDMap の地図ID（省略で選択）
+  --line 種類         closed-loop の raceline / centerline / custom（省略で保存済みラインから選択）
+  --engine-dir 相対パス  closed-loop の VGL engine を明示する場合の results からの相対パス
+  --min-lookahead m   closed-loop の Pure Pursuit 最短先読み距離を指定
   --laps N            全周を N 周走行（正の整数）。run では動画が対象。serve は指定周回で終了
   --duration 秒       video・bag・map は1周の走行時間（--speed と排他）
                       benchmark・diagnose は実時間の計測時間（--speed と併用可）
@@ -27,8 +33,8 @@ usage() {
   --wait-for-stereo   serve を一時停止状態で起動し、左右の画像と CameraInfo の購読を待って走行開始
   --dds shm|udp   Gazebo コンテナ内に Fast DDS 共有メモリを追加（shm、既定）、または従来の UDP のみ（udp）
   --camera-height m   地面から左右光学中心までの高さを指定
-  --resolution WxH    左右とも 424x240 / 640x480（既定）/ 848x480 / 1280x720
-  --camera-hz Hz      左右の撮影周期を 30 / 60 / 90 Hz（既定）から選択。シミュレーション時刻基準
+  --resolution WxH    左右とも 424x240 / 640x480（既定）/ 848x480 / 1280x720。closed-loop は VGL 地図と同じ解像度
+  --camera-hz Hz      左右の撮影周期を 30 / 60 / 90 Hz から選択。既定は closed-loop が30 Hz、他は90 Hz
   --imu off|200|400   加速度 200 Hz、ジャイロと統合 IMU は指定 Hz で配信（既定 off）
   --camera-pitch-deg 度   カメラの下向き角度を指定（既定 0）
   --dry-run           対象イメージ・保存先・実行コマンドを表示
@@ -49,7 +55,7 @@ if [[ "$action" = list ]]; then
     [[ $# = 0 ]] || fail "list は引数なしで実行してください"
     exec python3 "$catalog"
 fi
-case "$action" in prepare|run|video|bag|map|benchmark|diagnose|serve) ;; *) fail "不明な操作: $action";; esac
+case "$action" in prepare|run|video|bag|map|closed-loop|benchmark|diagnose|serve) ;; *) fail "不明な操作: $action";; esac
 dry_run=false
 circuit=odaiba
 dds=shm
@@ -59,6 +65,11 @@ duration=
 resolution=640x480
 camera_hz=90
 imu=off
+map_id=
+line=
+engine_dir=
+min_lookahead=
+if [[ "$action" = closed-loop ]]; then resolution=; camera_hz=30; fi
 sim_args=()
 while (( $# )); do
     case "$1" in
@@ -70,8 +81,17 @@ while (( $# )); do
         --speed)
             [[ "$action" != prepare && -n "${2:-}" ]] || fail "走行時に --speed と速度（m/s）を指定してください"
             speed="$2"; shift 2 ;;
+        --map|--line|--engine-dir|--min-lookahead)
+            [[ "$action" = closed-loop && -n "${2:-}" ]] || fail "$1 は closed-loop で値を指定してください"
+            case "$1" in
+                --map) map_id="$2" ;;
+                --line) line="$2" ;;
+                --engine-dir) engine_dir="$2" ;;
+                --min-lookahead) min_lookahead="$2" ;;
+            esac
+            shift 2 ;;
         --laps)
-            case "$action" in run|video|bag|map|serve) ;; *) fail "--laps は run・video・bag・map・serve で指定してください" ;; esac
+            case "$action" in run|video|bag|map|closed-loop|serve) ;; *) fail "--laps は走行周回のある操作で指定してください" ;; esac
             [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || fail "--laps は1以上の整数で指定してください"
             laps="$2"; shift 2 ;;
         --wait-for-stereo)
@@ -98,6 +118,7 @@ while (( $# )); do
         --duration|--camera-height|--camera-pitch-deg)
             [[ "$action" != prepare ]] || fail "$1 は走行時に指定してください"
             [[ "$1" != --duration || "$action" != serve ]] || fail "serve の終了条件は --laps または Ctrl+C で指定してください"
+            [[ "$1" != --duration || "$action" != closed-loop ]] || fail "closed-loop は --laps で周回数を指定してください"
             [[ -n "${2:-}" ]] || fail "$1 の値が必要です"
             if [[ "$1" = --duration ]]; then duration="$2"; fi
             sim_args+=("$1" "$2"); shift 2 ;;
@@ -117,7 +138,7 @@ fi
 list="$(python3 "$catalog")"
 [[ "$circuit" =~ ^[a-z0-9]+$ && $'\n'"$list"$'\n' = *$'\n'"$circuit"$'\n'* ]] || fail "不明なコース: $circuit（atd gazebo list で一覧）"
 sim_args+=(--route lap)
-if [[ -n "$speed" ]]; then sim_args+=(--speed "$speed"); fi
+if [[ -n "$speed" && "$action" != closed-loop ]]; then sim_args+=(--speed "$speed"); fi
 storage="${ATD_STORAGE_CONFIG:-$project/config/storage.env}"
 if [[ -f "$storage" ]]; then
     source "$storage"
@@ -127,6 +148,18 @@ fi
 runs="${ATD_RESULT_DIR:-${ATD_PC_RESULT_DIR:-$project/data/results}}/runs"
 results="$runs/gazebo/$circuit"
 [[ "$results" = /* ]] || fail "results に絶対パスを指定してください"
+if [[ "$action" = closed-loop ]]; then
+    selection_args=(--results "${runs%/runs}")
+    [[ -z "$map_id" ]] || selection_args+=(--map "$map_id")
+    [[ -z "$line" ]] || selection_args+=(--line "$line")
+    [[ -z "$resolution" ]] || selection_args+=(--resolution "$resolution")
+    if $dry_run; then selection_args+=(--dry-run); fi
+    selection="$(python3 "$project/tools/gazebo_monza/closed_loop_job.py" select "${selection_args[@]}")" || exit $?
+    [[ -n "$selection" ]] || exit 0
+    IFS=$'\t' read -r map_id line resolution <<< "$selection"
+    laps="${laps:-2}"
+    speed="${speed:-1.5}"
+fi
 record=
 if [[ "$action" = bag ]]; then
     record="${ATD_RECORD_DIR:-${ATD_PC_RECORD_DIR:-$project/data/record}}"
@@ -201,7 +234,7 @@ run_mode() {
         --user "$(id -u):$(id -g)")
     if [[ "$dds" = shm ]]; then
         profile=/workspaces/atd/docker/gazebo_monza/fastdds.xml
-        if [[ "$mode" = serve || "$mode" = map ]]; then
+        if [[ "$mode" = serve || "$mode" = map || "$mode" = closed-loop ]]; then
             local -a sim_ipc_args=()
             source "$project/scripts/lib/gazebo_ipc.sh"
             atd_gazebo_ipc_args "$dry_run"
@@ -211,7 +244,8 @@ run_mode() {
         fi
     fi
     local map_container="atd-gazebo-map-$circuit-${out##*/}"
-    if [[ "$mode" = map ]]; then command+=(--name "$map_container"); fi
+    if [[ "$mode" = closed-loop ]]; then map_container="atd-gazebo-$circuit-${out##*/}"; fi
+    if [[ "$mode" = map || "$mode" = closed-loop ]]; then command+=(--name "$map_container"); fi
     # PRIME / hybrid graphics 等で render node が存在するホストは既存グループを引き継ぐ。
     local gpu_device
     for gpu_device in /dev/dri/renderD*; do
@@ -239,10 +273,18 @@ run_mode() {
         printf 'rosbag 保存先 %s/rosbags/%s\n' "$record" "$bag_name"
     fi
     printf '%s  DDS=%s  ROS_DOMAIN_ID=%s  保存先 %s\n' "$mode" "$dds" "$domain" "$out"
-    if [[ "$mode" = map ]]; then
-        local -a job=(python3 "$project/tools/gazebo_monza/map_job.py" host
+    if [[ "$mode" = map || "$mode" = closed-loop ]]; then
+        local helper=map_job.py
+        [[ "$mode" != closed-loop ]] || helper=closed_loop_job.py
+        local -a job=(python3 "$project/tools/gazebo_monza/$helper" host
             --output "$out" --results "${runs%/runs}" --circuit "$circuit" --domain "$domain"
             --profile "$profile" --container "$map_container")
+        if [[ "$mode" = closed-loop ]]; then
+            job+=(--map "$map_id" --line "$line" --speed "$speed")
+            if [[ -n "$engine_dir" ]]; then job+=(--engine-dir "$engine_dir"); fi
+            if [[ -n "$min_lookahead" ]]; then job+=(--min-lookahead "$min_lookahead"); fi
+            printf '地図 %s / %s　速度上限 %s m/s　%s 周　ステレオ %s @ %s Hz\n' "$map_id" "$line" "$speed" "$laps" "$resolution" "$camera_hz"
+        fi
         if $dry_run; then job+=(--dry-run); fi
         exec "${job[@]}" -- "${command[@]}"
     fi

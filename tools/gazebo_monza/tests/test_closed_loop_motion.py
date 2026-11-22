@@ -36,9 +36,25 @@ class CommandMotionTests(unittest.TestCase):
         for i in range(500):
             now = stamp + i * 10**7
             plant.advance(now, .01)
-        self.assertEqual((plant.state, plant.reason), ("stopped", "command_timeout"))
+        self.assertEqual((plant.state, plant.reason), ("waiting_observation", "command_timeout"))
         self.assertLess(plant.vehicle.speed, .001)
+        plant.receive(now, stamp, JOINTS, [0., .5, 1.])
+        self.assertEqual(plant.vehicle.throttle_setpoint, 0.)
         plant.receive(now, now, JOINTS, [0., .5, 1.])
+        self.assertEqual((plant.state, plant.reason), ("driving", ""))
+        self.assertEqual(plant.vehicle.throttle_setpoint, .5)
+        self.assertEqual(plant.first_active_ns, start)
+
+    def test_disable_during_update_gap_latches_stop(self):
+        plant = CommandPlant((0., 0., 0.), .3)
+        stamp = 10**9
+        plant.receive(stamp, stamp, JOINTS, [.1, .3, 1.])
+        now = stamp + 500_000_000
+        plant.advance(now, .01)
+        self.assertEqual(plant.state, "waiting_observation")
+        plant.receive(now, now, JOINTS, [0., 0., 0.])
+        plant.receive(now + 1, now + 1, JOINTS, [0., .3, 1.])
+        self.assertEqual((plant.state, plant.reason), ("stopped", "controller_disabled"))
         self.assertEqual(plant.vehicle.throttle_setpoint, 0.)
 
     def test_disabled_future_malformed_and_nonmonotonic(self):

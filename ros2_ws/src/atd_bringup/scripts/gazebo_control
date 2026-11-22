@@ -53,7 +53,9 @@ class GazeboControlNode(Node):
 
     def publish(self, now, drive):
         controller = self.controller
-        if drive is not None or controller.state != 'driving':
+        # During an observation gap the Gazebo plant expires the previous command
+        # to neutral. An explicit disable after launch is a latched fault.
+        if drive is not None or controller.state in ('waiting', 'stopped'):
             message = JointState()
             ns, steer, throttle = (now, 0., 0.) if drive is None else drive
             message.header.stamp.sec, message.header.stamp.nanosec = divmod(ns, 1_000_000_000)

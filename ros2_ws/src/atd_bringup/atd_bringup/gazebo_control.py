@@ -53,19 +53,25 @@ class GazeboController:
     def inhibit(self, reason):
         if self.state != 'stopped':
             self.reason = reason
-            if self.state == 'driving':
+            if self.stamp:
                 self.state = 'stopped'
         self.observation = None
         self.locations.clear()
         self.plans.clear()
         self.pid.reset()
 
+    def wait_for_observation(self, reason):
+        if self.state == 'driving':
+            self.state, self.reason = 'waiting_observation', reason
+            self.observation = None
+            self.pid.reset()
+
     def tick(self, now):
         if now < self.clock_ns:
             self.inhibit('シミュレーション時計が逆行しました')
         self.clock_ns = now
         if self.state == 'driving' and now >= self.expires:
-            self.inhibit('同じ時刻の新しい自己位置・計画が届かず、指令が失効しました')
+            self.wait_for_observation('前の指令が失効しました。同じ観測時刻の新しい自己位置と計画を待っています')
 
     def check_sources(self, pose_publishers, plan_publishers):
         if pose_publishers == plan_publishers == 1:
@@ -78,13 +84,18 @@ class GazeboController:
         if self.state == 'stopped':
             return None
         is_pose = kind == 'localization'
-        if is_pose and msg.state != 'tracking' or not is_pose and not msg.valid:
-            self.inhibit(msg.reason or ('自己位置を追跡できません' if is_pose else '計画が無効です'))
-            return None
         identity = tracking_id(msg)
         if (msg.header.frame_id != 'map' or identity[:3] != self.route or not msg.session_id
                 or not is_pose and msg.line != self.line):
             self.inhibit('自己位置・計画の地図、走行ラインまたは座標系が不一致です')
+            return None
+        if is_pose and msg.state == 'stale' and (self.session is None or self.session == identity):
+            self.wait_for_observation(msg.reason or '新しい自己位置を待っています')
+            self.locations.clear()
+            self.plans.clear()
+            return None
+        if is_pose and msg.state != 'tracking' or not is_pose and not msg.valid:
+            self.inhibit(msg.reason or ('自己位置を追跡できません' if is_pose else '計画が無効です'))
             return None
         if self.session is not None and self.session != identity:
             self.inhibit('自己位置の追跡セッションが変化しました')
@@ -92,10 +103,10 @@ class GazeboController:
                 return None
         self.session = identity
         stamp = timestamp(msg)
-        if stamp <= 0 or stamp > now + 50_000_000 or now - stamp >= COMMAND_TTL_NS:
+        if stamp <= 0 or stamp > now + 50_000_000:
             self.inhibit('元観測のシミュレーション時刻が有効期間外です')
             return None
-        if stamp <= self.stamp:
+        if stamp <= self.stamp or now - stamp >= COMMAND_TTL_NS:
             return None
         pending = self.locations if is_pose else self.plans
         pending[stamp] = msg
@@ -115,7 +126,10 @@ class GazeboController:
             if not math.isfinite(plan.validity_s) or not 0 < plan.validity_s:
                 raise ValueError('計画の有効期限が不正です')
             expiry = stamp + int(min(COMMAND_TTL_NS, plan.validity_s * 1e9))
-            if now >= expiry or tracking_id(pose) != tracking_id(plan):
+            if now >= expiry:
+                del self.locations[stamp], self.plans[stamp]
+                return None
+            if tracking_id(pose) != tracking_id(plan):
                 raise ValueError('同じ追跡区間の新しい計画がありません')
             measured = pose.speed_mps
             if measured != plan.estimated_speed_mps or not math.isfinite(measured):

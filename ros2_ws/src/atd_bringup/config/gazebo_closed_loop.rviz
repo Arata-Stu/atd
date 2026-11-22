@@ -14,6 +14,20 @@ Visualization Manager:
       Cell Size: 1
       Plane Cell Count: 100
       Alpha: 0.15
+    - Class: rviz_default_plugins/PointCloud2
+      Name: cuVSLAM landmarks
+      Enabled: true
+      Topic:
+        Value: /visual_slam/vis/landmarks_cloud
+        Depth: 1
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 2
+      Decay Time: 0
+      Color Transformer: FlatColor
+      Color: 180; 194; 209
+      Alpha: 0.65
     - Class: rviz_default_plugins/Path
       Name: Reference line
       Enabled: true

@@ -87,6 +87,8 @@ class CompositionTests(unittest.TestCase):
                 params = dict(group.actions[0].launch_arguments)
                 self.assertEqual((params['use_sim_time'], params['simulation_freshness'], params['map_id']),
                                  ('true', 'true', 'odaiba'))
+                self.assertEqual(params['allow_sparse_tf'], 'true')
+            self.assertEqual(dict(loc.actions[0].launch_arguments)['visualize_landmarks'], 'false')
             self.assertEqual((node.package, node.executable), ('atd_bringup', 'gazebo_control'))
             self.assertTrue(node.parameters[0]['use_sim_time'])
             self.assertEqual(node.parameters[0]['map_sha256'].args[0], metadata['map_sha256'])
@@ -99,7 +101,8 @@ class CompositionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, '画面出力先'):
                     module['setup'](dict(context, rviz='true'))
             with patch.dict(os.environ, DISPLAY=':0'):
-                *_, paths, viewer = module['setup'](dict(context, rviz='true'))
+                loc_debug, _, _, paths, viewer = module['setup'](dict(context, rviz='true'))
+            self.assertEqual(dict(loc_debug.actions[0].launch_arguments)['visualize_landmarks'], 'true')
             self.assertEqual((paths.executable, viewer.executable), ('gazebo_closed_loop_paths', 'rviz2'))
             params, = paths.parameters
             self.assertEqual([params[k].args[0] for k in ('results_root', 'map_id', 'line')],
@@ -111,6 +114,8 @@ class CompositionTests(unittest.TestCase):
             view = manager['Views']['Current']
             self.assertEqual((view['X'], view['Y']), (.5, .5))
             topics = {d['Topic']['Value']: d['Topic'] for d in manager['Displays'] if 'Topic' in d}
+            cloud = topics.pop('/visual_slam/vis/landmarks_cloud')
+            self.assertEqual((cloud['Reliability Policy'], cloud['Durability Policy']), ('Best Effort', 'Volatile'))
             self.assertEqual(set(topics), {'/atd/gazebo/' + name for name in
                              ('reference_path', 'ground_truth_path', 'estimated_path', 'current_poses')})
             for topic in topics.values():

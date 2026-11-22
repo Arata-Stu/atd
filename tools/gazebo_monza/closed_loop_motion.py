@@ -24,11 +24,11 @@ class CommandPlant:
         self.first_active_ns = None
         self.command_stamp_ns = None
 
-    def stop(self, reason, *, before_start=False):
+    def stop(self, reason, *, before_start=False, wait_for_command=False):
         self.vehicle.steering_setpoint = 0.
         self.vehicle.throttle_setpoint = 0.
-        if self.state == "driving" or (before_start and self.state == "waiting"):
-            self.state = "stopped"
+        if self.state in ("driving", "waiting_observation") or (before_start and self.state == "waiting"):
+            self.state = "waiting_observation" if wait_for_command else "stopped"
             self.reason = reason
 
     def receive(self, now_ns, stamp_ns, names, values):
@@ -42,21 +42,22 @@ class CommandPlant:
             self.stop("controller_disabled")
             return
         if (enabled != 1. or abs(steering) > STEERING_LIMIT + 1e-7 or not 0. <= throttle <= 1.
-                or stamp_ns <= 0 or not 0 <= now_ns - stamp_ns <= self.timeout_ns):
+                or stamp_ns <= 0 or stamp_ns > now_ns):
             self.stop("invalid_or_stale_command")
             return
-        if self.command_stamp_ns is not None and stamp_ns < self.command_stamp_ns:
+        if (now_ns - stamp_ns > self.timeout_ns
+                or self.command_stamp_ns is not None and stamp_ns <= self.command_stamp_ns):
             return
         if self.first_active_ns is None:
             self.first_active_ns = now_ns
         self.command_stamp_ns = stamp_ns
-        self.state = "driving"
+        self.state, self.reason = "driving", ""
         self.vehicle.steering_setpoint = steering
         self.vehicle.throttle_setpoint = throttle
 
     def advance(self, now_ns, dt):
         if self.state == "driving" and now_ns - self.command_stamp_ns > self.timeout_ns:
-            self.stop("command_timeout")
+            self.stop("command_timeout", wait_for_command=True)
         self.vehicle.advance(dt, ACTUATOR_RESPONSE)
 
 

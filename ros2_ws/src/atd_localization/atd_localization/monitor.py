@@ -32,7 +32,7 @@ class LocalizationMonitor(Node):
         super().__init__('atd_localization_monitor', **kwargs)
         defaults = dict(map_id='', map_sha256='', hdmap_sha256='', map_frame='map', odom_frame='odom',
                         base_frame='base_link', max_age_s=1.0, left_info='', right_info='', left_frame='',
-                        right_frame='', image_width=0, image_height=0, simulation_freshness=False)
+                        right_frame='', image_width=0, image_height=0, simulation_freshness=False, allow_sparse_tf=False)
         self.config = {key: self.declare_parameter(key, value, ParameterDescriptor(read_only=True)).value
                        for key, value in defaults.items()}
         c = self.config
@@ -44,9 +44,11 @@ class LocalizationMonitor(Node):
             raise ValueError('左右それぞれの CameraInfo・光学フレームと解像度が必要です')
         if c['simulation_freshness'] and not self.get_parameter('use_sim_time').value:
             raise ValueError('模擬時間での鮮度検査には use_sim_time が必要です')
+        if c['allow_sparse_tf'] and not c['simulation_freshness']:
+            raise ValueError('低頻度 TF の補正には simulation_freshness が必要です')
         self.arrival_time = (lambda: self.get_clock().now().nanoseconds * 1e-9) if c['simulation_freshness'] else time.monotonic
         self.session_id = str(uuid.uuid4())
-        self.state = TrackingState(c['max_age_s'])
+        self.state = TrackingState(c['max_age_s'], allow_sparse_tf=c['allow_sparse_tf'])
         self.startup_hint = InitialHintRequest()
         self.hint_client = self.create_client(Trigger, '/localization/request_hint')
         self.publisher = self.create_publisher(LocalizationStatus, '/localization/status', 10)

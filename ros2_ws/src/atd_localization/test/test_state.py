@@ -58,6 +58,60 @@ def test_no_identity_hint_or_approximate_timestamp_fallback():
     assert state.status(5.1)[0] == 'tracking'
 
 
+def test_sparse_map_corrections_are_causal_and_preserve_observation_time():
+    state = TrackingState(allow_sparse_tf=True)
+    camera(state)
+    state.hint(T - 2)
+    state.transform(T - 1, 5., I)  # Pre-registration TF cannot place the vehicle on the map.
+    state.diagnostic(T, 5., GOOD)
+    state.odometry(T, 5., I, 0., 0.)
+    assert state.status(5.)[2] is None
+    state.transform(T, 5., RigidPose.checked((3., 0., 0.), I.xyzw))
+    assert state.status(5.)[2].pose.xyz == (3., 0., 0.)
+
+    # No new correction for over a second. Neither VO nor the previous pose is
+    # restamped while the matching tracking diagnostic is still missing.
+    stamp = T + 2_000_000_000
+    camera(state, stamp, 7.)
+    state.odometry(stamp, 7., RigidPose.checked((1., 0., 0.), I.xyzw), .8, 0.)
+    assert state.status(7.)[0] == 'stale' and state.epoch == 0
+    state.transform(stamp + 10, 7., RigidPose.checked((9., 0., 0.), I.xyzw))
+    state.diagnostic(stamp, 7., GOOD)
+    status, _, sample = state.status(7.)
+    assert status == 'tracking' and state.epoch == 0
+    assert (sample.stamp, sample.pose.xyz, sample.speed) == (stamp, (4., 0., 0.), .8)
+
+    # DDS can deliver a newer correction after the original pose was published.
+    state.transform(stamp, 7., RigidPose.checked((4., 0., 0.), I.xyzw))
+    for offset, expected_x in ((1, 4.), (10, 9.)):
+        state.diagnostic(stamp + offset, 7., GOOD)
+        state.odometry(stamp + offset, 7., I, .7, 0.)
+        assert state.status(7.)[2].pose.xyz == (expected_x, 0., 0.)
+
+
+def test_sparse_correction_is_discarded_on_loss_and_clock_rewind():
+    state = TrackingState(allow_sparse_tf=True)
+    camera(state)
+    state.hint(T - 1)
+    observe(state)
+    assert state.status(5.)[0] == 'tracking'
+    state.diagnostic(T + 1, 5., dict(GOOD, vo_status='Lost'))
+    assert state.status(7.)[0] == 'lost' and state.epoch == 1
+    state.diagnostic(T + 2, 5., dict(GOOD, localized_in_exist_map='No'))
+    state.hint(T + 3)
+    state.diagnostic(T + 4, 5., GOOD)
+    state.odometry(T + 4, 5., I, 0., 0.)
+    state.transform(T + 1, 5., I)  # An old queued correction cannot re-arm the recovered session.
+    assert state.status(5.)[2] is None
+    state.transform(T + 4, 5., I)
+    assert state.status(5.)[0] == 'tracking'
+    camera(state, T - 99)
+    state.hint(T - 100)
+    state.diagnostic(T - 99, 5., GOOD)
+    state.odometry(T - 99, 5., I, 0., 0.)
+    assert state.status(5.)[2] is None
+
+
 def test_latched_yes_after_loss_is_not_a_new_saved_map_match():
     state = TrackingState()
     camera(state)

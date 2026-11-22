@@ -58,9 +58,9 @@
     publish_odom_to_base_tf: true
     invert_map_to_odom_tf: false
     invert_odom_to_base_tf: false
-    enable_slam_visualization: true  # Capture collects map landmarks; runtime localization overrides false.
+    enable_slam_visualization: true  # Snapshot capture and RViz landmark display.
     enable_observations_view: false
-    enable_landmarks_view: true  # ATD: HDMap background
+    enable_landmarks_view: true  # Live map landmarks for HDMap capture and Notebook debugging.
     path_max_size: 50000  # ATD: retain a longer final SLAM path
     verbosity: 1
     enable_debug_mode: false

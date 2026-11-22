@@ -62,8 +62,8 @@ def test_clock_trailing_frame_buffers_and_never_drives_on_misaligned_stamps():
 
 
 @pytest.mark.parametrize('condition', ('loss', 'invalid_plan', 'wrong_map', 'wrong_line', 'new_session',
-                                      'invalid_speed', 'invalid_offset', 'expired', 'rewind'))
-def test_invalid_or_stale_latches_stop_until_new_run(condition):
+                                      'invalid_speed', 'invalid_offset', 'rewind'))
+def test_invalid_inputs_latch_stop_until_new_run(condition):
     c = gate()
     run(c)
     now = START + 100_000_000
@@ -91,12 +91,41 @@ def test_invalid_or_stale_latches_stop_until_new_run(condition):
         plan.lateral_error_m = math.nan
         c.observe('planning', plan, now)
         c.observe('localization', loc, now)
-    elif condition == 'expired':
-        c.tick(START + COMMAND_TTL_NS)
     elif condition == 'rewind':
         c.tick(START - 1)
     assert c.state == 'stopped' and c.reason
     assert run(c, now + 1) is None
+
+
+def test_missing_tf_update_waits_then_resumes_with_new_matched_plan_and_pose():
+    c = gate()
+    run(c)
+    c.tick(START + COMMAND_TTL_NS)
+    assert c.state == 'waiting_observation' and c.observation is None
+    now = START + 2_000_000_000
+    for stamp in (START, START + 1):
+        loc, plan = inputs(stamp)
+        assert c.observe('localization', loc, now) is None
+        assert c.observe('planning', plan, now) is None
+    assert c.state == 'waiting_observation'
+    loc, plan = inputs(now, speed=.2)
+    c.observe('planning', plan, now)
+    assert c.observe('localization', loc, now)[0] == now
+    assert c.state == 'driving' and c.pid.last['i_raw'] == 0.
+
+
+def test_explicit_loss_while_waiting_is_terminal():
+    c = gate()
+    run(c)
+    loc, plan = inputs(START + 10)
+    c.observe('planning', plan, START + 10)
+    loc.state = 'stale'
+    c.observe('localization', loc, START + 11)
+    assert c.state == 'waiting_observation' and not c.plans
+    loc.state, loc.reason = 'lost', '追跡喪失'
+    c.observe('localization', loc, START + 12)
+    assert c.state == 'stopped' and c.reason == '追跡喪失'
+    assert run(c, START + 20) is None
 
 
 def test_requires_standstill_and_forward_table():

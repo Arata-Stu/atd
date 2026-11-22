@@ -88,10 +88,11 @@ class InitialHintRequest:
 
 
 class TrackingState:
-    def __init__(self, max_age_s=1.0):
+    def __init__(self, max_age_s=1.0, *, allow_sparse_tf=False):
         if not math.isfinite(max_age_s) or max_age_s <= 0:
             raise ValueError('鮮度の判定秒数は正の有限値で指定してください')
         self.max_age_s = max_age_s
+        self.allow_sparse_tf = allow_sparse_tf
         self.epoch = 0
         self.clock_ns = -1
         self.sources = {}
@@ -102,6 +103,8 @@ class TrackingState:
     def _clear(self):
         self.cameras = {}
         self.frames = {}
+        self.corrections = {}
+        self.registered_since = None
         self.last_sample = None
         self.last_diag = self.barrier = self.hint_stamp = -1
         self.registered = self.needs_clear = self.lost = False
@@ -154,16 +157,26 @@ class TrackingState:
                 self.hint_stamp = -1
                 self.barrier = stamp
                 self.frames.clear()
+                self.corrections.clear()
+                self.registered_since = None
                 self.last_sample = None
             return
         # A "Yes" still latched from before a VO loss cannot establish recovery.
         if self.hint_stamp <= self.barrier or stamp < self.hint_stamp or self.needs_clear:
             return
+        if not self.registered:
+            self.registered_since = stamp
         self.registered = True
         self.lost = False
         self._part(stamp, receipt, 'ok', True)
 
     def transform(self, stamp, receipt, pose):
+        if self.allow_sparse_tf:
+            if self._valid_stamp(stamp) and stamp > self.barrier:
+                self.corrections[stamp] = pose
+                if len(self.corrections) > 128:
+                    del self.corrections[min(self.corrections)]
+            return
         self._part(stamp, receipt, 'transform', pose)
 
     def odometry(self, stamp, receipt, pose, speed, yaw_rate):
@@ -183,10 +196,24 @@ class TrackingState:
         if len(self.frames) > 128:
             del self.frames[min(self.frames)]
         if len(parts) == 3:
-            vo_pose, speed, yaw_rate = parts['odometry'][0]
-            pose = parts['transform'][0].compose(vo_pose)
-            self.last_sample = (Observation(stamp, pose, speed, yaw_rate), min(w for _, w in parts.values()))
+            self._compose(stamp, parts, parts['transform'][0])
             self.frames.pop(stamp, None)
+
+    def _compose(self, stamp, parts, correction):
+        vo_pose, speed, yaw_rate = parts['odometry'][0]
+        pose = correction.compose(vo_pose)
+        self.last_sample = (Observation(stamp, pose, speed, yaw_rate), min(w for _, w in parts.values()))
+
+    def _apply_sparse_correction(self):
+        if self.registered_since is None or not self.corrections:
+            return
+        # VO and its tracking diagnostic still describe one image. At publication time
+        # prefer its exact TF, or hold a measured correction from the same registration.
+        stamp = max((t for t, parts in self.frames.items() if 'ok' in parts and 'odometry' in parts), default=0)
+        correction = max((t for t in self.corrections if self.registered_since <= t <= stamp), default=0)
+        if correction:
+            self._compose(stamp, self.frames[stamp], self.corrections[correction])
+            self.frames = {t: parts for t, parts in self.frames.items() if t > stamp}
 
     def _fresh(self, stamp, received, wall):
         # /clock can trail an image by one clock tick on replay. Old timestamps and
@@ -200,8 +227,10 @@ class TrackingState:
                         for side in ('left', 'right')))
 
     def status(self, wall):
+        if self.allow_sparse_tf:
+            self._apply_sparse_correction()
         state, reason, sample = self._status(wall)
-        if self.was_tracking and state != 'tracking':
+        if self.was_tracking and state != 'tracking' and not (self.allow_sparse_tf and state == 'stale'):
             self.epoch += 1
         self.was_tracking = state == 'tracking'
         return state, reason, sample
@@ -216,7 +245,7 @@ class TrackingState:
             camera = self.cameras.get(side)
             if camera is None:
                 return 'waiting_hint', f'{label} CameraInfo の受信を待っています', None
-            if not self._fresh(camera[0], camera[1], wall):
+            if not self._fresh(camera[0], camera[1], wall) and not (self.allow_sparse_tf and self.lost):
                 return 'stale', f'新しい{label} CameraInfo を待っています', None
         if self.lost:
             return 'lost', '追跡喪失。新しい地図照合の確証が必要です。必要に応じて自己位置推定を再起動してください', None
@@ -225,5 +254,7 @@ class TrackingState:
         if not self.registered:
             return 'localizing', 'cuVSLAM の保存地図への位置合わせを待っています', None
         if not self.last_sample or not self._fresh(self.last_sample[0].stamp, self.last_sample[1], wall):
+            if self.allow_sparse_tf:
+                return 'stale', '保存地図の補正 TF と、新しい同時刻の追跡診断・車体オドメトリを待っています', None
             return 'stale', '同じ観測時刻の追跡診断・map→odom・車体オドメトリを待っています', None
         return 'tracking', '保存地図上で追跡中', self.last_sample[0]

@@ -76,13 +76,15 @@ def setup(context):
         return GroupAction(scoped=True, actions=[IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(launch)), launch_arguments=settings.items())])
 
-    common = dict(map_id=key, results_root=root, use_sim_time='true', simulation_freshness='true')
+    common = dict(map_id=key, results_root=root, use_sim_time='true', simulation_freshness='true',
+                  allow_sparse_tf='true')
     control = {k: ParameterValue(metadata[k], value_type=str) for k in ('map_id', 'map_sha256', 'hdmap_sha256')}
     control.update(line=ParameterValue(line, value_type=str), feedforward_path=ParameterValue(arg('feedforward_path'),
                    value_type=str), max_speed_mps=cap, use_sim_time=True, **asdict(lateral),
                    **{'speed_' + k: v for k, v in asdict(pid).items()})
     actions = [
-        include('atd_localization', 'localization.launch.py', dict(common, engine_dir=arg('engine_dir'))),
+        include('atd_localization', 'localization.launch.py',
+                dict(common, engine_dir=arg('engine_dir'), visualize_landmarks=arg('rviz'))),
         include('atd_planning', 'planning.launch.py', dict(common, line=line,
                 horizon_m=str(max(DEFAULT_HORIZON_M, lateral.max_lookahead_m)))),
         Node(package='atd_bringup', executable='gazebo_control', output='screen', parameters=[control],

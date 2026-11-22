@@ -76,3 +76,35 @@ def test_reference_messages_and_invalidation(monkeypatch):
         driver.destroy_node()
         node.destroy_node()
         rclpy.shutdown(context=context)
+
+
+def test_sparse_tf_planner_waits_through_temporal_gaps_and_forwards_failures():
+    from types import SimpleNamespace
+
+    identity = dict(map_id='course', map_sha256='a' * 64, hdmap_sha256='b' * 64)
+    source = LocalizationStatus(**identity, session_id='sim', state='tracking')
+    source.header.frame_id = 'map'
+    source.header.stamp.sec = 4
+    source.pose.orientation.w = 1.
+    now = SimpleNamespace(nanoseconds=4_000_000_000)
+    node = SimpleNamespace(allow_sparse_tf=True, asset_issue='', last_observation=None, changed_at=None,
+                           identity=identity, count_publishers=lambda _: 1, arrival_time=lambda: now.nanoseconds * 1e-9,
+                           get_clock=lambda: SimpleNamespace(now=lambda: now))
+    node.fresh_stamp = lambda stamp: monitor.PlanningMonitor.fresh_stamp(node, stamp)
+    calls = []
+    node.publish = lambda value: calls.append('plan')
+    node.invalidate = calls.append
+    node.planner = SimpleNamespace(update=lambda **_: {})
+    monitor.PlanningMonitor.observe(node, source)
+    now.nanoseconds += 2_000_000_000
+    monitor.PlanningMonitor.watch(node)
+    monitor.PlanningMonitor.observe(node, source)
+    source.state = 'stale'
+    monitor.PlanningMonitor.observe(node, source)
+    assert calls == ['plan']
+    source.state = 'tracking'
+    source.header.stamp.sec = 6
+    monitor.PlanningMonitor.observe(node, source)
+    source.state, source.reason = 'lost', 'VO lost'
+    monitor.PlanningMonitor.observe(node, source)
+    assert calls == ['plan', 'plan', 'lost: VO lost']

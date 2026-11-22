@@ -26,7 +26,7 @@ usage() {
   --line 種類         closed-loop の raceline / centerline / custom（省略で保存済みラインから選択）
   --engine-dir 相対パス  closed-loop の VGL engine を明示する場合の results からの相対パス
   --min-lookahead m   closed-loop の Pure Pursuit 最短先読み距離を指定
-  --rviz / --no-rviz  closed-loop の走行ライン・GT・推定軌跡を RViz で表示するか選択（既定 OFF）
+  --rviz / --no-rviz  closed-loop の走行ライン・GT・推定軌跡・cuVSLAM の特徴点を RViz で表示するか選択（既定 OFF）
   --laps N            全周を N 周走行（正の整数）。run では動画が対象。serve は指定周回で終了
   --duration 秒       video・bag・map は1周の走行時間（--speed と排他）
                       benchmark・diagnose は実時間の計測時間（--speed と併用可）

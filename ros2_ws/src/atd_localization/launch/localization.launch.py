@@ -34,7 +34,7 @@ def setup(context):
     workflow = assets['workflow']
     tracking = component_configuration(Path(get_package_share_directory('atd_mapping')) / 'config', workflow,
         assets['map_dir'], assets['map_root'], assets['model_dir'], assets['config_dir'],
-        namespace='/localization', use_sim_time=sim_time, capture_visualization=False)
+        namespace='/localization', use_sim_time=sim_time, capture_visualization=value('visualize_landmarks') == 'true')
     nodes = []
     for kind, package, plugin, name in (
         ('cuvslam', 'isaac_ros_cuvslam', 'nvidia::isaac_ros::visual_slam::VisualSlamNode', 'visual_slam'),
@@ -49,6 +49,7 @@ def setup(context):
     monitor.update({key: ParameterValue(workflow[key], value_type=str) for key in (
         'base_frame', 'left_info', 'right_info', 'left_frame', 'right_frame')})
     monitor.update(simulation_freshness=ParameterValue(LaunchConfiguration('simulation_freshness'), value_type=bool),
+                   allow_sparse_tf=ParameterValue(LaunchConfiguration('allow_sparse_tf'), value_type=bool),
                    use_sim_time=sim_time, image_height=assets['input_shape'][2], image_width=assets['input_shape'][3])
     print(f"ATD localization map={assets['map_id']} engine={assets['model_dir']} stereo={assets['input_shape'][2:]}",
           flush=True)
@@ -65,6 +66,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('map_id'), DeclareLaunchArgument('results_root', default_value='/data/results'),
         DeclareLaunchArgument('engine_dir', default_value=''), DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument('visualize_landmarks', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('simulation_freshness', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('allow_sparse_tf', default_value='false', choices=['true', 'false']),
         OpaqueFunction(function=setup),
     ])

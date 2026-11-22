@@ -80,17 +80,19 @@ def test_validated_target_and_tf_owner_for_both_clocks(deployment):
         inventory(folder/'nvidia/cuvslam_map'), separators=(',', ':'), sort_keys=True).encode()).hexdigest()
     assert result['map_dir'] == root / 'work/cuvslam_map'
     assert (result['map_dir'] / 'landmarks.mdb').read_bytes() == b'123'
-    for simulated in (True, False):
+    for simulated, landmarks in ((True, True), (True, False), (False, False)):
         resolved = component_configuration(Path(__file__).resolve().parents[2] / 'atd_mapping/config',
                 result['workflow'], result['map_dir'], result['map_root'], result['model_dir'], result['config_dir'],
-                namespace='/localization', use_sim_time=simulated, capture_visualization=False)
+                namespace='/localization', use_sim_time=simulated, capture_visualization=landmarks)
         slam, vgl = resolved['parameters']['cuvslam'], resolved['parameters']['vgl']
         assert slam['base_frame'] == vgl['base_frame'] == 'base_link'
         assert slam['use_sim_time'] is simulated and vgl['use_sim_time'] is simulated
         assert slam['slam_max_map_size'] == 300
         assert slam['publish_map_to_odom_tf'] and slam['publish_odom_to_base_tf']
         assert not vgl['publish_map_to_base_tf'] and not vgl['publish_map_to_odom_tf']
-        assert not slam['enable_slam_visualization'] and slam['save_map_folder_path'] == ''
+        assert slam['enable_slam_visualization'] is landmarks
+        assert slam['enable_landmarks_view'] is landmarks
+        assert not slam['enable_observations_view'] and slam['save_map_folder_path'] == ''
         assert resolved['hint_topic'] == '/localization/pose_hint'
         assert ('visual_localization/pose', resolved['hint_topic']) in resolved['remaps']['vgl']
         assert ('visual_slam/initial_pose', resolved['hint_topic']) in resolved['remaps']['cuvslam']

@@ -174,7 +174,7 @@ gazebo_from_menu() {
     fi
     if [[ "$action" = closed-loop ]]; then
         camera_hz="$(choose "$title / カメラの撮影レート" 30 'Hz（既定）' 60 'Hz' 90 'Hz')" || return 0
-        rviz="$(choose "$title / RViz" off '画面を開かずに評価（既定）' on '走行ライン・GT・推定軌跡を表示')" || return 0
+        rviz="$(choose "$title / RViz" off '画面を開かずに評価（既定）' on '走行ライン・GT・推定軌跡・特徴点を表示')" || return 0
         if [[ "$rviz" = on ]]; then args+=(--rviz); fi
         "$@" "${args[@]}" --camera-hz "$camera_hz"
         return

@@ -22,8 +22,11 @@ class PlanningMonitor(Node):
                         horizon_m=DEFAULT_HORIZON_M, max_offset_m=.75)
         cfg = {key: self.declare_parameter(key, value, descriptor).value for key, value in defaults.items()}
         sim_freshness = self.declare_parameter('simulation_freshness', False, descriptor).value
+        self.allow_sparse_tf = self.declare_parameter('allow_sparse_tf', False, descriptor).value
         if sim_freshness and not self.get_parameter('use_sim_time').value:
             raise ValueError('模擬時間での鮮度検査には use_sim_time が必要です')
+        if self.allow_sparse_tf and not sim_freshness:
+            raise ValueError('低頻度 TF を待つには simulation_freshness が必要です')
         self.arrival_time = (lambda: self.get_clock().now().nanoseconds * 1e-9) if sim_freshness else time.monotonic
         self.line = cfg['line']
         self.identity = dict(map_id=cfg['map_id'], map_sha256='', hdmap_sha256='')
@@ -76,6 +79,10 @@ class PlanningMonitor(Node):
             self.invalidate('自己位置の配信元が複数あります')
         elif self.last_observation is None:
             self.invalidate('自己位置の入力待ちです')
+        elif self.allow_sparse_tf:
+            # The Gazebo controller coasts and waits for the next observation. A plan
+            # is published only when a new pose arrives or an explicit failure is seen.
+            return
         elif self.arrival_time() - self.changed_at > MAX_AGE_S:
             self.invalidate('自己位置の新しい観測が届いていません')
         elif self.source.state == 'tracking' and not self.fresh_stamp(self.last_observation[-1]):
@@ -99,9 +106,15 @@ class PlanningMonitor(Node):
             return self.invalidate('自己位置の配信元が複数あります')
         if source.header.frame_id != 'map' or any(getattr(source, k) != v for k, v in self.identity.items()):
             return self.invalidate('自己位置と計画ラインの地図 ID・地図版・座標系が一致しません')
+        if self.allow_sparse_tf and source.state == 'stale':
+            return
         if source.state != 'tracking':
             return self.invalidate(f'{source.state}: {source.reason}')
         if not self.fresh_stamp(stamp_ns) or self.arrival_time() - self.changed_at > MAX_AGE_S:
+            # Past samples can arrive late or repeat during a Gazebo observation gap.
+            # A malformed or future stamp is still reported as a planning failure.
+            if self.allow_sparse_tf and 0 < stamp_ns <= self.get_clock().now().nanoseconds:
+                return
             return self.invalidate('自己位置の元観測が古いか、時刻が不正です')
         if repeated:
             # Localization periodically republishes its last pose; replay CSV stores each stamp once.

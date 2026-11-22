@@ -374,6 +374,10 @@ def create_app(record_root=None, result_root=None, static_dir=None):
         with jobs.registry():
             return jobs.log(key, offset, tail=tail, before=before)
 
+    @app.get('/api/jobs/{key}/error-report')
+    def job_error_report(key: str):
+        return jobs.error_report(key)
+
     @app.post('/api/jobs/{key}/cancel')
     def job_cancel(key: str):
         with jobs.registry():

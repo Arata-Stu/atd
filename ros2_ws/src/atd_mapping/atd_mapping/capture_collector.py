@@ -44,7 +44,7 @@ class CaptureCollector(Collector):
                 self.cloud = self.path = None
                 self.frames = FinalFrames()
                 self.get_logger().info(
-                    "Saved-map localized: " + str(self.gate.localized)
+                    f"Saved-map localized: {self.gate.localized}（{self.gate.diagnostic_summary()}）"
                 )
 
     def on_tf(self, msg, info):
@@ -89,18 +89,22 @@ class CaptureCollector(Collector):
             if changed:
                 self.last_update = time.monotonic()
 
-    def final_snapshot(self, expected, tolerance, provenance):
-        self.gate.require_final(expected, tolerance)
-        if provenance.get("initial_localization") == "vgl_pose_hint":
-            if self.vgl_hint is None:
-                raise ValueError("VGLの姿勢hint受信を確認できませんでした")
-            provenance["vgl_pose_hint"] = self.vgl_hint
-        if self.cloud is None or self.path is None:
-            raise ValueError("localize成功後の点群・SLAM軌跡がありません")
-        cloud_stamp = stamp_ns(self.cloud.header.stamp)
+    def check_final_inputs(self, expected, tolerance, hint_required):
         tf = self.frames.transforms.get('odom')
-        tail = validate_final_samples(self.gate, expected, tolerance, cloud_stamp,
-            stamp_ns(self.path.header.stamp), int(tf['stamp_ns']) if tf else None)
+        return validate_final_samples(
+            self.gate, expected, tolerance,
+            stamp_ns(self.cloud.header.stamp) if self.cloud is not None else None,
+            stamp_ns(self.path.header.stamp) if self.path is not None else None,
+            int(tf['stamp_ns']) if tf else None,
+            hint_required=hint_required, hint_stamp=self.vgl_hint['stamp_ns'] if self.vgl_hint else None,
+        )
+
+    def final_snapshot(self, expected, tolerance, provenance):
+        hint_required = provenance.get("initial_localization") == "vgl_pose_hint"
+        tail = self.check_final_inputs(expected, tolerance, hint_required)
+        if hint_required:
+            provenance["vgl_pose_hint"] = self.vgl_hint
+        cloud_stamp = stamp_ns(self.cloud.header.stamp)
         cloud_age_s = tail['cloud_tail_age_s']
         if cloud_stamp < expected - tolerance:
             self.get_logger().warning(

@@ -92,13 +92,13 @@ Notebook の [自己位置検証](http://127.0.0.1:8766/#localization) を開き
 
 ## Map
 
-Map 画面で、次の順に進める。駐車機能は対象に含めない。
+「地図とライン」の右欄「地図を編集する準備」から各工程を開ける。完了した工程にはチェック、次に進める工程には濃い緑のボタンが付く。前工程待ちはグレー、実行中は青で表示する。
 
 Notebook ホストで `atd gazebo bag --course odaiba --speed 3 --laps 2` を実行して作成した2周分の bag も、実車の記録と同じ「rosbag から地図を作成」から選べる。[Gazebo の記録手順と所要容量](../../docs/gazebo_circuits.md)
 
 1. **cuVSLAM 地図を作成**: `/data/record/rosbags/` の bag、地図 ID、左右画像・CameraInfo の topic、base / optical frame を指定する。NVIDIA の `isaac_mapping_ros/create_map_offline.py` を独立 worker で呼び、`maps/<id>/nvidia/` に公式の `cuvslam_map/`・`map_frames/` 等の構成を維持して保存する。
 2. **VGL 地図を準備する**。「VGL地図を作成」で Notebook に export 済みのモデルを選ぶ。入力解像度と export ID を確認して「VGL地図の準備を開始」を押すと、この PC の GPU 用 engine を生成し、公式 `create_cuvgl_map.py` で地図の `cuvgl_map/` を作成する。地図を選ぶ前でも「VGLモデル一覧」で export 済みのモデルを確認できる。[モデルの準備手順](../../docs/vgl_models.md)
-3. **保存地図から点群を取得**: 「保存地図から点群を取得」で、元 bag と VGL 準備時の Notebook 用モデルを自動選択する。必要なら詳細で選び直す。地図・保存画像・モデル・入力画像サイズ等の対応、ROS と `atd_mapping` の導入を開始前に検査し、不備は理由と前工程への案内を表示する。
+3. **保存地図から点群を取得**。「保存地図から点群を取得」で、元 bag と VGL 準備時の Notebook 用モデルを自動選択する。必要なら詳細で選び直す。Notebook 内の画像転送には `atd replay` と同じ Fast DDS の共有メモリ対応設定を使う。取得に失敗したら「ジョブとログ」で対象のジョブを選び、「エラーをコピー」を押す。bag に記録された左右画像の最大間隔、cuVSLAM が処理したフレームの最大間隔の警告、自己位置合わせの成否を同じ抜粋で確認できる。
 4. **HDMap を編集**: 取得後の点群を背景に、左右境界と Custom 点列を Canvas で編集・保存し、走行ラインを生成する。処理成功後は選択中の地図と背景・ラインを自動更新する。未保存編集や別地図への選択変更を、ジョブ完了で破棄しない。
 
 点群取得では元の保存地図を作業用に複製し、元 bag の画像を再生する。[atd_mapping](../../ros2_ws/src/atd_mapping/README.md) が VGL の姿勢 hint と保存地図への localize 成功を確認し、その成功区間の非空点群・軌跡と TF を採取する。点群が既に `map` frame なら再変換せず、それ以外では確認した TF を一度だけ適用する。TF 不足や自己位置未確定を原点・identity 変換で補わない。点群は全地図の landmark 網羅性を保証せず、採用時刻・入力末尾との差等は provenance に残す。

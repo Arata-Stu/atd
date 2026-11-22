@@ -14,6 +14,7 @@ import time
 import uuid
 
 from .store import atomic_json, confined, read_json, identifier
+from .job_errors import error_excerpt
 
 ACTIVE = {'starting', 'running', 'queued'}
 FINISHED = {'succeeded', 'completed', 'failed', 'cancelled', 'canceled', 'interrupted'}
@@ -200,6 +201,22 @@ class Jobs:
             text = decoder.decode(data[skip:], final=final)
             partial, _ = decoder.getstate()
             return dict(text=text, start=start + skip, offset=stream.tell() - len(partial))
+
+    def error_report(self, key):
+        # Pin the selected job and its log together, then scan outside the registry lock.
+        with self.registry():
+            state = self.get(key)
+            path = confined(self.root, key + '.log', exists=False)
+            stream = path.open(encoding='utf-8', errors='replace') if path.is_file() else None
+        message = state.get('message', '') if state['status'] in {'failed', 'interrupted', 'orphaned'} else ''
+        if stream is None:
+            excerpt = error_excerpt((), message)
+        else:
+            with stream:
+                excerpt = error_excerpt(stream, message)
+        if excerpt:
+            excerpt = f"{state.get('title') or key}\nJob ID: {key}\n{excerpt}"
+        return dict(text=excerpt)
 
 
 class Task:

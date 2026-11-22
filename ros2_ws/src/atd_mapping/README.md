@@ -30,6 +30,8 @@ diag・SLAM path・map→odom の stamp が入力末尾許容範囲に到達し�
 
 両 component の `Loaded node` が出た後、サービス、左右画像・CameraInfo と姿勢 hint の購読、出力 publisher が揃うと bag 再生を開始する。起動待ちでタイムアウトした場合は、ジョブログで未成立の接続を確認する。その段階の `SIGINT` は capture が子プロセスを終了したときにも表示される。VGL 読み込み時の `0 map-points` は VGL 地図の件数で、cuVSLAM の表示用点群の点数は再生中に自己位置合わせが成功してから決まる。
 
+再生終了後は、診断・VGL hint・点群・軌跡・TF が揃うまで最大 `drain_timeout_s` 待つ。末尾の検査で失敗した場合は、ジョブログの `ValueError` で「成功を一度も確認できない」「成功後に追跡条件を失った」「入力末尾より診断や軌跡・TF が遅れた」を判別できる。診断値 `localized_in_exist_map` と `vo_status`、入力末尾と受信データの stamp を確認する。`VGL hint=未受信` は collector が姿勢 hint を受信していないことを示す。点群・軌跡・TF の stamp は最終 localize 成功区間で採用したデータのもの。
+
 旧版で起動待ちがタイムアウトした場合は、修正を反映した Notebook の Docker 内で `atd-build --packages-up-to atd_mapping` を実行する。Web UI で同じ保存地図を選び、「保存地図から点群を取得」→「点群の取得を開始」で再試行できる。元の bag、保存地図、Notebook 用 engine は再利用する。
 
 ## job JSON

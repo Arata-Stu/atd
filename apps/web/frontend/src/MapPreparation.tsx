@@ -1,19 +1,69 @@
-import type { Bag, CaptureOptions, MapDocument } from './types';
+import type { Bag, CaptureOptions, Job, MapDocument } from './types';
+import { STATUS } from './job_status';
 import { Field, Icon, Modal } from './ui';
 
-interface PreparationProps {
-  doc: MapDocument; options: CaptureOptions | null; loading: boolean; error: string;
-  pointcloudReady: boolean; busy: boolean; onVgl: () => void; onCapture: () => void; onRefresh: () => void;
+type StepState = 'complete' | 'ready' | 'blocked' | 'unknown' | 'failed' | 'running';
+interface StepProps {
+  index: string; name: string; state: StepState; status: string;
+  job?: Job; action?: string; onAction?: () => void; disabled?: boolean; detail?: string;
 }
-export function PreparationPanel({ options, loading, error, pointcloudReady, busy, onVgl, onCapture, onRefresh }: PreparationProps) {
-  return <div className="property-section preparation-panel">
-    <div className="section-top"><h3>地図を編集する準備</h3><button className="icon-button" aria-label="地図の準備状態を更新" disabled={loading || busy} onClick={onRefresh}><Icon name="refresh" size={15}/></button></div>
-    <ol className="preparation-steps"><li className="complete"><b>01</b><span>cuVSLAM地図<strong>作成済み</strong></span><Icon name="check" size={14}/></li><li className={options?.vgl_ready ? 'complete' : ''}><b>02</b><span>VGL地図<strong>{options?.vgl_ready ? '準備済み' : loading ? '確認中' : options ? '未準備' : '未確認'}</strong></span>{options?.vgl_ready && <Icon name="check" size={14}/>}</li><li className={pointcloudReady ? 'complete' : ''}><b>03</b><span>表示用点群<strong>{pointcloudReady ? '取得済み' : '未取得'}</strong></span>{pointcloudReady && <Icon name="check" size={14}/>}</li><li className={pointcloudReady ? 'complete' : ''}><b>04</b><span>HDMap編集<strong>{pointcloudReady ? '編集可能' : '点群の取得後'}</strong></span></li></ol>
-    {!options?.vgl_ready && !pointcloudReady && <button className="button full" disabled={busy} onClick={onVgl}>VGL地図を作成<Icon name="arrow" size={15}/></button>}
-    {!pointcloudReady && <button className="button primary full" disabled={busy || loading} onClick={onCapture}><Icon name="download" size={15}/>保存地図から点群を取得</button>}
-    {error && <p className="generation-issue">{error}</p>}
-    {!pointcloudReady && options?.issues.length ? <p className="small-note">{options.issues[0]}{options.issues.length > 1 ? `（ほか${options.issues.length - 1}件）` : ''}</p> : null}
-  </div>;
+function PreparationStep({ index, name, state, status, job, action, onAction, disabled, detail }: StepProps) {
+  if (job) {
+    state = job.status === 'orphaned' ? 'failed' : 'running';
+    status = STATUS[job.status] ?? job.status;
+  }
+  return <li data-state={state}>
+    <div className="preparation-step-heading">
+      <span className="preparation-step-index">{index}</span>
+      <span className="preparation-step-name">{name}</span>
+      <span className="preparation-step-status">{state === 'complete' && <Icon name="check" size={14}/>} {status}</span>
+    </div>
+    {detail && <p className="preparation-step-detail">{detail}</p>}
+    {action && <button type="button" className="button preparation-step-action" disabled={disabled || !!job}
+      onClick={onAction}>{action}<Icon name="arrow" size={14}/></button>}
+  </li>;
+}
+
+interface PreparationProps {
+  doc: MapDocument | null; options: CaptureOptions | null; loading: boolean; error: string;
+  pointcloudReady: boolean; dirty: boolean; busy: boolean; stageJob?: Job; offlineJob?: Job;
+  onBuild: () => void; onVgl: () => void; onCapture: () => void; onEdit: () => void; onRefresh: () => void;
+}
+export function PreparationPanel({ doc, options, loading, error, pointcloudReady, dirty, busy, stageJob, offlineJob,
+  onBuild, onVgl, onCapture, onEdit, onRefresh }: PreparationProps) {
+  const workLocked = busy || !!offlineJob;
+  const vglReady = options?.vgl_ready === true;
+  const checked = !!options && !loading && !error;
+  const vglState = !doc ? 'blocked' : error ? 'failed' : !checked ? 'unknown' : vglReady ? 'complete' : 'ready';
+  const vglStatus = !doc ? '地図の作成後' : error ? '確認エラー' : !checked ? '確認中' : vglReady ? '準備済み' : '未準備';
+  const canCheckCapture = checked && vglReady;
+  const hasEdits = !!doc && (doc.left.length > 0 || doc.right.length > 0 || doc.custom.length > 0);
+  const hdmapState = !pointcloudReady ? 'blocked' : hasEdits && !dirty ? 'complete' : 'ready';
+
+  return <section className="property-section preparation-panel" aria-label="地図を編集する準備">
+    <div className="section-top"><h3>地図を編集する準備</h3>{doc && <button className="icon-button"
+      aria-label="地図の準備状態を更新" disabled={loading || busy} onClick={onRefresh}><Icon name="refresh" size={15}/></button>}</div>
+    <ol className="preparation-steps">
+      <PreparationStep index="01" name="cuVSLAM地図" state={doc ? 'complete' : 'ready'}
+        status={doc ? '作成済み' : '未作成'} job={stageJob?.action === 'map_build' ? stageJob : undefined}
+        action={doc ? '別の地図を作成' : 'rosbag から地図を作成'} onAction={onBuild} disabled={workLocked}/>
+      <PreparationStep index="02" name="VGL地図" state={vglState} status={vglStatus}
+        job={stageJob?.action === 'vgl' ? stageJob : undefined}
+        action={vglState === 'failed' ? '準備状態を再確認' : vglState === 'complete' ? undefined : 'VGL地図を作成'}
+        onAction={error ? onRefresh : onVgl} disabled={workLocked || (!error && (!doc || !checked))}
+        detail={error || undefined}/>
+      <PreparationStep index="03" name="表示用点群" state={pointcloudReady ? 'complete' : canCheckCapture ? 'ready' : 'blocked'}
+        status={pointcloudReady ? '取得済み' : canCheckCapture ? '未取得' : 'VGLの準備後'}
+        job={stageJob?.action === 'capture' ? stageJob : undefined}
+        action={pointcloudReady ? undefined : '保存地図から点群を取得'} onAction={onCapture}
+        disabled={workLocked || !canCheckCapture}
+        detail={!pointcloudReady && canCheckCapture ? options?.issues[0] : undefined}/>
+      <PreparationStep index="04" name="HDMap編集" state={hdmapState}
+        status={!pointcloudReady ? '点群の取得後' : dirty ? '未保存' : hasEdits ? '編集点を保存済み' : '編集可能'}
+        action={hasEdits ? '編集を続ける' : '編集を始める'} onAction={onEdit} disabled={busy || !pointcloudReady}/>
+    </ol>
+    {offlineJob && offlineJob.id !== stageJob?.id && <p className="small-note">{offlineJob.title}（{STATUS[offlineJob.status] ?? offlineJob.status}）</p>}
+  </section>;
 }
 
 interface CaptureModalProps {

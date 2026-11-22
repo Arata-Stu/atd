@@ -36,6 +36,8 @@ def last_stereo_stamp(bag, workflow, shape):
     topics = [workflow['left_image'], workflow['right_image']]
     reader.set_filter(rosbag2_py.StorageFilter(topics=topics))
     last = {}
+    counts = dict.fromkeys(topics, 0)
+    max_gaps = dict.fromkeys(topics, 0)
     while reader.has_next():
         topic, raw, _ = reader.read_next()
         image = deserialize_message(raw, Image)
@@ -44,9 +46,15 @@ def last_stereo_stamp(bag, workflow, shape):
         stamp = stamp_ns(image.header.stamp)
         if stamp <= 0:
             raise ValueError('左右画像stampが不正です: ' + topic)
-        last[topic] = max(last.get(topic, -1), stamp)
+        previous = last.get(topic, stamp)
+        max_gaps[topic] = max(max_gaps[topic], stamp - previous)
+        last[topic] = max(previous, stamp)
+        counts[topic] += 1
     if len(last) != 2:
         raise ValueError('左右画像の有効な末尾stampがありません')
+    summary = '、'.join(f'{side} {counts[topic]} 枚・最大間隔 {max_gaps[topic] / 1e6:.1f} ms'
+                        for side, topic in zip(('左', '右'), topics))
+    print(f'bag内の画像stamp: {summary}', flush=True)
     return min(last.values())
 
 
@@ -93,6 +101,29 @@ def capture_readiness(node, client, workflow, hint_topic, outputs):
         except ValueError as exc:
             pending.append(str(exc))
     return sources, pending
+
+
+def drain_capture(node, launch, spin_once, expected, tolerance, options):
+    """Let queued diagnostics, hints, cloud, path and TF arrive after playback."""
+    deadline = time.monotonic() + options['drain_timeout_s']
+    while True:
+        if launch.poll() is not None:
+            raise ValueError('点群収集中にVSLAMが終了しました')
+        spin_once(node, timeout_sec=.1)
+        now = time.monotonic()
+        quiet_s = now - node.last_update
+        if quiet_s < options['settle_s'] and now < deadline:
+            continue
+        try:
+            node.check_final_inputs(expected, tolerance, hint_required=True)
+        except ValueError:
+            if now >= deadline:
+                raise
+            continue
+        if quiet_s >= options['settle_s']:
+            return
+        raise ValueError(f"末尾データは揃いましたが点群・軌跡・TFの更新が続いています"
+                         f"（最終更新から {quiet_s:.3f} 秒、必要 {options['settle_s']:.3f} 秒）")
 
 
 def run(job_file):
@@ -161,16 +192,8 @@ def run(job_file):
                 next_identity_check = time.monotonic() + 1.
         if player.returncode:
             raise ValueError('bag再生が失敗しました')
-        deadline = time.monotonic() + options['drain_timeout_s']
         tolerance = int(options['tail_tolerance_s'] * 1e9)
-        while time.monotonic() < deadline:
-            if launch.poll() is not None:
-                raise ValueError('点群収集中にVSLAMが終了しました')
-            rclpy.spin_once(node, timeout_sec=.1)
-            if node.gate.stamp >= expected - tolerance and time.monotonic() - node.last_update >= options['settle_s']:
-                break
-        if time.monotonic() - node.last_update < options['settle_s']:
-            raise ValueError('点群・TF更新が制限時間内に落ち着きませんでした')
+        drain_capture(node, launch, rclpy.spin_once, expected, tolerance, options)
         if publisher_signature(node, outputs) != sources:
             raise ValueError('capture出力publisherの識別情報が変わりました')
         snapshot = node.final_snapshot(expected, tolerance, dict(source='saved_cuvslam_map_replay',

@@ -8,6 +8,15 @@ export const DEFAULT_GENERATION_SETTINGS: GenerationSettings = {
 };
 export const ACTIVE_MAP_JOBS = new Set(['starting', 'queued', 'running', 'stopping', 'cancel_requested']);
 const SUCCEEDED = new Set(['succeeded', 'completed']);
+export function preparationJobs(jobs: Job[], mapId: string | null) {
+  const offlineJob = jobs.find(job => job.resources?.includes('offline-mapping') &&
+    (ACTIVE_MAP_JOBS.has(job.status) || job.status === 'orphaned'));
+  const appliesToMap = mapId === null
+    ? offlineJob?.action === 'map_build'
+    : offlineJob?.resources?.includes('map:' + mapId);
+  const isPreparation = offlineJob?.action === 'map_build' || offlineJob?.action === 'vgl' || offlineJob?.action === 'capture';
+  return { offlineJob, stageJob: appliesToMap && isPreparation ? offlineJob : undefined };
+}
 export function nvidiaMap(doc: MapDocument | null): boolean { return doc?.source?.kind === 'nvidia_offline'; }
 export function editingIssue(doc: MapDocument | null, cloud: Cloud | null): string {
   if (!doc) return '地図を選択してください';

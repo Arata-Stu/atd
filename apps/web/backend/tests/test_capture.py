@@ -237,11 +237,18 @@ class Work:
     key = 'fixture-capture'
     def log(self, text): pass
     def check(self): pass
-    def run(self, argv, env=None):
-        assert argv[:4] == ['ros2', 'run', 'atd_mapping', 'capture_snapshot']
+    def run(self, argv, ros=False):
+        assert ros and argv[0] == 'env'
+        command = argv.index('ros2')
+        env = dict(option.split('=', 1) for option in argv[1:command])
+        assert argv[command:-1] == ['ros2', 'run', 'atd_mapping', 'capture_snapshot', '--job']
         job = json.loads(Path(argv[-1]).read_text())
         assert job['workflow']['ground_constraint'] is False
         assert env['ROS_DOMAIN_ID'] == '94'
+        assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'SYSTEM_DEFAULT'
+        assert env['RMW_IMPLEMENTATION'] == 'rmw_fastrtps_cpp'
+        profile = Path(env['FASTDDS_DEFAULT_PROFILES_FILE'])
+        assert profile.is_file() and profile == Path(__file__).resolve().parents[4] / 'docker/gazebo_monza/fastdds.xml'
         assert '.capture-' in job['map_dir']
         assert (Path(job['map_dir']) / 'map.mdb').read_bytes() == b'original map'
         # collector は作業コピーを変更しても元地図を変更しない。

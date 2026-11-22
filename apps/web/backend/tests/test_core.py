@@ -51,6 +51,37 @@ def test_job_log_tail_pages_reconstruct_large_utf8_log(client):
     assert ''.join(reversed(pieces)) == contents
 
 
+def test_error_report_includes_root_cause_before_last_log_page(client):
+    root = client.app.state.jobs.root
+    reason = '外部処理が終了コード 1 で失敗しました。ログを確認してください'
+    atomic_json(root / 'capture1.json', {'status': 'failed', 'title': 'お台場 点群取得', 'message': reason})
+    failure = ('Traceback (most recent call last):\n'
+               '  File "capture_snapshot.py", line 42, in capture\n'
+               '    gate.require_final()\n'
+               'ValueError: 保存地図へのlocalize未成功・追跡喪失・再生末尾の処理未確認\n')
+    (root / 'capture1.log').write_text(
+        '[INFO] Saved-map localized: True\n[WARN] Delta between current and previous frame [9899.999901 ms]\n'
+        + '[WARN] Delta between current and previous frame [34.1 ms]\n' * 1000
+        + '\x1b[33m[WARN] capture diagnostic\x1b[0m\n' + failure +
+        'ordinary progress\n' * 20000 + '[ros2run]: Process exited with failure 1\n'
+        'Traceback (most recent call last):\n  File "worker.py", line 80, in main\nValueError: ' + reason)
+    report = client.get('/api/jobs/capture1/error-report').json()['text']
+    for part in ('capture1', 'お台場 点群取得', 'Saved-map localized: True', '[9899.999901 ms]', '[WARN] capture diagnostic',
+                 failure.strip(), '[ros2run]', 'File "worker.py"', reason):
+        assert part in report
+    assert '\x1b' not in report and len(report) < 1200
+
+
+def test_error_report_uses_failed_state_without_log_and_ignores_info_or_warnings_alone(client):
+    root = client.app.state.jobs.root
+    url = '/api/jobs/sample/error-report'
+    atomic_json(root / 'sample.json', {'status': 'failed', 'message': '読み込めませんでした'})
+    assert '読み込めませんでした' in client.get(url).json()['text']
+    atomic_json(root / 'sample.json', {'status': 'succeeded', 'message': '完了'})
+    (root / 'sample.log').write_text('[INFO] processing\n[WARN] retrying\n[INFO] done\n')
+    assert client.get(url).json() == {'text': ''}
+
+
 def test_job_log_tail_waits_for_complete_utf8_while_running(client):
     root = client.app.state.jobs.root
     atomic_json(root / 'map1.json', {'status': 'running', 'started': time.time()})

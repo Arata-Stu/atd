@@ -1,9 +1,26 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { captureCloudNotes, completionUpdate, editingIssue, generationIssue, restoredSettings } from '../src/map_workflow.ts';
+import { captureCloudNotes, completionUpdate, editingIssue, generationIssue, preparationJobs, restoredSettings } from '../src/map_workflow.ts';
 
 const blank = { id: 'course', title: 'course', revision: 2, frame: 'map', closed: true, left: [], right: [], custom: [], lines: {}, source: {} };
 const cloud = { points: [[0, 0, 0]], frame: 'map', source_count: 1, truncated: false };
+test('preparation marks only the selected map’s stage while sharing the offline mapping lock', () => {
+  const vgl = { id: 'vgl', action: 'vgl', status: 'running', resources: ['map:course', 'offline-mapping'] };
+  assert.deepEqual(preparationJobs([vgl], 'course'), { offlineJob: vgl, stageJob: vgl });
+  for (const mapId of ['other', null]) {
+    assert.deepEqual(preparationJobs([vgl], mapId), { offlineJob: vgl, stageJob: undefined });
+  }
+  const calibration = { ...vgl, action: 'calibration' };
+  assert.deepEqual(preparationJobs([calibration], 'course'), { offlineJob: calibration, stageJob: undefined });
+  const build = { ...vgl, action: 'map_build', status: 'starting' };
+  assert.deepEqual(preparationJobs([build], null), { offlineJob: build, stageJob: build });
+});
+test('an orphaned process still blocks preparation and a failed or finished job releases the lock', () => {
+  const job = { id: 'capture', action: 'capture', status: 'orphaned', resources: ['map:course', 'offline-mapping'] };
+  const oldJobs = ['failed', 'interrupted', 'cancelled', 'succeeded'].map(status => ({ ...job, status }));
+  assert.deepEqual(preparationJobs(oldJobs, 'course'), { offlineJob: undefined, stageJob: undefined });
+  assert.deepEqual(preparationJobs([...oldJobs, job], 'course'), { offlineJob: job, stageJob: job });
+});
 test('NVIDIA pointcloud is required while a manual HDMap remains editable', () => {
   assert.equal(editingIssue(blank, null), '');
   assert.match(editingIssue({ ...blank, source: { kind: 'nvidia_offline', pointcloud_status: 'pending' } }, null), /点群/);

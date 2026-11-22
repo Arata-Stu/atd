@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Cloud, EditTarget, LineKind, MapDocument, Point } from './types';
 import { Icon } from './ui';
+import { cloudFitCorners } from './map_cloud_fit';
 import type { ControlOverlay } from './control_view';
 import type { TrajectoryOverlay } from './localization_validation';
 
@@ -14,7 +15,8 @@ interface Props {
 }
 export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visible = {}, onChange, pose, fitKey = 0, autoFit = false, trail = [], overlay, selectedGap, onSelectGap, referenceLine, forwardPath, controlTarget }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const [size, setSize] = useState({ width: 500, height: 500 });
+  const manualView = useRef(false);
+  const [size, setSize] = useState({ width: 0, height: 0 });
   const [view, setView] = useState({ x: 0, y: 0, scale: 38 });
   const [selected, setSelected] = useState(-1);
   const [draft, setDraft] = useState<Point[] | null>(null);
@@ -23,15 +25,16 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
   const project = useCallback((point: readonly number[]): Point => [size.width / 2 + (point[0] - view.x) * view.scale, size.height / 2 - (point[1] - view.y) * view.scale], [size, view]);
   const world = (x: number, y: number): Point => [(x - size.width / 2) / view.scale + view.x, -(y - size.height / 2) / view.scale + view.y];
   const fitPoints = useCallback((points: Point[]) => {
-    if (!size.width || !size.height) return;
+    const { width, height } = size;
+    if (!width || !height) return;
     if (!points.length) { setView({ x: 0, y: 0, scale: 38 }); return; }
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     for (const [x, y] of points) {
       x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
     }
     const scale = autoFit
-      ? Math.min(size.width / Math.max(x1 - x0, 1), size.height / Math.max(y1 - y0, 1)) * .84
-      : Math.min(size.width / Math.max(x1 - x0 + 2, 4), size.height / Math.max(y1 - y0 + 2, 4)) * .84;
+      ? Math.min(width / Math.max(x1 - x0, 1), height / Math.max(y1 - y0, 1)) * .84
+      : Math.min(width / Math.max(x1 - x0 + 2, 4), height / Math.max(y1 - y0 + 2, 4)) * .84;
     setView({ x: (x0 + x1) / 2, y: (y0 + y1) / 2, scale });
   }, [size, autoFit]);
   const fit = useCallback(() => {
@@ -45,7 +48,7 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
       }
     }
     const points = layers.flat();
-    if (points.length === 0 && cloud) points.push(...cloud.points.filter((_, i) => i % Math.max(1, Math.ceil(cloud.points.length / 10000)) === 0).map(p => [p[0], p[1]] as Point));
+    if (points.length === 0 && cloud) points.push(...cloudFitCorners(cloud));
     if (overlay) {
       for (const segment of overlay.segments) for (const point of segment) points.push(point);
     }
@@ -57,9 +60,14 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
     observer.observe(node); return () => observer.disconnect();
   }, []);
   useEffect(() => {
-    if (!autoFit) fit();
+    manualView.current = false;
     setSelected(-1); setDraft(null);
   }, [doc?.id, fitKey, autoFit]);
+  // Loading the map can change the canvas dimensions after the first fit.
+  // Refit on layout changes until the user chooses their own viewport.
+  useEffect(() => {
+    if (!autoFit && !manualView.current) fit();
+  }, [doc?.id, fitKey, autoFit, size.width, size.height]);
   // 録画用の地図は実際の表示枠に合わせる。走行中の姿勢更新では縮尺を変えない。
   useEffect(() => { if (autoFit) fit(); }, [autoFit, fit, fitKey]);
   useEffect(() => { setSelected(-1); setDraft(null); }, [target]);
@@ -167,10 +175,19 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
     ctx.fillStyle = '#65796d'; ctx.font = '11px ui-monospace, monospace'; ctx.fillText(`${(scaleWidth / view.scale).toFixed(step < 1 ? 1 : 0)} m`, 24, size.height - 40);
   }, [doc, cloud, view, size, target, mode, selected, draft, visible, pose, project, onChange, trail, overlay, selectedGap, referenceLine, forwardPath, controlTarget]);
   const pointAt = (e: React.PointerEvent | React.WheelEvent): Point => { const rect = canvas.current!.getBoundingClientRect(); return [e.clientX - rect.left, e.clientY - rect.top]; };
+  function zoomBy(factor: number) {
+    manualView.current = true;
+    setView(v => ({ ...v, scale: Math.min(800, Math.max(.5, v.scale * factor)) }));
+  }
   return <div className="map-surface">
     <canvas ref={canvas} tabIndex={0} aria-label={onChange ? '地図編集キャンバス。点をクリックして選択、Deleteで削除。右ドラッグで移動、ホイールで拡大縮小。' : '地図閲覧キャンバス。右ドラッグで移動、ホイールで拡大縮小。'} style={{ cursor: mode === 'pan' ? 'grab' : mode === 'add' ? 'crosshair' : 'default' }}
       onContextMenu={e => e.preventDefault()}
-      onWheel={e => { const [x, y] = pointAt(e), at = world(x, y), scale = Math.min(800, Math.max(.5, view.scale * Math.exp(-e.deltaY * .001))); setView({ scale, x: at[0] - (x - size.width / 2) / scale, y: at[1] + (y - size.height / 2) / scale }); }}
+      onWheel={e => {
+        manualView.current = true;
+        const [x, y] = pointAt(e), at = world(x, y);
+        const scale = Math.min(800, Math.max(.5, view.scale * Math.exp(-e.deltaY * .001)));
+        setView({ scale, x: at[0] - (x - size.width / 2) / scale, y: at[1] + (y - size.height / 2) / scale });
+      }}
       onPointerDown={e => {
         canvas.current!.focus(); canvas.current!.setPointerCapture(e.pointerId); const at = pointAt(e);
         let index = -1;
@@ -180,7 +197,10 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
       onPointerMove={e => {
         const at = pointAt(e); setPointerWorld(world(...at)); const active = drag.current; if (!active) return;
         active.moved ||= Math.hypot(at[0] - active.start[0], at[1] - active.start[1]) > 3;
-        if (active.kind === 'pan') setView(v => ({ ...v, x: active.origin[0] - (at[0] - active.start[0]) / v.scale, y: active.origin[1] + (at[1] - active.start[1]) / v.scale }));
+        if (active.kind === 'pan') {
+          manualView.current = true;
+          setView(v => ({ ...v, x: active.origin[0] - (at[0] - active.start[0]) / v.scale, y: active.origin[1] + (at[1] - active.start[1]) / v.scale }));
+        }
         if (active.kind === 'point') { active.points[active.index] = world(...at); setDraft([...active.points]); }
       }}
       onPointerUp={e => {
@@ -202,7 +222,11 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
       onKeyDown={e => { if ((e.key === 'Delete' || e.key === 'Backspace') && selected >= 0 && doc && onChange) { e.preventDefault(); onChange(target, doc[target].filter((_, i) => i !== selected)); setSelected(-1); } }}
     />
     <div className="map-corner-label"><span className="dot"/> {doc?.frame || 'map'} <span>座標 / m</span></div>
-    <div className="canvas-controls"><button title="全体を表示" aria-label="全体を表示" onClick={() => { onSelectGap?.(null); fit(); }}><Icon name="expand"/></button><button aria-label="拡大" onClick={() => setView(v => ({ ...v, scale: Math.min(800, v.scale * 1.4) }))}>＋</button><button aria-label="縮小" onClick={() => setView(v => ({ ...v, scale: Math.max(.5, v.scale / 1.4) }))}>−</button></div>
+    <div className="canvas-controls">
+      <button title="全体を表示" aria-label="全体を表示" onClick={() => { manualView.current = false; onSelectGap?.(null); fit(); }}><Icon name="expand"/></button>
+      <button aria-label="拡大" onClick={() => zoomBy(1.4)}>＋</button>
+      <button aria-label="縮小" onClick={() => zoomBy(1 / 1.4)}>−</button>
+    </div>
     {pointerWorld && <span className="map-coordinates">X {pointerWorld[0].toFixed(2)} · Y {pointerWorld[1].toFixed(2)}</span>}
     {!doc && <div className="canvas-empty"><span className="empty-icon"><Icon name="map" size={30}/></span><h3>地図から、走行の準備を。</h3><p>保存済みの地図を選ぶか、<br/>rosbag から新しい地図を作成してください。</p></div>}
   </div>;

@@ -18,16 +18,18 @@ COLORS = {
     "terrace_furniture": (.18, .20, .19), "briefing": (.54, .56, .56),
     "tyres": (.075, .078, .079), "boundary_steel": (.41, .44, .45),
     "floodlights": (.76, .76, .72),
+    "truss": (.68, .70, .69), "equipment": (.29, .31, .32), "island_rails": (.15, .16, .17),
+    "tree_bark": (.28, .23, .19), "leaves": (.24, .36, .20), "shaded_leaves": (.13, .24, .14),
 }
 
 
-def _beam(a, b, width, low, high):
+def _beam(a, b, width, low, high, *, rise=0.):
     """Rectangular beam along a horizontal span, including both end faces."""
     length = dist(a, b)
     nx, ny = (a[1] - b[1]) / length, (b[0] - a[0]) / length
     half = width / 2
     profile = [(-half, low), (half, low), (half, high), (-half, high)]
-    start, end = [[(x+nx*w, y+ny*w, z) for w, z in profile] for x, y in (a, b)]
+    start, end = [[(x+nx*w, y+ny*w, z+dz) for w, z in profile] for (x, y), dz in ((a, 0.), (b, rise))]
     for i in range(4):
         j = (i + 1) % 4
         yield [start[i], start[j], end[j], end[i]]
@@ -199,9 +201,64 @@ def _paint(edges, project, lane, groups):
             paint.extend(_beam((x, y), (x, y+side*.11), .014, .0004, .0012))
 
 
+def _turn_equipment(frame, groups):
+    """Open truss with diagonal webs, a recessed dark rack and a louvred cabinet."""
+    length, depth, height = frame.length, frame.depth, frame.height
+    metal = groups["truss"]
+    for u in (0., length-.10):
+        for v in (0., depth-.10):
+            frame.box(metal, u, u+.10, v, v+.10, 0., height)
+    a, b = frame.front
+    d, c = frame.back
+    scale = frame.scale
+    for p, q in ((a,b),(b,c),(c,d),(d,a)):
+        for z in (height-.35, height-.08):
+            metal.extend(_beam(p, q, .08*scale, z*scale, (z+.08)*scale))
+        for i in range(6):
+            xy0, xy1 = [tuple(x+(y-x)*n/6 for x, y in zip(p,q)) for n in (i,i+1)]
+            z0 = height-.31 if i % 2 == 0 else height-.08
+            rise = (height-.08 if i % 2 == 0 else height-.31) - z0
+            metal.extend(_beam(xy0, xy1, .05*scale, z0*scale, (z0+.05)*scale, rise=rise*scale))
+    frame.box(groups["equipment"], .22, 1.32, .45, 1.40, 0, 1.40)
+    frame.box(metal, .19, 1.35, .41, 1.44, 1.40, 1.46)
+    for z in (.35, .49, .63):
+        frame.box(metal, .33, 1.21, .43, .45, z, z+.045)
+    frame.box(groups["pit_interior"], 1.76, length-.15, depth-.85, depth-.13, .02, .9)
+
+
+def _start_trees(data, project, groups):
+    """Staggered trunks with forked crowns behind the perimeter fence."""
+    scale = dist(project(0,0), project(1,0))
+    for i, (px, py, height, radius) in enumerate(data["start_verge_trees_xy_height_radius_m"]):
+        x, y = project(px, py)
+        h, r = height*scale, radius*scale
+        bark = groups["tree_bark"]
+        bark.extend(_beam((x-r*.08,y), (x+r*.08,y), r*.16, 0., h*.74))
+        for branch, fraction in enumerate((.62, .68, .80)):
+            angle = 2.4*(branch+i)
+            bx, by = x+.42*r*cos(angle), y+.42*r*sin(angle)
+            bark.extend(_beam((x,y), (bx,by), r*.09, h*.38, h*.38+r*.09, rise=(fraction-.38)*h))
+            crown = groups["leaves" if branch != 1 else "shaded_leaves"]
+            rings = []
+            for level, (width, z) in enumerate(((.18,-.18),(.78,-.11),(.92,.01),(.67,.13),(.14,.20))):
+                ring = []
+                for k in range(9):
+                    az = tau*k/9 + angle + level*.16
+                    spread = r*width*(1+.15*sin(3*az+level+i))
+                    ring.append((bx+spread*cos(az), by+spread*sin(az),
+                                 h*(fraction+z+.026*sin(2*az+level))))
+                rings.append(ring)
+            crown.append(rings[0][::-1])
+            for low, high in zip(rings, rings[1:]):
+                for k in range(9):
+                    j = (k+1) % 9
+                    crown.append([low[k], low[j], high[j], high[k]])
+            crown.append(rings[-1])
+
+
 def _perimeter(data, project, groups):
     steel = groups["boundary_steel"]
-    for a, b in data["north_gate_fence_m"]:
+    for a, b in data["north_gate_fence_m"] + data["start_verge_fence_m"]:
         a, b = project(*a), project(*b)
         for z in (.08, .37):
             steel.extend(_beam(a, b, .012, z, z+.012))
@@ -209,6 +266,11 @@ def _perimeter(data, project, groups):
         for i in range(bays+1):
             x, y = (start+(end-start)*i/bays for start, end in zip(a, b))
             steel.extend(_beam((x-.01, y), (x+.01, y), .018, 0., .40))
+        # Braces at the ends leave the gate opening unobstructed.
+        for i in (0, bays-1):
+            p, q = [tuple(x+(y-x)*j/bays for x, y in zip(a,b)) for j in (i,i+1)]
+            z = .09 if i == 0 else .36
+            steel.extend(_beam(p, q, .012, z, z+.012, rise=.27 if i == 0 else -.27))
     for location in data["lighting_masts_m"]:
         x, y = project(*location)
         steel.extend(_beam((x-.018, y), (x+.018, y), .036, 0., 1.5))
@@ -230,6 +292,15 @@ def _perimeter(data, project, groups):
                 for lo, hi in zip(sector, sector[1:]):
                     groups["tyres"].append([*lo, *reversed(hi)])
 
+    # Short open frame at the island tip, as in the operator's track photo.
+    rails = groups["island_rails"]
+    a, b = (project(*p) for p in data["turn_island_rail_m"])
+    for f in (0., .5, 1.):
+        x, y = (u+(v-u)*f for u,v in zip(a,b))
+        rails.extend(_beam((x-.006,y), (x+.006,y), .014, .00375, .1815))
+    for z in (.09225, .174):
+        rails.extend(_beam(a, b, .012, z, z+.0075))
+
 
 def geometry(edges, project):
     """Yield batched outward-facing meshes in RC metres, sharing the track projection."""
@@ -245,5 +316,7 @@ def geometry(edges, project):
     _barriers(edges, project, data["pit_lane"], groups)
     _paint(edges, project, data["pit_lane"], groups)
     _perimeter(data, project, groups)
+    _turn_equipment(Frontage(data["first_turn_equipment"], project), groups)
+    _start_trees(data, project, groups)
     for name, faces in groups.items():
         yield "odaiba_"+name, COLORS[name], faces

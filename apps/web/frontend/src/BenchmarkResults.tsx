@@ -4,7 +4,7 @@ import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { modeLabel, type Mode, type SimSettings } from './simulation';
 
 export interface Circuit {
-  id: string; name: string; lines: string[];
+  id: string; name: string; lines: string[]; sample?: 'odaiba';
 }
 interface Attempt { trial: number; outcome: string; lap_times_s: number[]; reason: string }
 interface Score {
@@ -85,7 +85,7 @@ export function BenchmarkResults({ latest, circuits }: { latest: string; circuit
         }}/>}</div>}
     {error && <p role="alert" className="sim-error">{error}</p>}
     {report && <>
-      <p className="sim-note">{report.courses.length} コース · {report.options.source === 'sample' ? '同梱 HDMap' : '保存済み HDMap'} · {report.options.line} · 各方式 {report.options.trials} 試行 × {report.options.laps} 周</p>
+      <p className="sim-note">{report.courses.length} コース · {report.options.source === 'sample' ? '同梱 HDMap' : report.options.source === 'mixed' ? '同梱・保存済み HDMap' : '保存済み HDMap'} · {report.options.line} · 各方式 {report.options.trials} 試行 × {report.options.laps} 周</p>
       <details className="sim-model"><summary>この評価で使った制御・遅延設定</summary>
         <p>固定 {report.options.settings.fixed_lookahead_m} m · 速度連動 {report.options.settings.min_lookahead_m} ～ {report.options.settings.max_lookahead_m} m、先読み {report.options.settings.lookahead_time_s} s</p>
         <p>操舵／スロットルのむだ時間 {report.options.settings.steering_delay_ms} / {report.options.settings.throttle_delay_ms} ms · 操舵／速度の時定数 {report.options.settings.steering_tau_s} / {report.options.settings.speed_tau_s} s</p>

@@ -1,4 +1,4 @@
-"""Notebook に保存された閉路の HDMap を使う閉ループ評価。"""
+"""お台場サンプルと Notebook に保存された閉路の HDMap を使う閉ループ評価。"""
 from __future__ import annotations
 
 import csv
@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from .planning_replay import _core
+from .sample_map import ODAIBA_COURSE, odaiba_document
 from .store import atomic_json, confined, identifier, read_json
 
 REPORTS = Path('runs/simulation_benchmarks')
@@ -23,7 +24,7 @@ class CourseOptions(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     settings: dict = Field(default_factory=dict)
     line: Literal['centerline', 'raceline'] = 'raceline'
-    source: Literal['workspace'] = 'workspace'
+    source: Literal['workspace', 'sample', 'mixed'] | None = None
 
 
 class Batch(CourseOptions):
@@ -46,10 +47,19 @@ def course_lines(document):
 
 
 def document_for(store, key, line):
-    document = store.load_map(key)
+    document = odaiba_document() if key == ODAIBA_COURSE else store.load_map(key)
     if line not in course_lines(document):
         raise ValueError(f'{key} の評価には、閉路の HDMap と生成済みの {line} が必要です')
     return document
+
+
+def course_source(keys, requested):
+    source = 'workspace'
+    if ODAIBA_COURSE in keys:
+        source = 'sample' if len(keys) == 1 else 'mixed'
+    if requested is not None and requested != source:
+        raise ValueError('指定された地図の種類とコース ID が一致しません')
+    return source
 
 
 def engine():
@@ -61,7 +71,9 @@ def engine():
 
 @router.get('/courses')
 def courses(request: Request):
-    items = []
+    sample = odaiba_document()
+    items = [dict(id=ODAIBA_COURSE, name=sample['title'] + '（同梱サンプル）', lines=course_lines(sample),
+                  sample='odaiba')]
     for document in request.app.state.store.list_maps():
         lines = course_lines(document)
         if lines:
@@ -71,8 +83,11 @@ def courses(request: Request):
 
 @router.post('/courses/{key}/compare')
 def compare_course(key: str, body: Trace, request: Request):
+    course_source([key], body.source)
     doc = document_for(request.app.state.store, key, body.line)
-    return JSONResponse(engine().compare_course(doc, body.settings, line=body.line, laps=body.laps, trial=body.trial))
+    result = engine().compare_course(doc, body.settings, line=body.line, laps=body.laps, trial=body.trial)
+    result['course']['id'] = key
+    return JSONResponse(result)
 
 
 def signature(document, kind):
@@ -89,11 +104,12 @@ def prepare(store, body):
     keys = body.course_ids
     if len(set(keys)) != len(keys):
         raise ValueError('同じコースを複数回指定できません')
+    source = course_source(keys, body.source)
     # 投稿時の入力を検証し、worker 実行までの編集を検出する。
     hashes = {key: signature(document_for(store, key, body.line), body.line) for key in keys}
     _core('atd_planning')
     simulation = _core('atd_control', 'simulation')
-    return dict(body.model_dump(), settings=simulation.validate_settings(body.settings), course_sha256=hashes)
+    return dict(body.model_dump(), source=source, settings=simulation.validate_settings(body.settings), course_sha256=hashes)
 
 
 @router.post('/benchmarks')
@@ -101,7 +117,7 @@ def start(body: Batch, request: Request):
     store = request.app.state.store
     payload = prepare(store, body)
     resources = ['simulation-benchmark']
-    resources.extend('map:' + key for key in body.course_ids)
+    resources.extend('map:' + key for key in body.course_ids if key != ODAIBA_COURSE)
     return request.app.state.jobs.start('simulation_benchmark', payload, resources,
                                         f'走行ベンチマーク（{len(body.course_ids)} コース）')
 

@@ -28,21 +28,40 @@ class OdaibaSceneryTest(unittest.TestCase):
                 self.assertGreater(nearest, .25)
                 self.assertLess(nearest, .65)
 
+    def stereo_vertices(self, feature, station, near, far, min_z=0.):
+        _, x, y, yaw = min(self.poses, key=lambda pose: abs(pose[0]-station))
+        common = set()
+        for face in self.faces["odaiba_" + feature]:
+            for px, py, pz in face:
+                forward = (px-x)*cos(yaw) + (py-y)*sin(yaw) - FORWARD_M
+                lateral = -(px-x)*sin(yaw) + (py-y)*cos(yaw)
+                if (near < forward < far and pz >= min_z
+                        and abs(lateral)+BASELINE_M/2 < forward*tan(HFOV/2)
+                        and abs(pz-.12) < forward*tan(HFOV/2)*720/1280):
+                    common.add((px, py, pz))
+        return common
+
     def test_pit_and_terrace_present_in_both_frusta_on_return_leg(self):
         # Close range makes this sensitive to a misplaced footprint or a second
         # 1/5 reduction. This geometric check leaves final appearance to OGRE.
-        for feature, station in (("odaiba_pit_columns", 59), ("odaiba_terrace_rails", 69)):
-            _, x, y, yaw = min(self.poses, key=lambda pose: abs(pose[0]-station))
-            common = set()
-            for face in self.faces[feature]:
-                for px, py, pz in face:
-                    forward = (px-x)*cos(yaw) + (py-y)*sin(yaw) - FORWARD_M
-                    lateral = -(px-x)*sin(yaw) + (py-y)*cos(yaw)
-                    if (.3 < forward < 10 and abs(lateral)+BASELINE_M/2 < forward*tan(HFOV/2)
-                            and abs(pz-.12) < forward*tan(HFOV/2)*720/1280):
-                        common.add((px, py, pz))
+        for feature, station in (("pit_columns", 59), ("terrace_rails", 69)):
             with self.subTest(feature=feature):
-                self.assertGreaterEqual(len(common), 8)
+                self.assertGreaterEqual(len(self.stereo_vertices(feature, station, .3, 10)), 8)
+
+    def test_start_approach_and_exit_have_binocular_landmarks_above_barriers(self):
+        # At station 4, both the nearby equipment and a more distant planted verge
+        # should be in view. Past the apex, the frame faces away from the north gate.
+        for feature, station, near, far in (("truss", 0, 5, 8), ("truss", 4, 2, 4),
+                                             ("leaves", 4, 5, 10), ("island_rails", 5.5, .3, 5)):
+            with self.subTest(feature=feature, station=station):
+                self.assertGreaterEqual(len(self.stereo_vertices(feature, station, near, far, .13)), 8)
+
+    def test_turn_furniture_keeps_clear_of_every_lane(self):
+        # Full lap including the adjacent folded lanes; half-road width is 0.70 m.
+        for feature in ("truss", "equipment", "island_rails", "leaves", "shaded_leaves", "tree_bark"):
+            corners = {v[:2] for face in self.faces["odaiba_" + feature] for v in face}
+            with self.subTest(feature=feature):
+                self.assertGreater(min(dist(c, pose[1:3]) for c in corners for pose in self.poses), .75)
 
 
 if __name__ == "__main__":

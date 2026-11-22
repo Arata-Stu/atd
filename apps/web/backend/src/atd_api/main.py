@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import time
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -30,6 +31,7 @@ class Strict(BaseModel):
 class CreateMap(Strict):
     id: str
     title: str = ''
+    sample: Literal['odaiba'] | None = None
 
 
 class Generate(Strict):
@@ -209,6 +211,9 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     def create_map(body: CreateMap):
         with jobs.registry():
             jobs.require_available(['map:' + body.id])
+            if body.sample == 'odaiba':
+                from .sample_map import import_odaiba
+                return import_odaiba(store, body.id, body.title)
             return store.create_map(body.id, body.title)
 
     @app.post('/api/maps/build')

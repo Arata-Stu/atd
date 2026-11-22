@@ -31,6 +31,7 @@ clone 内でソース・設定、ROS workspace、永続データ、生成物の�
 │       ├── atd_vehicle_interface/
 │       │   └── firmware/pico_rev6/ # Pico用ソース・テスト。SDK・生成物はGit管理外
 │       └── README.md          # package の配置ガイド
+├── samples/odaiba/            # Gazebo 境界から生成した同梱 HDMap・走行ラインと再生成スクリプト
 ├── scripts/                   # 日常操作の入口
 │   ├── atd                    # ホスト・Docker 共通の日常操作メニュー
 │   ├── setup.sh               # ホスト準備・workspace・保存先

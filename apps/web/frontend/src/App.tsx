@@ -74,7 +74,8 @@ export function App() {
     dirty.current = false;
     let hash = '#' + next;
     if (next === 'calibration') hash = calibrationHash(assetId);
-    if (next === 'map' && assetId) hash += '?' + new URLSearchParams({map: assetId, line: 'raceline'});
+    if (next === 'map' && assetId) hash += '?' + (assetId === 'sample:odaiba'
+      ? new URLSearchParams({sample: 'odaiba'}) : new URLSearchParams({map: assetId, line: 'raceline'}));
     window.history.replaceState(null, '', hash);
     setPage(next); setDrawer(false); setCapture(false);
   }

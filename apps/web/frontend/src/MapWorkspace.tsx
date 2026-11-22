@@ -24,7 +24,8 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
   const [visible, setVisible] = useState<Record<string, boolean>>({ centerline: true, raceline: true, custom: true, cloud: true });
   const [settings, setSettings] = useState<GenerationSettings>(DEFAULT_GENERATION_SETTINGS);
   const [kind, setKind] = useState<LineKind>(() => entry.get('line') === 'raceline' ? 'raceline' : entry.get('line') === 'custom' ? 'custom' : 'centerline');
-  const [newId, setNewId] = useState(''), [showCreate, setShowCreate] = useState(false), [showBuild, setShowBuild] = useState(false), [showCapture, setShowCapture] = useState(false);
+  const [sample, setSample] = useState(entry.get('sample') === 'odaiba' ? 'odaiba' : '');
+  const [newId, setNewId] = useState(sample), [showCreate, setShowCreate] = useState(!!sample), [showBuild, setShowBuild] = useState(false), [showCapture, setShowCapture] = useState(false);
   const [build, setBuild] = useState(BUILD_DEFAULTS);
   const [gazeboMaps, setGazeboMaps] = useState<GazeboMapEntry[]>([]), [gazeboKey, setGazeboKey] = useState('');
   const [libraryAction, setLibraryAction] = useState<{ operation: 'duplicate' | 'delete'; item: { id: string; revision: number } | GazeboMapEntry } | null>(null);
@@ -221,8 +222,8 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
       <button className="button primary full" disabled={busy} onClick={() => setShowBuild(true)}><Icon name="plus" size={17}/>rosbag から地図を作成</button>
       <button className="button full vgl-library-button" onClick={() => setVglDialog('library')}><Icon name="folder" size={16}/>VGLモデル一覧</button>
       <div className="catalog-heading"><span>保存済みの地図</span><span>{maps.length}</span></div>
-      <div className="map-list">{maps.map(map => <button key={map.id} className={'map-card ' + (doc?.id === map.id ? 'selected' : '')} disabled={busy} onClick={() => void load(map.id)}><span className="map-card-icon"><Icon name="map" size={21}/></span><span><strong>{map.title || map.id}</strong><small>{map.id}</small><small>{nvidiaMap(map) && map.source?.pointcloud_status !== 'ready' ? '点群の取得待ち' : `${map.left.length + map.right.length} 境界点`} · rev {map.revision}</small></span><Icon name="chevron" size={15}/></button>)}{!maps.length && <p className="panel-empty">保存された地図がありません。<br/>地図の作成、または空のHDMapから編集を始められます。</p>}</div>
-      <button className="button quiet full" disabled={busy} onClick={() => setShowCreate(true)}><Icon name="plus" size={16}/>空のHDMapを作成</button>
+      <div className="map-list">{maps.map(map => <button key={map.id} className={'map-card ' + (doc?.id === map.id ? 'selected' : '')} disabled={busy} onClick={() => void load(map.id)}><span className="map-card-icon"><Icon name="map" size={21}/></span><span><strong>{map.title || map.id}</strong><small>{map.id}</small><small>{nvidiaMap(map) && map.source?.pointcloud_status !== 'ready' ? '点群の取得待ち' : `${map.left.length + map.right.length} 境界点`} · rev {map.revision}</small></span><Icon name="chevron" size={15}/></button>)}{!maps.length && <p className="panel-empty">保存された地図がありません。<br/>「HDMapを作成」からお台場サンプルを開けます。</p>}</div>
+      <button className="button quiet full" disabled={busy} onClick={() => { setSample(''); setNewId(''); setShowCreate(true); }}><Icon name="plus" size={16}/>HDMapを作成</button>
       {doc && <div className="button-row" title={dirty ? '先に編集を保存するか、再読込してください' : doc.id}>
         <button className="button" disabled={locked || dirty} onClick={() => setLibraryAction({ operation: 'duplicate', item: doc })}>地図を複製</button>
         <button className="button" disabled={locked || dirty} onClick={() => setLibraryAction({ operation: 'delete', item: doc })}>地図を削除</button>
@@ -261,7 +262,20 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
         <LineSettingsPanel doc={doc} kind={kind} settings={settings} busy={locked || !!editIssue} issue={generationIssue(doc, kind, cloud)} onKind={value => { setKind(value); setSettings(restoredSettings(doc, value)); }} onSettings={setSettings} onGenerate={generate} onClearCalibration={clearCalibration} dirty={dirty}/>
       </> : <div className="properties-empty"><Icon name="settings" size={28}/><p>地図を選択すると<br/>準備状態と編集設定が表示されます。</p><div className="workflow-step"><b>01</b><span>cuVSLAM地図を作成</span></div><div className="workflow-step"><b>02</b><span>VGL地図を準備</span></div><div className="workflow-step"><b>03</b><span>保存地図から点群を取得</span></div><div className="workflow-step"><b>04</b><span>HDMap・走行ラインを編集</span></div></div>}
     </aside>
-    {showCreate && <Modal title="空のHDMapを作成" subtitle="地図IDを指定して、境界の手動編集から始めます。" onClose={() => setShowCreate(false)}><form onSubmit={e => { e.preventDefault(); void run(async () => { if (dirty && !window.confirm('未保存の編集を破棄して新しいHDMapを開きますか？')) return; const created = await api<MapDocument>('maps', { id: newId, title: newId }); await refresh(); setShowCreate(false); await reload(created.id, true); }); }}><Field label="地図ID" hint="英数字、ハイフン、アンダースコア"><input required pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value={newId} onChange={e => setNewId(e.target.value)} placeholder="practice_course"/></Field><div className="modal-actions"><button className="button primary" disabled={busy}>作成する<Icon name="arrow" size={16}/></button></div></form></Modal>}
+    {showCreate && <Modal title="HDMapを作成" subtitle="このNotebookに保存する新しい地図IDを指定してください。" onClose={() => !busy && setShowCreate(false)}>
+      <form onSubmit={e => { e.preventDefault(); void run(async () => {
+        if (dirty && !window.confirm('未保存の編集を破棄して新しいHDMapを開きますか？')) return;
+        const created = await api<MapDocument>('maps', { id: newId, title: newId, sample: sample || null });
+        await refresh(); setShowCreate(false); await reload(created.id, true);
+      }); }}>
+        <Field label="作成元"><select disabled={busy} value={sample} onChange={e => {
+          const value = e.target.value;
+          if (!newId || newId === sample) setNewId(value);
+          setSample(value);
+        }}><option value="">空のHDMap</option><option value="odaiba">お台場 SKY TRACK（1/5 サンプル）</option></select></Field>
+        <Field label="地図ID" hint="英数字、ハイフン、アンダースコア"><input required maxLength={96} disabled={busy} pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" value={newId} onChange={e => setNewId(e.target.value)} placeholder="practice_course"/></Field>
+        <div className="modal-actions"><button className="button primary" disabled={busy}>作成する<Icon name="arrow" size={16}/></button></div>
+      </form></Modal>}
     {showBuild && <Modal title="rosbag から地図を作成" subtitle="最初にcuVSLAM地図を作成します。完了後、VGLと点群取得へ進めます。" onClose={() => setShowBuild(false)}><form onSubmit={e => { e.preventDefault(); void run(async () => { await queue('maps/build', build, build.id); setShowBuild(false); notify('cuVSLAM地図作成を開始しました。完了後に作成した地図を開きます'); }); }}><Field label="記録データ"><select required value={build.bag} onChange={e => setBuild({ ...build, bag: e.target.value })}><option value="">rosbagを選択</option>{bags.map(bag => <option key={bag.id} value={bag.id}>{bag.id} · {bytes(bag.bytes)}</option>)}</select></Field><Field label="新しい地図ID"><input required pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value={build.id} onChange={e => setBuild({ ...build, id: e.target.value })} placeholder="practice_course"/></Field><details><summary>画像トピック・frameの詳細</summary><div className="field-grid">{Object.entries(build).filter(([key]) => key !== 'id' && key !== 'bag').map(([key, value]) => <Field key={key} label={key}><input value={value} onChange={e => setBuild({ ...build, [key]: e.target.value })}/></Field>)}</div></details>{!bags.length && <p className="inline-note">bagがありません。「データ転送」からJetsonの記録を受信してください。</p>}<div className="modal-actions"><button className="button primary" disabled={busy || !bags.length}><Icon name="play" size={16}/>cuVSLAM地図作成を開始</button></div></form></Modal>}
     {vglDialog === 'library' && <VglExportsModal onClose={() => setVglDialog(null)}/>}
     {libraryAction && <Suspense fallback={<p role="status">地図の管理画面を読み込んでいます…</p>}><MapLibraryDialog key={libraryAction.item.id} doc={libraryAction.item} action={libraryAction.operation} busy={busy} onClose={() => setLibraryAction(null)} onSubmit={manageMap}/></Suspense>}

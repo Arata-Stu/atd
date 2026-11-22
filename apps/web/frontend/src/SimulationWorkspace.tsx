@@ -114,7 +114,7 @@ export function SimulationWorkspace({ jobs, onOpenMap, onLog }: { jobs: Job[]; o
     request.current = controller;
     setPending(true); setError('');
     try {
-      const path = course ? 'simulation/courses/' + course + '/compare' : 'simulation/compare';
+      const path = course ? 'simulation/courses/' + encodeURIComponent(course) + '/compare' : 'simulation/compare';
       const payload = course ? {settings, line:selectedLine, laps:nLaps, trial:start} : settings;
       const data = await api<Comparison>(path, payload, 'POST', controller.signal);
       if (controller.signal.aborted) return;
@@ -164,7 +164,7 @@ export function SimulationWorkspace({ jobs, onOpenMap, onLog }: { jobs: Job[]; o
         {batchView && <label>初期条件の数<select aria-label="初期条件の数" value={trials} onChange={e => setTrials(Number(e.target.value))}>{[1,2,3].map(n => <option key={n} value={n}>{n} 試行 / 方式</option>)}</select></label>}
         {!batchView && key && <label>開始姿勢<select aria-label="開始姿勢" value={trial} onChange={e => setTrial(Number(e.target.value))}><option value={1}>① ライン上</option><option value={2}>② 左 6 cm・+3°</option><option value={3}>③ 右 6 cm・−3°</option></select></label>}
       </div>
-      {circuit && (!batchView || scope === 'one') && <button className="bench-link" type="button" onClick={() => onOpenMap(circuit.id)}>HDMap を開く</button>}
+      {circuit && (!batchView || scope === 'one') && <button className="bench-link" type="button" onClick={() => onOpenMap(circuit.id)}>{circuit.sample ? '編集用にサンプルをコピー' : 'HDMap を開く'}</button>}
       <Inputs controls={distances}/>
         <p className="sim-note">速度連動の先読み距離は「最短距離 ＋ 速度 × 先読み時間」で求め、最長距離で制限します。</p>
         <details className="sim-model"><summary>車両モデル・遅延設定</summary>

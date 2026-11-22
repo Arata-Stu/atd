@@ -11,7 +11,7 @@ import pytest
 from atd_processing.geometry import DEFAULTS, generate, settings
 from atd_processing.planning.geometry import Corridor, PathValidationError, edges, inside, simple
 from atd_processing.planning.optimizer import optimize
-from atd_processing.planning.optimizer_worker import _noncrossing_output
+from atd_processing.planning.optimizer_worker import _noncrossing_output, _refine_curvature
 from atd_processing.planning.raceline_reference import build
 from atd_processing.planning.iqp import monitored_iqp
 from atd_processing.planning.lines import validate_raceline_curvature
@@ -142,6 +142,28 @@ def test_topology_backtracking_keeps_order_and_curvature_checks():
     line, scale, rejected = _noncrossing_output(create, lambda line: validate_raceline_curvature(line, {'curvature_limit': 6}))
     assert scale == .5 and rejected[0]['diagnostic']['reason'] == 'curvature'
     validate_raceline_curvature(line, {'curvature_limit': 6})
+
+
+def test_curvature_correction_keeps_original_normal_axes_and_width_bounds():
+    import numpy as np
+
+    normals = np.asarray(circle(1., 24))
+    reference = np.column_stack((normals * .7, np.full((24, 2), .6)))
+    args = dict(reftrack=reference, normvectors=normals, kappa_bound=1.)
+
+    def interpolate(alpha):
+        return reference[:, :2] + normals * alpha[:, None]
+
+    def correction(reftrack, normvectors, kappa_bound):
+        assert normvectors is normals and kappa_bound == 1.
+        np.testing.assert_allclose(reftrack[:, :2], normals * .8, atol=1e-12)
+        np.testing.assert_allclose(reftrack[:, 2:], [[.5, .7]] * len(normals))
+        return np.full(len(normals), .3), 0.
+
+    line, peaks = _refine_curvature(np.full(len(normals), .1), args, correction, interpolate)
+    assert peaks == pytest.approx([1 / .8, 1 / 1.1])
+    validate_raceline_curvature(line, {'curvature_limit': 1.})
+    np.testing.assert_allclose(reference[:, 2:], .6)
 
 
 def test_iqp_keeps_upstream_convergence_and_restores_solver():

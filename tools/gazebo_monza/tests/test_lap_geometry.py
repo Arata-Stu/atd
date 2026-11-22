@@ -1,4 +1,5 @@
 """Validate the venue-local Odaiba lap and its RC road boundaries."""
+import json
 from math import degrees, dist, remainder, tau
 from pathlib import Path
 import sys
@@ -9,6 +10,23 @@ from circuits import circuit_ids, load_lap, track_data
 
 
 class LapGeometryTests(unittest.TestCase):
+    def test_bundled_hdmap_matches_gazebo_edges_timing_line_and_direction(self):
+        root = Path(__file__).resolve().parents[3] / "samples/odaiba"
+        document = json.loads((root / "hdmap/map.json").read_text())
+        boundaries, poses, _ = load_lap("odaiba")
+        for side in ("left", "right"):
+            self.assertEqual(document[side], [list(point) for point in boundaries[side]])
+        self.assertEqual(set(document["lines"]), {"centerline", "raceline"})
+        for kind, line in document["lines"].items():
+            with self.subTest(line=kind):
+                exported = json.loads((root / "lines" / f"{kind}.json").read_text())
+                self.assertEqual(exported.pop("map_id"), document["id"])
+                self.assertLessEqual(exported.pop("revision"), document["revision"])
+                self.assertEqual(line, exported)
+                a, b = line["points"][:2]
+                self.assertLess(abs(a[0] - poses[0][1]), .05)
+                self.assertLess(b[0], a[0])
+
     def test_timing_line_direction_distance_and_seam(self):
         _, poses, project = load_lap("odaiba")
         self.assertEqual(circuit_ids(), ["odaiba"])

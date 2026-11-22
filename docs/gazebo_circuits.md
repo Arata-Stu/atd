@@ -29,6 +29,16 @@ bag の末尾で、同時刻の姿勢グラフの頂点・辺を、cuVSLAM の�
 
 ## 実行方法
 
+### 計時線から最初の折返しまで
+
+計時線から約4 m進むと、最初の折返しに入る。進入側の外周に斜材のある柵、金属トラス、機材箱、奥行きの異なる樹木を配置し、折返しの島には長さ42 cmの低い柵を置いた。北ゲートとプレス区画を配置の目安にし、個々の物体の寸法・位置は推定した。[大会施設図](https://kart-ev-div.city-kart.jp/wp-content/uploads/2025/12/b93fd2f6f6482e8449159fbfb90ace03.pdf)・[屋外コースの写真](https://city-circuit.com/wp-content/themes/city-circuit/assets/img/home/facility01-1.jpg)
+
+![同じGazebo境界から生成したHDMapとスタート方向の左眼像。計時線と4 m地点を同じ姿勢で変更前後比較](images/odaiba-start-hdmap.jpg)
+
+VTKで左右を描画した1280×720のモノクロ画像では、ORBの左右対応数が計時線で160→398組、4 m地点で106→390組、5 m地点で95→324組となった。照合には左右相互の最近傍比0.75、垂直ずれ1.5 px以内、水平視差1〜257 pxを用いた。cuVSLAMの追跡と閉路は、この景観で新しく収録したbagを再生して評価する。[同じ境界で2Dベンチマークを実行](simulation.md#お台場の同梱-hdmap-で走る)
+
+### Gazebo の起動設定
+
 準備済みの Linux Notebook では `atd gazebo` から操作・速度・周回数・解像度・撮影レート・IMU を選べる。コースIDは `odaiba`、ルートは全周の `lap`。発着の計時線を毎周同じ向きで通過する。[イメージの準備・動画・配信・診断](gazebo_monza.md)
 
 | 設定 | 選択肢・単位 |

@@ -11,7 +11,8 @@ from fastapi.testclient import TestClient
 from atd_api import simulation_benchmark as benchmark
 from atd_api.jobs import ACTIVE
 from atd_api.main import create_app
-from atd_api.store import atomic_json
+from atd_api.sample_map import ODAIBA_COURSE, ODAIBA_MAP, odaiba_document
+from atd_api.store import atomic_json, read_json
 from atd_processing.geometry import generate
 
 
@@ -45,12 +46,14 @@ def test_catalog_lists_saved_closed_maps_with_profiles(client, course):
         atomic_json(store.folder(key) / 'hdmap/map.json', dict(valid, **changes, id=target['id']))
         assert client.post(f'/api/simulation/courses/{key}/compare', json={'line': 'centerline'}).status_code == 400
     response = client.get('/api/simulation/courses')
-    assert response.json()['items'] == [dict(id=course, name='短い周回テスト', lines=['centerline'])]
+    sample, saved = response.json()['items']
+    assert sample['id'] == ODAIBA_COURSE and sample['lines'] == ['raceline', 'centerline']
+    assert saved == dict(id=course, name='短い周回テスト', lines=['centerline'])
     assert store.load_map('previous-sample')['lines'] == valid['lines']
 
 
 def test_saved_result_readable_without_original_course(client):
-    assert client.get('/api/simulation/courses').json() == {'items': []}
+    assert [item['id'] for item in client.get('/api/simulation/courses').json()['items']] == [ODAIBA_COURSE]
     assert client.get('/api/simulation/benchmarks').json() == {'items': []}
     report = dict(id='previous', schema='atd.simulation_benchmark.v1',
                   options={'source': 'sample'}, courses=[])
@@ -76,6 +79,44 @@ def test_trace_uses_saved_map_and_requires_new_line_after_boundary_edit(client, 
     assert saved.status_code == 200, saved.text
     assert not saved.json()['lines']
     assert client.post(url, json=opts).status_code == 400
+
+
+def test_odaiba_edit_copy_does_not_shadow_or_overwrite_workspace_maps(client):
+    store = client.app.state.store
+    raw = ODAIBA_MAP.read_bytes()
+    existing = client.post('/api/maps', json={'id': 'odaiba', 'sample': 'odaiba', 'title': '編集したお台場'}).json()
+    items = client.get('/api/simulation/courses').json()['items']
+    assert [item['id'] for item in items] == [ODAIBA_COURSE, 'odaiba']
+    assert items[1]['name'] == '編集したお台場'
+    assert client.post('/api/maps', json={'id': 'odaiba', 'sample': 'odaiba'}).status_code == 400
+    assert store.load_map('odaiba') == existing
+    key = 'practice-odaiba'
+    response = client.post('/api/maps', json={'id': key, 'sample': 'odaiba'})
+    assert response.status_code == 200, response.text
+    doc = response.json()
+    original = odaiba_document()
+    assert doc['id'] == key and doc['source'] == original['source']
+    for field in ('left', 'right', 'lines'):
+        assert doc[field] == original[field]
+    for kind, line in doc['lines'].items():
+        assert read_json(store.folder(key) / 'lines' / (kind + '.json')) == dict(line, map_id=key, revision=doc['revision'])
+    opts = benchmark.Batch(course_ids=[ODAIBA_COURSE, 'odaiba'])
+    both = benchmark.prepare(store, opts)
+    assert both['source'] == 'mixed' and len(set(both['course_sha256'].values())) == 1
+    boundary = doc['left']
+    store.save_map(key, dict(revision=doc['revision'], left=boundary[1:] + boundary[:1]))
+    assert not store.load_map(key)['lines']
+    assert ODAIBA_MAP.read_bytes() == raw
+
+
+def test_odaiba_comparison_uses_bundled_raceline(client):
+    response = client.post(f'/api/simulation/courses/{ODAIBA_COURSE}/compare', json={'laps': 1, 'source': 'sample'})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data['course']['id'] == ODAIBA_COURSE
+    assert len(data['course']['points']) == len(odaiba_document()['lines']['raceline']['points'])
+    assert {run['mode'] for run in data['runs'] if run['samples']} == {'fixed', 'adaptive'}
+    assert client.app.state.store.list_maps() == []
 
 
 def test_worker_rejects_inputs_changed_after_acceptance(client, course):
@@ -136,7 +177,7 @@ def test_api_job_publishes_paired_json_and_csv(client, course):
 
 
 @pytest.mark.parametrize(('body', 'status'), [
-    ({'course_ids': ['missing'], 'source': 'sample'}, 422),
+    ({'course_ids': ['missing'], 'source': 'sample'}, 400),
     ({'course_ids': ['missing']}, 400),
     ({'course_ids': ['short-loop', 'short-loop']}, 400),
     ({'course_ids': ['short-loop'], 'trials': 0}, 422),

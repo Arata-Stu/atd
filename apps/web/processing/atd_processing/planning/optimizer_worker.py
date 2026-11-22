@@ -79,6 +79,41 @@ def _validate_candidate(line, corridor, p):
     validate_raceline_curvature(line, p)
 
 
+def _refine_curvature(alpha, args, solve_qp, interpolate):
+    """Relinearize curvature on the same spline knots and fixed lateral axes."""
+    from .lines import curvature
+
+    def evaluate(offset):
+        line = interpolate(offset).tolist()
+        peak = max(abs(curvature(line[i - 1], point, line[(i + 1) % len(line)]))
+                   for i, point in enumerate(line))
+        return peak, line
+
+    peak, line = evaluate(alpha)
+    history = [peak]
+    # Check the interpolated output: satisfying the linearized knot constraints
+    # can still exceed the bound in a tight bend. Keep only improving steps.
+    for _ in range(8):
+        if peak <= args["kappa_bound"]:
+            break
+        track = args["reftrack"].copy()
+        track[:, :2] += alpha[:, None] * args["normvectors"]
+        track[:, 2] -= alpha  # remaining right and left offsets in the original corridor
+        track[:, 3] += alpha
+        delta, _ = solve_qp(**dict(args, reftrack=track))
+        best = None
+        for scale in (1., .5, .25, .125):
+            offset = alpha + scale * delta
+            candidate_peak, candidate = evaluate(offset)
+            if candidate_peak < peak and (best is None or candidate_peak < best[0]):
+                best = candidate_peak, candidate, offset
+        if best is None:
+            break
+        peak, line, alpha = best
+        history.append(peak)
+    return line, history
+
+
 def _validated_solution(solve, corridor, p):
     """Tighten QP bounds only after measuring a rejected interpolated result."""
     from .geometry import PathValidationError, distance
@@ -87,9 +122,10 @@ def _validated_solution(solve, corridor, p):
     reserve = 0.0
     last_error = None
     attempts = []
-    for _ in range(8):
+    refine_curvature = False
+    while len(attempts) < 8:
         try:
-            line = solve(reserve)
+            line = solve(reserve, refine_curvature)
         except (ValueError, RuntimeError) as exc:
             if last_error is not None and (
                 "constraints are inconsistent" in str(exc) or "track might be too small" in str(exc)
@@ -105,6 +141,9 @@ def _validated_solution(solve, corridor, p):
             detail = exc.diagnostic
             detail["stage"] = "raceline_optimized_output"
             if detail["reason"] == "curvature":
+                if p["optimizer"] == "mincurv" and not refine_curvature:
+                    refine_curvature = True
+                    continue
                 raise
             attempts.append(dict(reserve_m=reserve, diagnostic=detail))
             gap = detail.get("distance_m", clearance)
@@ -220,8 +259,9 @@ def _run(document, p):
     topology_refinements = []
     iqp_history = []
     step_refinements = []
+    curvature_refinements = []
 
-    def solve(reserve):
+    def solve(reserve, refine_curvature):
         nonlocal step_scale
         # IQP mutates its input widths. Every retry starts from the same track.
         current_track, current_normals = track.copy(), normals.copy()
@@ -250,15 +290,25 @@ def _run(document, p):
                 tph.opt_min_curv.opt_min_curv = upstream_qp
             alpha, current_track, current_normals = optimized[:3]
 
-        def create(scale):
+        def interpolate(offset):
             result = tph.create_raceline.create_raceline(
                 refline=current_track[:, :2],
                 normvectors=current_normals,
-                alpha=alpha * scale if p["optimizer"] == "mincurv" else alpha,
+                alpha=offset,
                 stepsize_interp=min(p["spacing"], 0.05),
             )[0]
             if not np.isfinite(result).all():
                 raise ValueError("最適化結果に非有限値があります")
+            return result
+
+        if refine_curvature:
+            result, peaks = _refine_curvature(alpha, args, corrected_qp, interpolate)
+            curvature_refinements.append(dict(reserve_m=reserve, peak_curvatures_1_per_m=peaks))
+            step_scale = 1.
+            return result
+
+        def create(scale):
+            result = interpolate(alpha * scale if p["optimizer"] == "mincurv" else alpha)
             if p['optimizer'] == 'mincurv_iqp':
                 # IQP's current_track already includes all preceding moves. A
                 # final-alpha-only scale cannot undo an invalid cumulative move.
@@ -307,6 +357,7 @@ def _run(document, p):
             smoothing_rms_m=0.05,
             interpolation_reserve_m=reserve,
             clearance_refinements=attempts,
+            curvature_refinements=curvature_refinements,
             reference_info=reference_info,
             lateral_step_scale=step_scale,
             step_backtracking="cumulative_from_initial_reference_spline" if p["optimizer"] == "mincurv_iqp" else "reference_normal_offsets",

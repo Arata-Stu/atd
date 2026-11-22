@@ -121,6 +121,21 @@ def finish_children(gazebo, ros, container):
             wait_exit(ros, 25)
 
 
+def ros_exit_detail(path):
+    """ROS launch の終了時に、該当するログ行を試行の停止理由に添える。"""
+    try:
+        with path.open('rb') as stream:
+            end = stream.seek(0, 2)
+            stream.seek(max(0, end - 16_384))
+            lines = stream.read().decode(errors='replace').strip().splitlines()
+    except OSError:
+        return ''
+    if not lines:
+        return ''
+    line = next((line for line in reversed(lines) if '[ERROR] [launch]' in line), lines[-1])
+    return line[:2048]
+
+
 def supervise(args, gazebo_command, ros_command):
     out = args.output
     gazebo = subprocess.Popen(gazebo_command, start_new_session=True)
@@ -133,7 +148,8 @@ def supervise(args, gazebo_command, ros_command):
                 raise RuntimeError('/clock とセンサーの配信開始を確認できません。gazebo.log・run.json を確認してください')
             time.sleep(.25)
         print('Gazebo の時計・センサー配信開始。保存地図への位置合わせを待ちます。', flush=True)
-        with (out / 'closed_loop.ros.log').open('x') as log:
+        ros_log = out / 'closed_loop.ros.log'
+        with ros_log.open('x') as log:
             ros = subprocess.Popen(ros_command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             startup_deadline = time.monotonic() + 300
             active = False
@@ -146,11 +162,15 @@ def supervise(args, gazebo_command, ros_command):
                         reason += f"（{report['reason']}）"
                     print(reason, result, flush=True)
                     return 0 if report['status'] == 'completed' else 1
-                if gazebo.poll() is not None or ros.poll() is not None:
+                gazebo_code, ros_code = gazebo.poll(), ros.poll()
+                if gazebo_code is not None or ros_code is not None:
                     if result.is_file():
                         continue
-                    raise RuntimeError(f'評価完了前にプロセスが終了しました (Gazebo={gazebo.returncode}, '
-                                       f'Isaac ROS={ros.returncode})。closed_loop.ros.log・run.json を確認してください')
+                    detail = ros_exit_detail(ros_log) if ros_code is not None else ''
+                    gazebo_state = '稼働中' if gazebo_code is None else gazebo_code
+                    ros_state = '稼働中' if ros_code is None else ros_code
+                    raise RuntimeError(f'評価完了前にプロセスが終了しました (Gazebo={gazebo_state}, '
+                                       f'Isaac ROS={ros_state})。{detail or "closed_loop.ros.log・run.json を確認してください"}')
                 if not active:
                     if (out / 'scene/closed_loop.active').is_file():
                         active = True
@@ -161,12 +181,18 @@ def supervise(args, gazebo_command, ros_command):
     except KeyboardInterrupt:
         reason = 'ユーザーが走行を中断しました'
         raise
-    except (OSError, RuntimeError, ValueError, KeyError) as error:
-        reason = str(error)
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        # The worker uses the file's presence for shutdown. The evaluator also
+        # needs to distinguish an infrastructure failure from an operator stop.
+        reason = f'error\n{error}'
         raise
     finally:
-        (out / 'closed_loop.cancel').write_text(reason + '\n')
-        finish_children(gazebo, ros, args.container)
+        try:
+            pending = out / 'closed_loop.cancel.tmp'
+            pending.write_text(reason + '\n')
+            pending.replace(out / 'closed_loop.cancel')
+        finally:
+            finish_children(gazebo, ros, args.container)
 
 
 def host(args):
@@ -181,7 +207,8 @@ def host(args):
     if not command:
         raise ValueError('Gazebo 起動コマンドを指定してください')
     launch = ['ros2', 'launch', 'atd_bringup', 'gazebo_closed_loop.launch.py',
-              f'map_id:={args.map}', f'line:={args.line}', f'max_speed_mps:={args.speed}']
+              f'map_id:={args.map}', f'line:={args.line}', f'max_speed_mps:={args.speed}',
+              f'rviz:={str(args.rviz).lower()}']
     if args.engine_dir:
         launch.append('engine_dir:=' + args.engine_dir)
     if args.min_lookahead is not None:
@@ -198,7 +225,7 @@ def host(args):
         return 0
     session = dict(map_id=args.map, line=args.line, circuit=args.circuit, ros_domain_id=int(args.domain),
                    max_speed_mps=args.speed, engine_dir=args.engine_dir, min_lookahead_override_m=args.min_lookahead,
-                   started=time.time())
+                   rviz=args.rviz, started=time.time())
     try:
         check_isaac_mounts(results)
         signal.signal(signal.SIGTERM, signal.default_int_handler)
@@ -235,6 +262,7 @@ def main():
         launch.add_argument('--' + key, required=True)
     launch.add_argument('--engine-dir')
     launch.add_argument('--min-lookahead', type=float)
+    launch.add_argument('--rviz', action='store_true')
     launch.add_argument('--speed', required=True, type=float)
     launch.add_argument('--dry-run', action='store_true')
     launch.add_argument('command', nargs=argparse.REMAINDER)

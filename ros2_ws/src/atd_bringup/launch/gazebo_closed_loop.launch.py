@@ -1,7 +1,12 @@
 """Notebook の保存地図・Sim Clock・ステレオ入力で Gazebo 内の車両を走らせる。"""
+import atexit
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -17,6 +22,31 @@ from atd_control.core import LookaheadConfig
 from atd_control.speed import PIDConfig
 from atd_localization.assets import map_metadata, verified_hdmap
 from atd_planning.core import DEFAULT_HORIZON_M, ReferenceLine
+
+
+def rviz_nodes(root, key, line, reference):
+    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+        raise ValueError('RViz の画面出力先がありません。Notebook のデスクトップ端末で atd dev を起動してください')
+    preset = Path(get_package_share_directory('atd_bringup')) / 'config/gazebo_closed_loop.rviz'
+    config = yaml.safe_load(preset.read_text())
+    xs = [segment.x for segment in reference.segments]
+    ys = [segment.y for segment in reference.segments]
+    # Centre the top view on the saved course, including maps with a displaced origin.
+    view = config['Visualization Manager']['Views']['Current']
+    view.update(X=(min(xs) + max(xs)) / 2, Y=(min(ys) + max(ys)) / 2,
+                Scale=min(720 / max(1., max(xs) - min(xs)), 520 / max(1., max(ys) - min(ys))))
+    work = TemporaryDirectory(prefix='atd-gazebo-rviz-')
+    atexit.register(work.cleanup)
+    actual = Path(work.name) / preset.name
+    actual.write_text(yaml.safe_dump(config, sort_keys=False))
+    params = {k: ParameterValue(v, value_type=str) for k, v in
+              [('results_root', root), ('map_id', key), ('line', line)]}
+    return [
+        Node(package='atd_bringup', executable='gazebo_closed_loop_paths', output='screen',
+             parameters=[dict(params, use_sim_time=True)]),
+        Node(package='rviz2', executable='rviz2', arguments=['-d', str(actual)], output='screen',
+             parameters=[{'use_sim_time': True}]),
+    ]
 
 
 def setup(context):
@@ -51,13 +81,16 @@ def setup(context):
     control.update(line=ParameterValue(line, value_type=str), feedforward_path=ParameterValue(arg('feedforward_path'),
                    value_type=str), max_speed_mps=cap, use_sim_time=True, **asdict(lateral),
                    **{'speed_' + k: v for k, v in asdict(pid).items()})
-    return [
+    actions = [
         include('atd_localization', 'localization.launch.py', dict(common, engine_dir=arg('engine_dir'))),
         include('atd_planning', 'planning.launch.py', dict(common, line=line,
                 horizon_m=str(max(DEFAULT_HORIZON_M, lateral.max_lookahead_m)))),
         Node(package='atd_bringup', executable='gazebo_control', output='screen', parameters=[control],
              on_exit=[Shutdown(reason='Gazebo の車両制御ノードが終了しました')]),
     ]
+    if arg('rviz') == 'true':
+        actions.extend(rviz_nodes(root, key, line, ref))
+    return actions
 
 
 def generate_launch_description():
@@ -67,6 +100,7 @@ def generate_launch_description():
     defaults['min_lookahead_m'] = ''
     return LaunchDescription([
         DeclareLaunchArgument('map_id'),
+        DeclareLaunchArgument('rviz', default_value='false', choices=['true', 'false']),
         *(DeclareLaunchArgument(k, default_value=str(v)) for k, v in defaults.items()),
         OpaqueFunction(function=setup),
     ])

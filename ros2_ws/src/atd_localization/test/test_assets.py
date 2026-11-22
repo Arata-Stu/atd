@@ -104,15 +104,36 @@ def test_map_or_runtime_config_changed(deployment, changed):
         prepare(deployment)
 
 
-def test_multiple_candidates_need_explicit_choice(deployment):
-    root, _, local = deployment
+def second_build(local):
     other = local.parent / 'winter'
     shutil.copytree(local, other)
     report = json.loads((other / 'build.json').read_bytes())
     write(other / 'build.json', dict(report, build_id='winter'))
+    return other
+
+
+def test_multiple_candidates_need_explicit_choice(deployment):
+    root, _, local = deployment
+    second_build(local)
     with pytest.raises(ValueError, match='複数'):
         prepare(deployment)
     assert prepare(deployment, str(local.relative_to(root)))['model_dir'] == local
+
+
+@pytest.mark.parametrize('selection', ['recorded', 'explicit', 'corrupt'])
+def test_map_recorded_build_with_multiple_compatible_engines(deployment, selection):
+    root, folder, local = deployment
+    recorded = second_build(local)
+    profile = folder / 'vgl.json'
+    write(profile, dict(json.loads(profile.read_bytes()), runtime_model_dir=recorded.relative_to(root).as_posix()))
+    if selection == 'corrupt':
+        write(recorded / 'aliked_lightglue/aliked_640.engine', 'changed')
+        with pytest.raises(ValueError, match='内容'):
+            prepare(deployment)
+    elif selection == 'explicit':
+        assert prepare(deployment, local.relative_to(root).as_posix())['model_dir'] == local
+    else:
+        assert prepare(deployment)['model_dir'] == recorded
 
 
 def test_reject_mismatched_gpu_and_corrupt_engine(deployment):

@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros2_ws/src/atd_control"))
 from atd_control.bicycle import Bicycle, SPEED_TAU_S, STEERING_LIMIT, STEERING_TAU_S
 from rig_imu import ImuPublisher
+from sensor_profile import REAR_AXLE_HEIGHT_M
 
 JOINTS = ("steering", "throttle", "enable")
 ACTUATOR_RESPONSE = {"steering_tau_s": STEERING_TAU_S, "speed_tau_s": SPEED_TAU_S}
@@ -63,12 +64,13 @@ class ClosedLoopMotion:
     def configure(self, entity, sdf, ecm, event_mgr):
         from gz.math import Pose3d
         from gz.sim import Link, Model
+        from geometry_msgs.msg import PoseStamped
         from rclpy.context import Context
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
         from sensor_msgs.msg import JointState
         from std_msgs.msg import String
-        from rclpy.qos import QoSProfile, DurabilityPolicy
+        from rclpy.qos import QoSProfile, DurabilityPolicy, qos_profile_sensor_data
 
         scene_file = Path(sdf.get_string("scene_file"))
         scene = json.loads(scene_file.read_text())
@@ -86,6 +88,10 @@ class ClosedLoopMotion:
         self.node.create_subscription(JointState, self.actuator_topic, self.on_command, 1)
         self.node.create_subscription(String, "/atd/gazebo/control_state", self.on_control_state,
                                       QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.ground_truth = self.node.create_publisher(PoseStamped, "/atd/gazebo/ground_truth_pose",
+                                                       qos_profile_sensor_data)
+        self.gt_pose = PoseStamped()
+        self.gt_pose.header.frame_id = "gazebo_world"
         self.control_state = None
         self.active_file = scene_file.with_name("closed_loop.active")
         self.trace = scene_file.with_name("rig_motion.jsonl")
@@ -145,6 +151,15 @@ class ClosedLoopMotion:
         if seconds < self.next_trace_s:
             return
         self.next_trace_s += self.trace_interval_s
+        if self.ground_truth.get_subscription_count():
+            # The planar rig link is at floor level underneath the rear axle.
+            msg = self.gt_pose
+            msg.header.stamp.sec, msg.header.stamp.nanosec = divmod(round(seconds * 1e9), 10**9)
+            msg.pose.position.x, msg.pose.position.y = pose.x(), pose.y()
+            msg.pose.position.z = pose.z() + REAR_AXLE_HEIGHT_M
+            msg.pose.orientation.z = math.sin(pose.yaw() * .5)
+            msg.pose.orientation.w = math.cos(pose.yaw() * .5)
+            self.ground_truth.publish(msg)
         plant, v = self.plant, self.plant.vehicle
         sample = dict(sim_time_s=seconds, x_m=pose.x(), y_m=pose.y(), yaw_rad=pose.yaw(),
                       speed_mps=v.speed, steering_rad=v.steering, throttle=v.throttle_setpoint,

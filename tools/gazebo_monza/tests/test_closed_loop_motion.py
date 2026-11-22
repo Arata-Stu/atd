@@ -7,12 +7,13 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from closed_loop_motion import ClosedLoopMotion, CommandPlant, JOINTS
 from closed_loop_trial import Trial, read_samples, run_trial
+from sensor_profile import REAR_AXLE_HEIGHT_M
 import run
 import world
 
@@ -84,6 +85,32 @@ class CommandMotionTests(unittest.TestCase):
             self.assertEqual(len(rig.findall("link/sensor")), 2)
             with self.assertRaises(ValueError):
                 world.build(base/"invalid", command_driven=True, speed_mps=1.)
+
+    def test_live_gt_uses_measured_link_pose_and_trace_sim_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = ClosedLoopMotion()
+            plugin.plant = CommandPlant((0., 0., 0.), .3)
+            plugin.imu = plugin.control_state = None
+            plugin.trace = Path(tmp) / "rig_motion.jsonl"
+            plugin.next_trace_s, plugin.trace_interval_s = 0., .05
+            observed = Mock(**{"x.return_value": 3., "y.return_value": -2., "z.return_value": 0.,
+                               "yaw.return_value": math.pi / 2})
+            plugin.link = Mock(**{"world_pose.return_value": observed})
+            plugin.ground_truth = Mock(**{"get_subscription_count.return_value": 1})
+            plugin.gt_pose = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()),
+                                             pose=SimpleNamespace(position=SimpleNamespace(),
+                                                                  orientation=SimpleNamespace()))
+            info = Mock(paused=False, **{"sim_time.total_seconds.return_value": .033333})
+            plugin.post_update(info, None)
+            plugin.ground_truth.publish.assert_called_once_with(plugin.gt_pose)
+            pose, stamp = plugin.gt_pose.pose, plugin.gt_pose.header.stamp
+            sample = json.loads(plugin.trace.read_text())
+            self.assertEqual(stamp.sec * 10**9 + stamp.nanosec, round(sample["sim_time_s"] * 1e9))
+            self.assertEqual((pose.position.x, pose.position.y, pose.position.z), (3., -2., REAR_AXLE_HEIGHT_M))
+            self.assertAlmostEqual(2 * math.atan2(pose.orientation.z, pose.orientation.w), sample["yaw_rad"])
+            info.sim_time.total_seconds.return_value = .04
+            plugin.post_update(info, None)
+            plugin.ground_truth.publish.assert_called_once()
 
     def test_partial_trace_line_waits_and_tracked_stop_exports_reason(self):
         stream = io.StringIO('{"a":1}\n{"b":')

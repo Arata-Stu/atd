@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""閉ループ走行の保存ライン・正解・自己位置を RViz に配信する。"""
+import json
+import math
+
+import rclpy
+from atd_bringup.gazebo_closed_loop_paths import ClosedLoopPaths
+from atd_interfaces.msg import LocalizationStatus
+from atd_localization.assets import map_metadata, verified_hdmap
+from atd_planning.core import ReferenceLine, yaw_from_quaternion
+from geometry_msgs.msg import Point, PoseStamped
+from nav_msgs.msg import Path
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from std_msgs.msg import Header
+from visualization_msgs.msg import Marker, MarkerArray
+
+
+def map_pose(stamp, position, orientation):
+    """上面図に投影する。推定の高さの変動で太い参照線に隠れるのを防ぐ。"""
+    pose = PoseStamped()
+    pose.header.frame_id = 'map'
+    pose.header.stamp.sec, pose.header.stamp.nanosec = divmod(stamp, 1_000_000_000)
+    p, q = pose.pose.position, pose.pose.orientation
+    p.x, p.y = float(position[0]), float(position[1])
+    yaw = yaw_from_quaternion(*orientation)
+    q.z, q.w = math.sin(yaw / 2), math.cos(yaw / 2)
+    return pose
+
+
+def arrow(name, pose, length, width, lift, color):
+    marker = Marker(ns=name, id=0, type=Marker.ARROW)
+    marker.header.frame_id = 'map'
+    if pose is None:
+        marker.action = Marker.DELETE
+    else:
+        marker.header = pose.header
+        marker.pose.orientation = pose.pose.orientation
+        p = pose.pose.position
+        marker.pose.position = Point(x=p.x, y=p.y, z=p.z + lift)
+        marker.scale.x, marker.scale.y, marker.scale.z = length, width, width
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = (*color, 1.)
+    return marker
+
+
+class ClosedLoopViewer(Node):
+    def __init__(self):
+        super().__init__('atd_gazebo_closed_loop_paths')
+        root = self.declare_parameter('results_root', '/data/results').value
+        map_id = self.declare_parameter('map_id', '').value
+        selection = self.declare_parameter('line', 'raceline').value
+        metadata = map_metadata(root, map_id)
+        document = json.loads(verified_hdmap(root, metadata))
+        line = ReferenceLine.from_document(document, selection)
+        identity = tuple(metadata[key] for key in ('map_id', 'map_sha256', 'hdmap_sha256'))
+        self.paths = ClosedLoopPaths(identity, map_pose)
+        self.last_arrows = (None, None)
+        qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
+        self.reference = self.create_publisher(Path, '/atd/gazebo/reference_path', qos)
+        self.gt = self.create_publisher(Path, '/atd/gazebo/ground_truth_path', qos)
+        self.estimate = self.create_publisher(Path, '/atd/gazebo/estimated_path', qos)
+        self.markers = self.create_publisher(MarkerArray, '/atd/gazebo/current_poses', qos)
+        points, _ = line.preview(0., line.length)
+        self.reference.publish(Path(header=Header(frame_id='map'), poses=[
+            map_pose(0, (x, y, 0.), (0., 0., 0., 1.)) for x, y in points]))
+        self.create_subscription(PoseStamped, '/atd/gazebo/ground_truth_pose', self.world_pose, qos_profile_sensor_data)
+        self.create_subscription(LocalizationStatus, '/localization/status', self.paths.localization, 10)
+        self.create_timer(.2, self.publish)
+
+    def world_pose(self, msg):
+        try:
+            self.paths.world_pose(msg)
+        except ValueError as exc:
+            self.get_logger().warning(str(exc), throttle_duration_sec=5.)
+
+    def publish(self):
+        header = Header(frame_id='map', stamp=self.get_clock().now().to_msg())
+        for history, publisher in ((self.paths.gt, self.gt), (self.paths.estimate, self.estimate)):
+            if history.changed:
+                publisher.publish(Path(header=header, poses=list(history.points)))
+                history.changed = False
+        poses = (self.paths.gt.current, self.paths.estimate.current)
+        if poses != self.last_arrows:
+            self.markers.publish(MarkerArray(markers=[
+                arrow('Gazebo GT', poses[0], .8, .18, .10, (.24, .69, 1.)),
+                arrow('Localization', poses[1], .55, .12, .25, (1., .55, .12)),
+            ]))
+            self.last_arrows = poses
+
+
+def main():
+    rclpy.init()
+    try:
+        node = ClosedLoopViewer()
+        try:
+            rclpy.spin(node)
+        except (KeyboardInterrupt, ExternalShutdownException):
+            pass
+        finally:
+            node.destroy_node()
+    finally:
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()

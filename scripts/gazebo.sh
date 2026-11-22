@@ -26,6 +26,7 @@ usage() {
   --line 種類         closed-loop の raceline / centerline / custom（省略で保存済みラインから選択）
   --engine-dir 相対パス  closed-loop の VGL engine を明示する場合の results からの相対パス
   --min-lookahead m   closed-loop の Pure Pursuit 最短先読み距離を指定
+  --rviz / --no-rviz  closed-loop の走行ライン・GT・推定軌跡を RViz で表示するか選択（既定 OFF）
   --laps N            全周を N 周走行（正の整数）。run では動画が対象。serve は指定周回で終了
   --duration 秒       video・bag・map は1周の走行時間（--speed と排他）
                       benchmark・diagnose は実時間の計測時間（--speed と併用可）
@@ -69,6 +70,7 @@ map_id=
 line=
 engine_dir=
 min_lookahead=
+rviz=false
 if [[ "$action" = closed-loop ]]; then resolution=; camera_hz=30; fi
 sim_args=()
 while (( $# )); do
@@ -90,6 +92,10 @@ while (( $# )); do
                 --min-lookahead) min_lookahead="$2" ;;
             esac
             shift 2 ;;
+        --rviz|--no-rviz)
+            [[ "$action" = closed-loop ]] || fail "$1 は closed-loop で指定してください"
+            if [[ "$1" = --rviz ]]; then rviz=true; else rviz=false; fi
+            shift ;;
         --laps)
             case "$action" in run|video|bag|map|closed-loop|serve) ;; *) fail "--laps は走行周回のある操作で指定してください" ;; esac
             [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || fail "--laps は1以上の整数で指定してください"
@@ -281,6 +287,7 @@ run_mode() {
             --profile "$profile" --container "$map_container")
         if [[ "$mode" = closed-loop ]]; then
             job+=(--map "$map_id" --line "$line" --speed "$speed")
+            if $rviz; then job+=(--rviz); fi
             if [[ -n "$engine_dir" ]]; then job+=(--engine-dir "$engine_dir"); fi
             if [[ -n "$min_lookahead" ]]; then job+=(--min-lookahead "$min_lookahead"); fi
             printf '地図 %s / %s　速度上限 %s m/s　%s 周　ステレオ %s @ %s Hz\n' "$map_id" "$line" "$speed" "$laps" "$resolution" "$camera_hz"

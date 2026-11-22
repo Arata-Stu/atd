@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import runpy
 import sys
@@ -72,7 +73,9 @@ class CompositionTests(unittest.TestCase):
         route = dict(points=points, profile=[[i, x, y, 0., 0., 1., 0.] for i, (x, y) in enumerate(points)])
         hdmap = dict(frame='map', closed=True, lines=dict(raceline=route, centerline=route))
         with fake_launch(), patch('atd_localization.assets.map_metadata', return_value=metadata), \
-                patch('atd_localization.assets.verified_hdmap', return_value=json.dumps(hdmap)):
+                patch('atd_localization.assets.verified_hdmap', return_value=json.dumps(hdmap)), \
+                patch('ament_index_python.packages.get_package_share_directory',
+                      side_effect=lambda name: str(path.parents[1]) if name == 'atd_bringup' else '/share/' + name):
             module = runpy.run_path(str(path))
             entities = module['generate_launch_description']().entities
             context = {e.args[0]: e.default_value for e in entities if hasattr(e, 'default_value')}
@@ -92,6 +95,26 @@ class CompositionTests(unittest.TestCase):
                 self.assertEqual(module['setup'](dict(context, **options))[-1].parameters[0]['min_lookahead_m'], expected)
             with self.assertRaisesRegex(ValueError, 'custom'):
                 module['setup'](dict(context, line='custom'))
+            with patch.dict(os.environ, DISPLAY='', WAYLAND_DISPLAY=''):
+                with self.assertRaisesRegex(ValueError, '画面出力先'):
+                    module['setup'](dict(context, rviz='true'))
+            with patch.dict(os.environ, DISPLAY=':0'):
+                *_, paths, viewer = module['setup'](dict(context, rviz='true'))
+            self.assertEqual((paths.executable, viewer.executable), ('gazebo_closed_loop_paths', 'rviz2'))
+            params, = paths.parameters
+            self.assertEqual([params[k].args[0] for k in ('results_root', 'map_id', 'line')],
+                             ['/data/results', 'odaiba', 'raceline'])
+            self.assertTrue(params['use_sim_time'] and viewer.parameters[0]['use_sim_time'])
+            import yaml
+            manager = yaml.safe_load(Path(viewer.arguments[1]).read_text())['Visualization Manager']
+            self.assertEqual(manager['Global Options']['Fixed Frame'], 'map')
+            view = manager['Views']['Current']
+            self.assertEqual((view['X'], view['Y']), (.5, .5))
+            topics = {d['Topic']['Value']: d['Topic'] for d in manager['Displays'] if 'Topic' in d}
+            self.assertEqual(set(topics), {'/atd/gazebo/' + name for name in
+                             ('reference_path', 'ground_truth_path', 'estimated_path', 'current_poses')})
+            for topic in topics.values():
+                self.assertEqual((topic['Reliability Policy'], topic['Durability Policy']), ('Reliable', 'Transient Local'))
 
     def test_gazebo_profile_runs_only_stereo_vo_with_the_simulation_clock(self):
         path = Path(__file__).resolve().parents[1] / 'launch/gazebo.launch.py'

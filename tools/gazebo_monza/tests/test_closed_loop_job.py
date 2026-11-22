@@ -6,8 +6,10 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
@@ -35,10 +37,19 @@ class ClosedLoopJobTests(unittest.TestCase):
             self.assertNotIn('--speed', gazebo)
             self.assertIn('max_speed_mps:=1.25', stack)
             self.assertIn('line:=centerline', stack)
+            self.assertIn('rviz:=false', stack)
             self.assertIn('map_id:=odaiba_1p5', stack)
             self.assertIn('gazebo_closed_loop.launch.py', stack)
             self.assertNotIn('autonomous.launch.py', stack)
             self.assertIn('--ipc=host', gazebo)
+            for option, setting in [('--rviz', 'true'), ('--no-rviz', 'false')]:
+                with self.subTest(option=option):
+                    preview = subprocess.check_output([*cmd, option], env=env, text=True)
+                    gazebo, stack = [shlex.split(s) for s in preview.splitlines() if s.startswith('docker ')]
+                    self.assertIn(f'rviz:={setting}', stack)
+                    self.assertNotIn(option, gazebo)
+                    self.assertNotEqual(subprocess.run([*cmd[:2], 'bag', '--dry-run', option],
+                                                       env=env, capture_output=True).returncode, 0)
             for extra in [('--resolution', '640x480'), ('--duration', '5'), ('--line', 'custom'),
                           ('--map', '../bad'), ('--engine-dir', '../../bad'), ('--speed', '5')]:
                 with self.subTest(extra=extra):
@@ -46,7 +57,7 @@ class ClosedLoopJobTests(unittest.TestCase):
             self.assertFalse((root / 'runs').exists())
 
     def test_result_or_early_exit_cancels_both_children(self):
-        for outcome in ('completed', 'off_course', 'early'):
+        for outcome in ('completed', 'off_course', 'early', 'interrupted'):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as tmp:
                 out = Path(tmp)
                 prelude = """
@@ -63,22 +74,50 @@ def wait(name):
 assert not any(p.iterdir())
 (p/'gazebo.ready').touch()
 wait('test.started')
-if sys.argv[2] != 'early':
+if sys.argv[2] in ('completed', 'off_course'):
     (p/'closed_loop.result.json').write_text(json.dumps({'status': sys.argv[2]}))
 wait('closed_loop.cancel')
+if sys.argv[2] in ('early', 'interrupted'):
+    sys.path.insert(0, sys.argv[3])
+    from closed_loop_trial import run_trial
+    report = {'imu_hz': 0}
+    def start(children, stereo, course, check_stop, imu_hz):
+        check_stop()
+    run_trial({}, p, {'course': 'odaiba', 'trajectory': {'laps': 2}}, report, start, None, None)
 (p/'test.sim.exited').touch()
 """
                 ros = prelude + """
 assert (p/'gazebo.ready').exists()
 (p/'test.started').touch()
-if sys.argv[2] != 'early': wait('closed_loop.cancel')
+if sys.argv[2] == 'early':
+    print('[ERROR] [launch]: 候補が複数あります')
+    print('[INFO] launch stopped')
+else:
+    wait('closed_loop.cancel')
 (p/'test.ros.exited').touch()
+sys.exit(1 if sys.argv[2] == 'early' else 0)
 """
                 args = SimpleNamespace(output=out, container='fixture')
-                processes = [[sys.executable, '-c', code, tmp, outcome] for code in (sim, ros)]
+                processes = [[sys.executable, '-c', code, tmp, outcome, str(TOOLS)] for code in (sim, ros)]
                 if outcome == 'early':
-                    with self.assertRaisesRegex(RuntimeError, '終了'):
+                    with self.assertRaisesRegex(RuntimeError, '候補が複数'):
                         job.supervise(args, *processes)
+                    result = json.loads((out / 'closed_loop.result.json').read_text())
+                    self.assertEqual(result['status'], 'error')
+                    self.assertIn('Isaac ROS=1', result['reason'])
+                    self.assertIn('候補が複数', result['reason'])
+                elif outcome == 'interrupted':
+                    def interrupt_after_start(delay):
+                        if (out / 'test.started').is_file():
+                            raise KeyboardInterrupt
+                        time.sleep(delay)
+
+                    clock = SimpleNamespace(monotonic=time.monotonic, sleep=interrupt_after_start)
+                    with patch.object(job, 'time', clock), self.assertRaises(KeyboardInterrupt):
+                        job.supervise(args, *processes)
+                    result = json.loads((out / 'closed_loop.result.json').read_text())
+                    self.assertEqual(result['status'], 'cancelled')
+                    self.assertIn('ユーザー', result['reason'])
                 else:
                     self.assertEqual(job.supervise(args, *processes), 0 if outcome == 'completed' else 1)
                 self.assertTrue((out / 'test.sim.exited').is_file())

@@ -69,20 +69,24 @@ def run_trial(children, out, scene, report, start_stream, wait_for, check_childr
     trace = out / "scene/rig_motion.jsonl"
     result = None
 
-    def check_cancelled():
+    def check_stop():
         if cancel.is_file():
-            raise InterruptedError(cancel.read_text().strip() or "閉ループ走行の中断が要求されました")
+            message = cancel.read_text().strip()
+            kind, _, reason = message.partition("\n")
+            if kind == "error":
+                raise RuntimeError(reason)
+            raise InterruptedError(message or "閉ループ走行の中断が要求されました")
 
     try:
-        start_stream(children, False, scene["course"], check_cancelled, imu_hz=report["imu_hz"])
+        start_stream(children, False, scene["course"], check_stop, imu_hz=report["imu_hz"])
         wait_for(lambda: trace.is_file() and trace.stat().st_size > 0, children, 45,
-                 "指令走行プラグインの初期静止姿勢", check_cancelled)
+                 "指令走行プラグインの初期静止姿勢", check_stop)
         (out / "gazebo.ready").touch(exist_ok=False)
         print("計時線で停止中。保存地図での追跡と最初の有効な制御指令を待っています。", flush=True)
         with trace.open() as stream:
             last_sample_wall = time.monotonic()
             while result is None:
-                check_cancelled()
+                check_stop()
                 check_children(children)
                 for row in read_samples(stream):
                     last_sample_wall = time.monotonic()

@@ -162,8 +162,14 @@ def _resolve_engine(root, profile, selected, hardware):
     if not matches:
         raise ValueError('この GPU・TensorRT・地図に対応する engine がありません。対象機で VGL engine を準備してください')
     if len(matches) > 1:
-        choices = ', '.join(str(path.relative_to(root)) for path, _ in matches)
-        raise ValueError('候補が複数あります。engine_dir で build を選択してください: ' + choices)
+        # The map records its Notebook build. Compare only with compatible local builds
+        # so a transferred map can still use the Jetson's own engine.
+        recorded = profile.get('runtime_model_dir')
+        preferred = [match for match in matches if match[0].relative_to(root).as_posix() == recorded]
+        if not preferred:
+            choices = ', '.join(str(path.relative_to(root)) for path, _ in matches)
+            raise ValueError('候補が複数あります。engine_dir で build を選択してください: ' + choices)
+        matches = preferred
     runtime, report = matches[0]
     engine_folder = _path(runtime, 'aliked_lightglue')
     onnx = require_file(_path(engine_folder, 'aliked.onnx'))

@@ -15,7 +15,7 @@ import world
 import lap_bag
 from monza_motion import interpolate, travel_fraction
 from sensor_profile import (ACCEL_FRAME, ACCEL_TOPIC, CAMERA_RATES, DEFAULT_CAMERA_HZ,
-                            GYRO_FRAME, GYRO_TOPIC, IMU_MODES, IMU_TOPIC, RESOLUTIONS)
+                            GYRO_FRAME, GYRO_TOPIC, IMU_MODES, IMU_TOPIC, REAR_AXLE_HEIGHT_M, RESOLUTIONS)
 
 HERE = Path(__file__).resolve().parent
 
@@ -140,9 +140,8 @@ def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=Non
 
 def transforms(camera, imu_hz=0):
     # シミュレーション用後軸中心の仮定値。床基準のレンズ高から差し引く。
-    axle_height = .0325
     yield ("base_link", "camera_link", camera["midpoint_forward_from_rear_axle_m"], 0,
-           camera["height_above_floor_m"] - axle_height, 0, math.radians(camera["pitch_down_deg"]), 0)
+           camera["height_above_floor_m"] - REAR_AXLE_HEIGHT_M, 0, math.radians(camera["pitch_down_deg"]), 0)
     for side, sign in (("left", 1), ("right", -1)):
         yield ("camera_link", camera["optical_frames"][side], 0, sign * camera["baseline_m"] / 2,
                0, -math.pi / 2, 0, -math.pi / 2)
@@ -368,7 +367,7 @@ def run(args, report):
     config.write_text(json.dumps(bridge_topics(args.circuit, imu_hz), indent=2) + "\n")
     report.update(ros_domain_id=os.environ.get("ROS_DOMAIN_ID", "0"),
                   dds_profile=os.environ.get("FASTDDS_DEFAULT_PROFILES_FILE"), scene="scene/scene.json",
-                  simulated_rear_axle_height_m=.0325)
+                  simulated_rear_axle_height_m=REAR_AXLE_HEIGHT_M)
     if shutil.which("nvidia-smi"):
         info = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version,memory.total",
                                "--format=csv,noheader"], capture_output=True, text=True, timeout=10)

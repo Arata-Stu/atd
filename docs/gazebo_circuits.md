@@ -88,6 +88,18 @@ atd build --packages-up-to atd_bringup
 atd gazebo closed-loop --course odaiba --map odaiba_1p5 --line centerline --speed 1.5 --laps 2
 ```
 
+同じモデルの VGL engine が複数ある場合、現在の GPU・TensorRT に適合すれば、地図の `vgl.json` の `runtime_model_dir` に記録された build を使う。別の適合する build で比較するときは、`--engine-dir` に結果ディレクトリからの相対パスを渡す。
+
+走行中に RViz で追従を確認するには、Notebook のデスクトップ端末で `atd dev` を起動しておく。地図 ID が `gazebo` の場合は、別のホスト端末で次を実行する。
+
+```bash
+atd gazebo closed-loop --course odaiba --map gazebo --line raceline --speed 1.5 --laps 2 --rviz
+```
+
+上面図の緑が選択した走行ライン、青が Gazebo の後輪軸中心の GT、オレンジが保存地図上の自己位置推定。緑と青を見比べると、模擬車両がラインを外れた区間を追える。GT は最初の有効な推定姿勢と同じ観測時刻で一度だけ地図に合わせるため、青とオレンジで比較できるのは初期位置合わせ後のずれになる。
+
+矢印は GT と推定それぞれの最新の位置と向きを表す。更新時刻が異なる場合、その時間差も矢印の間隔に含まれる。追跡を失うと推定矢印が消える。RViz は試行終了時に閉じる。画面なしで評価するときは `--rviz` を省略する。
+
 同じ計時線から Raceline を試すときは `--line raceline` に切り替える。シミュレーションでの Pure Pursuit の最短先読み距離は Centerline・Customline が0.35 m、Raceline が0.65 m。同梱のお台場の Raceline は計時線中央から約0.49 mずれており、停止時にも先読み円とラインが交わるようにした。編集したラインに合わせて `--min-lookahead` で上書きできる。
 
 車両は保存地図上で追跡が成立し、有効な計画・制御指令を受けると発進する。走行中の追跡喪失や指令途絶ではスロットルをゼロにして減速する。車両は前進用の運動学的自転車モデルで、既定のスロットル FF 表と操舵・速度応答はシミュレーション用の設定値。

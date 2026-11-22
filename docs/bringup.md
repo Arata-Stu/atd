@@ -108,7 +108,7 @@ TTY で D455 profile を選び、launch引数を付けなかった場合に設�
    ./scripts/bringup.sh localization
    ```
 
-   地図を直接指定する場合は `./scripts/bringup.sh localization map_id:=course_a`。対応する engine が複数あるときは、表示された候補を `engine_dir:=models/vgl/<asset>/engines/<target>/<build>` で選ぶ。左右 IR を有効にした保存済み D455 設定が使われる。運転にはプロポ・Pico の手動モードを使う。
+   地図を直接指定する場合は `./scripts/bringup.sh localization map_id:=course_a`。現在の GPU に適合する engine が複数あるときは、地図に記録された build を優先する。選択を求められたときは、表示された候補を `engine_dir:=models/vgl/<asset>/engines/<target>/<build>` で指定する。左右 IR を有効にした保存済み D455 設定が使われる。運転にはプロポ・Pico の手動モードを使う。
 5. Notebook Docker で `atd-web` を起動し、「データ転送」の SSH 接続先を確認して [ライブ画面](http://127.0.0.1:8766/#live)を開く。「Jetson の地図を表示」で基準ラインと実走軌跡、車両の向きを重ねて確認できる。車速は VO の車体前後速度 [m/s] で、後退は負。初期位置待ち・地図照合中・追跡中・追跡喪失・更新途絶を区別する。同じ ID でも cuVSLAM 地図や HDMap の版が異なる場合は重畳を保留する。再照合を確認できない場合は、プロポで停車し、この profile を起動し直して初期位置を確認する。
 
 同じ `localization` 起動で `atd_planning` が後輪軸中心の姿勢を選んだラインへ投影する。プロポを手動側にして走行し、ライブ画面でライン上の前方軌道、横ずれ [m]、目標速度と推定速度 [m/s] を確認する。動かすのはプロポと Pico で、planner が配信するのは観測用の `/planning/status`。対話起動では地図の選択後、生成・保存済みの候補からラインを選べる。地図 ID を直接指定した場合の既定は Raceline。選んだラインが未生成なら前方軌道は無効になり、理由が表示される。

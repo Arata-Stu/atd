@@ -12,13 +12,90 @@ import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from closed_loop_motion import ClosedLoopMotion, CommandPlant, JOINTS
+from closed_loop_eval import CourseEvaluation
 from closed_loop_trial import Trial, read_samples, run_trial
+from circuits import load_lap
 from sensor_profile import REAR_AXLE_HEIGHT_M
 import run
 import world
 
 
 class CommandMotionTests(unittest.TestCase):
+    def test_hold_freezes_pose_and_requires_new_drive_observation(self):
+        plant = CommandPlant((2., -1., .3), .3)
+        now = 10**9
+        plant.receive(now, now, JOINTS, (.15, .5, 1.))
+        plant.advance(now, .1)
+        v = plant.vehicle
+        pose = (v.x, v.y, v.yaw)
+        self.assertGreater(v.speed, 0.)
+        self.assertGreater(v.steering, 0.)
+        hold = now + 10**7
+        received = hold + 10**7
+        plant.receive(received, hold, JOINTS, (0., 0., 2.))
+        # An in-flight plan even newer than the hold send time may precede its receipt.
+        plant.receive(received + 1, received, JOINTS, (.15, .5, 1.))
+        plant.advance(received + 10**9, 1.)
+        self.assertEqual((v.x, v.y, v.yaw), pose)
+        self.assertEqual((v.speed, v.steering, v.steering_setpoint, v.throttle_setpoint), (0., 0., 0., 0.))
+        self.assertEqual(plant.state, "held")
+        resume = received + 2 * 10**9
+        plant.receive(resume, resume, JOINTS, (.1, .4, 1.))
+        plant.receive(resume + 1, resume - 1, JOINTS, (0., 0., 2.))
+        plant.advance(resume + 1, .1)
+        self.assertEqual(plant.state, "driving")
+        self.assertGreater(v.speed, 0.)
+        self.assertEqual(plant.first_active_ns, now)
+
+    def test_hold_before_first_drive_filters_queued_disable_and_faults_stay_terminal(self):
+        for fault in (False, True):
+            with self.subTest(fault=fault):
+                plant = CommandPlant((0., 0., 0.), .3)
+                for stamp in (100, 100, 110):
+                    plant.receive(stamp, stamp, JOINTS, (0., 0., 2.))
+                plant.receive(111, 99, JOINTS, (0., 0., 0.))
+                self.assertEqual(plant.state, "held")
+                self.assertIsNone(plant.first_active_ns)
+                if fault:
+                    plant.receive(112, 112, JOINTS, (0., 0., 0.))
+                    plant.receive(113, 113, JOINTS, (0., 0., 2.))
+                plant.receive(114, 114, JOINTS, (0., .4, 1.))
+                self.assertEqual(plant.state, "stopped" if fault else "driving")
+                self.assertEqual(plant.first_active_ns, None if fault else 114)
+
+    def test_explicit_hold_exempts_stall_watchdogs_but_preserves_course_scoring(self):
+        boundaries, route, _ = load_lap("odaiba")
+        _, x, y, yaw = route[0]
+        def sample(trial, t, actuator, controller, y_m=y):
+            return trial.sample(dict(sim_time_s=t, first_active_ns=10**9, x_m=x, y_m=y_m,
+                                     yaw_rad=yaw, actuator_state=actuator, control_state={"state": controller}))
+        for boundary in (False, True):
+            with self.subTest(boundary=boundary):
+                evaluator = CourseEvaluation(boundaries, route, 1)
+                trial = Trial(evaluator)
+                self.assertIsNone(sample(trial, 1., "driving", "driving"))
+                self.assertIsNone(sample(trial, 2., "held", "paused"))
+                self.assertIsNone(sample(trial, 1002., "held", "paused"))
+                self.assertEqual((evaluator.start, evaluator.previous[0], evaluator.distance), (1., 1002., 0.))
+                if boundary:
+                    self.assertEqual(sample(trial, 1003., "held", "paused", y + 4.)["status"], "off_course")
+                else:
+                    self.assertIsNone(sample(trial, 1003., "held", "waiting_observation"))
+                    self.assertEqual(sample(trial, 1033., "held", "waiting_observation")["status"], "no_progress")
+
+    def test_startup_pause_follows_operator_request_until_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = ClosedLoopMotion()
+            plugin.control_state = None
+            plugin.plant = CommandPlant((0., 0., 0.), .3)
+            plugin.prestart_pause_file = Path(tmp) / "closed_loop.paused"
+            for state, marked in (("waiting", False), ("paused", True), ("paused", True), ("waiting_observation", False)):
+                plugin.on_control_state(SimpleNamespace(data=json.dumps({"state": state})))
+                self.assertEqual(plugin.prestart_pause_file.exists(), marked)
+            plugin.plant.receive(100, 100, JOINTS, (0., .2, 1.))
+            plugin.on_control_state(SimpleNamespace(data=json.dumps({"state": "paused"})))
+            self.assertFalse(plugin.prestart_pause_file.exists())
+
     def test_no_motion_without_fresh_input_then_turn_and_expire(self):
         plant = CommandPlant((2., -1., math.pi / 2), .3)
         start = 10**9
@@ -128,6 +205,8 @@ class CommandMotionTests(unittest.TestCase):
                                "yaw.return_value": math.pi / 2})
             plugin.link = Mock(**{"world_pose.return_value": observed})
             plugin.ground_truth = Mock(**{"get_subscription_count.return_value": 1})
+            plugin.hold_status = Mock(**{"get_subscription_count.return_value": 1})
+            plugin.hold_message = SimpleNamespace(data="")
             plugin.gt_pose = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()),
                                              pose=SimpleNamespace(position=SimpleNamespace(),
                                                                   orientation=SimpleNamespace()))
@@ -140,6 +219,8 @@ class CommandMotionTests(unittest.TestCase):
             sample = json.loads(plugin.trace.read_text())
             self.assertEqual((sample["command_stamp_ns"], sample["command_applied_ns"]), (20_000_000, 30_000_000))
             self.assertEqual(stamp.sec * 10**9 + stamp.nanosec, round(sample["sim_time_s"] * 1e9))
+            self.assertEqual(json.loads(plugin.hold_message.data),
+                             dict(held=False, stamp_ns=33_333_000, speed_mps=0.))
             self.assertEqual((pose.position.x, pose.position.y, pose.position.z), (3., -2., REAR_AXLE_HEIGHT_M))
             self.assertAlmostEqual(2 * math.atan2(pose.orientation.z, pose.orientation.w), sample["yaw_rad"])
             # The closed-loop IMU needs every measured pose between the 20 Hz GT samples.
@@ -148,6 +229,11 @@ class CommandMotionTests(unittest.TestCase):
             plugin.post_update(info, None)
             plugin.imu.update.assert_called_once_with(40_000_000, observed)
             plugin.ground_truth.publish.assert_called_once()
+            plugin.plant.receive(45_000_000, 45_000_000, JOINTS, (0., 0., 2.))
+            info.sim_time.total_seconds.return_value = .053
+            plugin.post_update(info, None)
+            self.assertEqual(json.loads(plugin.hold_message.data), dict(held=True, stamp_ns=53_000_000, speed_mps=0.))
+            self.assertEqual(plugin.hold_status.publish.call_count, 2)
 
     def test_partial_trace_line_waits_and_tracked_stop_exports_reason(self):
         stream = io.StringIO('{"a":1}\n{"b":')

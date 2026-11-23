@@ -24,11 +24,13 @@ class CommandPlant:
         self.first_active_ns = None
         self.command_stamp_ns = None
         self.command_applied_ns = None
+        self.hold_stamp_ns = None
+        self.hold_applied_ns = None
 
     def stop(self, reason, *, before_start=False, wait_for_command=False):
         self.vehicle.steering_setpoint = 0.
         self.vehicle.throttle_setpoint = 0.
-        if self.state in ("driving", "waiting_observation") or (before_start and self.state == "waiting"):
+        if self.state in ("driving", "waiting_observation", "held") or (before_start and self.state == "waiting"):
             self.state = "waiting_observation" if wait_for_command else "stopped"
             self.reason = reason
 
@@ -40,13 +42,29 @@ class CommandPlant:
             return
         steering, throttle, enabled = values
         if enabled == 0.:
+            if self.hold_stamp_ns is not None and stamp_ns < self.hold_stamp_ns:
+                # A pre-launch disable queued before an operator hold is obsolete.
+                return
             self.stop("controller_disabled")
+            return
+        if enabled == 2. and steering == throttle == 0.:
+            if (not 0 <= stamp_ns <= now_ns or now_ns - stamp_ns > self.timeout_ns
+                    or self.command_stamp_ns is not None and stamp_ns < self.command_stamp_ns
+                    or self.hold_stamp_ns is not None and stamp_ns <= self.hold_stamp_ns):
+                return
+            # This is a simulator position hold. Continue publishing the same pose
+            # at new sensor timestamps, without integrating a coast-down.
+            self.vehicle.speed = self.vehicle.steering = 0.
+            self.vehicle.steering_setpoint = self.vehicle.throttle_setpoint = 0.
+            self.hold_stamp_ns, self.hold_applied_ns = stamp_ns, now_ns
+            self.state, self.reason = "held", "operator_paused"
             return
         if (enabled != 1. or abs(steering) > STEERING_LIMIT + 1e-7 or not 0. <= throttle <= 1.
                 or stamp_ns <= 0 or stamp_ns > now_ns):
             self.stop("invalid_or_stale_command")
             return
         if (now_ns - stamp_ns > self.timeout_ns
+                or self.hold_applied_ns is not None and stamp_ns <= self.hold_applied_ns
                 or self.command_stamp_ns is not None and stamp_ns <= self.command_stamp_ns):
             return
         if self.first_active_ns is None:
@@ -94,10 +112,13 @@ class ClosedLoopMotion:
                                       QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.ground_truth = self.node.create_publisher(PoseStamped, "/atd/gazebo/ground_truth_pose",
                                                        qos_profile_sensor_data)
+        self.hold_status = self.node.create_publisher(String, "/atd/gazebo/vehicle_hold", 1)
+        self.hold_message = String()
         self.gt_pose = PoseStamped()
         self.gt_pose.header.frame_id = "gazebo_world"
         self.control_state = None
         self.active_file = scene_file.with_name("closed_loop.active")
+        self.prestart_pause_file = scene_file.with_name("closed_loop.paused")
         self.trace = scene_file.with_name("rig_motion.jsonl")
         self.trace.write_text("")
         self.next_trace_s = 0.
@@ -124,6 +145,11 @@ class ClosedLoopMotion:
         except ValueError:
             return
         if isinstance(report, dict):
+            previous_state = (self.control_state or {}).get("state")
+            if report.get("state") == "paused" and previous_state != "paused" and self.plant.first_active_ns is None:
+                self.prestart_pause_file.touch()
+            elif report.get("state") != "paused" and previous_state == "paused":
+                self.prestart_pause_file.unlink(missing_ok=True)
             self.control_state = report
 
     def pre_update(self, info, ecm):
@@ -165,6 +191,10 @@ class ClosedLoopMotion:
             msg.pose.orientation.w = math.cos(pose.yaw() * .5)
             self.ground_truth.publish(msg)
         plant, v = self.plant, self.plant.vehicle
+        if self.hold_status.get_subscription_count():
+            self.hold_message.data = json.dumps(dict(held=plant.state == "held" and v.speed == 0.,
+                                                     stamp_ns=round(seconds * 1e9), speed_mps=v.speed), allow_nan=False)
+            self.hold_status.publish(self.hold_message)
         sample = dict(sim_time_s=seconds, x_m=pose.x(), y_m=pose.y(), yaw_rad=pose.yaw(),
                       speed_mps=v.speed, steering_rad=v.steering, throttle=v.throttle_setpoint,
                       requested_steering_rad=v.steering_setpoint, command_stamp_ns=plant.command_stamp_ns,

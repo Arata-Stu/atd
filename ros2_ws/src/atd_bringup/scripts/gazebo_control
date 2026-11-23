@@ -42,6 +42,9 @@ class GazeboControlNode(Node):
         pid = {k: self.declare_parameter('speed_' + k, v).value for k, v in asdict(PIDConfig()).items()}
         self.controller = GazeboController(route, line, speed, table, full_throttle_speed_mps=full_speed,
                                           lookahead=LookaheadConfig(**lookahead), pid=PIDConfig(**pid), available_lines=lines)
+        paused = self.declare_parameter('operator_paused', False, ParameterDescriptor(
+            description='調整中は模擬車両の位置を保持する')).value
+        self.controller.apply_tuning({'operator_paused': paused}, self.get_clock().now().nanoseconds)
         self.actuators = self.create_publisher(JointState, '/atd/gazebo/actuators', 1)
         status_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.status = self.create_publisher(String, '/atd/gazebo/control_state', status_qos)
@@ -70,12 +73,14 @@ class GazeboControlNode(Node):
         updates = {p.name: p.value for p in params}
         now = self.get_clock().now().nanoseconds
         previous_line = self.controller.line
+        previously_paused = self.controller.operator_paused
         # Two settings can be accepted on the same /clock tick while simulation is paused.
         switch_stamp = max(now, self.selection_stamp + 1)
         if self.controller.apply_tuning(updates, switch_stamp):
             if self.controller.line != previous_line:
                 self.selection_stamp = switch_stamp
                 self.publish_selection(switch_stamp)
+            if self.controller.line != previous_line or self.controller.operator_paused != previously_paused:
                 self.last_status = None
                 self.publish(now, None)
             self.get_logger().info(f'Gazebo 制御設定を適用 sim_time_ns={now} '
@@ -100,19 +105,22 @@ class GazeboControlNode(Node):
 
     def publish(self, now, drive):
         controller = self.controller
-        # During an observation gap the Gazebo plant expires the previous command
-        # to neutral. An explicit disable after launch is a latched fault.
-        if drive is not None or controller.state in ('waiting', 'stopped'):
+        status = (controller.state, controller.reason)
+        interval_ns = 100_000_000 if controller.state == 'paused' or controller.resume_stamp is not None else 1_000_000_000
+        heartbeat = controller.state != 'driving' and now - self.last_report_ns >= interval_ns
+        report_due = status != self.last_status or drive is not None or heartbeat
+        command = controller.actuator_command(now, drive)
+        # HOLD is latched by the plant. Repeat it at the status heartbeat instead
+        # of sending it again for every localization and planning callback.
+        if command is not None and (controller.state != 'paused' or report_due):
             message = JointState()
-            ns, steer, throttle = (now, 0., 0.) if drive is None else drive
+            ns, steer, throttle, mode = command
             message.header.stamp.sec, message.header.stamp.nanosec = divmod(ns, 1_000_000_000)
             message.header.frame_id = 'base_link'
             message.name = ['steering', 'throttle', 'enable']
-            message.position = [steer, throttle, float(drive is not None)]
+            message.position = [steer, throttle, mode]
             self.actuators.publish(message)
-        status = (controller.state, controller.reason)
-        heartbeat = controller.state != 'driving' and now - self.last_report_ns >= 1_000_000_000
-        if status != self.last_status or drive is not None or heartbeat:
+        if report_due:
             self.last_report_ns = now
             if status != self.last_status:
                 self.last_status = status

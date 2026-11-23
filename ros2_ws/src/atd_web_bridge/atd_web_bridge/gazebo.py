@@ -27,8 +27,18 @@ def ground_truth_sample(data, stream_id, gid):
     return dict(sample, footprint={k: dims[k] for k in keys}, publisher_gid=gid)
 
 
-def live_ground_truth(cache, now_s, gid):
-    sample = cache.get('gazebo_gt')
+def vehicle_hold_sample(data, gid):
+    if not gid or not isinstance(data, dict):
+        return None
+    held, stamp, speed = data.get('held'), data.get('stamp_ns'), data.get('speed_mps')
+    if (type(held) is not bool or type(stamp) is not int or not 0 <= stamp < 2**63
+            or type(speed) not in (int, float) or not 0 <= speed < math.inf or held and speed != 0.):
+        return None
+    return dict(held=held, stamp_s=stamp / 1e9, speed_mps=speed, publisher_gid=gid)
+
+
+def live_gazebo_sample(cache, key, now_s, gid):
+    sample = cache.get(key)
     if not sample or not gid or sample.pop('publisher_gid') != gid:
         return None
     sim_age = now_s - sample['stamp_s']
@@ -49,7 +59,7 @@ class GazeboDriveWindow:
     def receive(self, data, gid):
         if not isinstance(data, dict) or not gid or type(data.get('stamp_ns')) is not int or data['stamp_ns'] < 0:
             return
-        if data.get('state') not in ('waiting', 'waiting_observation', 'driving', 'stopped'):
+        if data.get('state') not in ('waiting', 'waiting_observation', 'driving', 'paused', 'stopped'):
             return
         if not all(isinstance(data.get(key), str) for key in ('line', 'map_id', 'reason')):
             return

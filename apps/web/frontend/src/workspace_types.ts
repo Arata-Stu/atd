@@ -10,7 +10,11 @@ export interface LiveStatus {
   velocity?: { linear_mps: number; angular_rps: number; frame: string; stamp: unknown; age_s?: number; stale: boolean } | null;
   localization?: Localization | null; planning?: LivePlan | null; control?: LiveControl | null; speed_control?: LiveSpeed | null;
   auto_drive?: AutoObservation | null;
-  gazebo?: {now_s: number; current: GazeboDriveSample | null; history: GazeboDriveSample[]; ground_truth?: GazeboGroundTruth | null};
+  gazebo?: {
+    now_s: number; current: GazeboDriveSample | null; history: GazeboDriveSample[];
+    ground_truth?: GazeboGroundTruth | null; pause_supported?: boolean;
+    vehicle_hold?: {held: boolean; speed_mps: number; stamp_s: number; remaining_s: number} | null;
+  };
   topics?: unknown[]; parameter_nodes?: string[]; availability?: unknown;
 }
 
@@ -21,7 +25,7 @@ export interface GazeboGroundTruth {
 }
 
 export interface GazeboDriveSample {
-  stamp_s: number; state: 'waiting' | 'waiting_observation' | 'driving' | 'stopped';
+  stamp_s: number; state: 'waiting' | 'waiting_observation' | 'driving' | 'paused' | 'stopped';
   reason: string; map_id: string; line: LineKind;
   target_mps: number | null; estimated_mps: number | null;
   steering_rad: number | null; throttle: number | null;

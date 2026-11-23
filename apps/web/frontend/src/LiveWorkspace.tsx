@@ -10,6 +10,8 @@ import { controlOverlay, liveControlIssue } from './control_view';
 import { PlanningMetrics } from './PlanningMetrics';
 import { AutoDrivePanel } from './AutoDrivePanel';
 import { GazeboDrivePanel } from './GazeboDrivePanel';
+import { GazeboVehicleControls } from './GazeboVehicleControls';
+import type { GazeboOperatorStatus } from './GazeboVehicleControls';
 import { DriveTuningDialog } from './DriveTuningDialog';
 import { tuningNodes } from './drive_tuning';
 import type { TuningTarget } from './drive_tuning';
@@ -51,13 +53,16 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
   const [view, setView] = useState<'monitor' | 'details'>('monitor');
   const details = !capture && view === 'details';
   const [status, setStatus] = useState<LiveStatus | null>(null), [error, setError] = useState(''), [enabled, setEnabled] = useState(true);
+  const [operatorStatus, setOperatorStatus] = useState<GazeboOperatorStatus | null>(null);
   const [requestTiming, setRequestTiming] = useState<{startedAt: number; receivedAtMs: number; roundTripMs: number} | null>(null);
   const [maps, setMaps] = useState<MapDocument[]>([]), [mapId, setMapId] = useState(''), [reference, setReference] = useState<MapReference | null>(null), [cloud, setCloud] = useState<Cloud | null>(null);
   const [samples, setSamples] = useState<Sample[]>([]), [node, setNode] = useState(''), [parameters, setParameters] = useState<Parameter[]>([]), [drafts, setDrafts] = useState<Record<string, string>>({}), [busy, setBusy] = useState(false);
   const [parameterInstance, setParameterInstance] = useState('');
   const [tuningInstance, setTuningInstance] = useState('');
-  const hasDriveNode = status?.identity?.environment === target && !!status.parameter_nodes?.includes(tuningNodes[target]);
-  const liveInstance = enabled && status?.connected && hasDriveNode ? status.identity?.instance_id : '';
+  const hasDriveNode = gazebo ? !!operatorStatus :
+    status?.identity?.environment === target && !!status.parameter_nodes?.includes(tuningNodes[target]);
+  const liveInstance = gazebo ? operatorStatus?.instance :
+    enabled && status?.connected && hasDriveNode ? status.identity?.instance_id : '';
   const [angularSamples, setAngularSamples] = useState<Sample[]>([]), [plotMetric, setPlotMetric] = useState<'linear' | 'angular'>('linear');
   const [expired, setExpired] = useState(false), [planExpired, setPlanExpired] = useState(false);
   const [controlExpired, setControlExpired] = useState(false), [speedExpired, setSpeedExpired] = useState(false);
@@ -80,7 +85,7 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
     return () => { cancelled = true; };
   }, [notify, details]);
   useEffect(() => {
-    if (!enabled) return; let cancelled = false; let timer: ReturnType<typeof setTimeout>, expiry: ReturnType<typeof setTimeout>, planExpiry: ReturnType<typeof setTimeout> | undefined, controlExpiry: ReturnType<typeof setTimeout> | undefined, speedExpiry: ReturnType<typeof setTimeout> | undefined;
+    if (!enabled && !gazebo) return; let cancelled = false; let timer: ReturnType<typeof setTimeout>, expiry: ReturnType<typeof setTimeout>, planExpiry: ReturnType<typeof setTimeout> | undefined, controlExpiry: ReturnType<typeof setTimeout> | undefined, speedExpiry: ReturnType<typeof setTimeout> | undefined;
     let gtExpiry: ReturnType<typeof setTimeout> | undefined;
     async function poll() {
       let delay = 750;
@@ -89,6 +94,16 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
         const value = await api<LiveStatus>('live/status?target=' + target);
         if (cancelled) return;
         const elapsed = performance.now() - start;
+        if (gazebo) {
+          const instance = value.connected && value.identity?.environment === 'gazebo' &&
+            value.parameter_nodes?.includes(tuningNodes.gazebo) && value.identity.instance_id;
+          setOperatorStatus(instance ? {instance, data: value.gazebo, pollStart: start} : null);
+          if (!enabled) {
+            // Keep vehicle commands and their acknowledgement live while plots are frozen.
+            timer = setTimeout(poll, 250);
+            return;
+          }
+        }
         setRequestTiming({startedAt: start, receivedAtMs: Date.now(), roundTripMs: elapsed});
         setStatus(value); setError('');
         if (value.gazebo || value.auto_drive?.publishers === 1) delay = 100;
@@ -128,11 +143,16 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
           if (Number.isFinite(velocity.linear_mps)) setSamples(previous => [...previous.slice(-239), { time, value: velocity.linear_mps }]);
           if (Number.isFinite(velocity.angular_rps)) setAngularSamples(previous => [...previous.slice(-239), { time, value: velocity.angular_rps }]);
         }
-      } catch (e) { if (!cancelled) { setError((e as Error).message); setStatus(null); setTrail([]); poseStream.current = ''; } }
+      } catch (e) {
+        if (!cancelled) {
+          if (gazebo) setOperatorStatus(null);
+          if (enabled) { setError((e as Error).message); setStatus(null); setTrail([]); poseStream.current = ''; }
+        }
+      }
       if (!cancelled) timer = setTimeout(poll, delay);
     }
     void poll(); return () => { cancelled = true; clearTimeout(timer); clearTimeout(expiry); clearTimeout(planExpiry); clearTimeout(controlExpiry); clearTimeout(speedExpiry); clearTimeout(gtExpiry); };
-  }, [enabled, target]);
+  }, [enabled, target, gazebo]);
   useEffect(() => {
     let cancelled = false;
     setReference(null); setMapError('');
@@ -154,8 +174,9 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
   }, [selectedId, deployment, visualMap, mapReload, details]);
   function showParameters(snapshot: ParameterSnapshot) {
     setParameterInstance(snapshot.identity.instance_id);
-    setParameters(snapshot.items);
-    setDrafts(Object.fromEntries(snapshot.items.map(p => [p.name, typeof p.value === 'string' ? p.value : JSON.stringify(p.value)])));
+    const items = gazebo ? snapshot.items.filter(p => p.name !== 'operator_paused') : snapshot.items;
+    setParameters(items);
+    setDrafts(Object.fromEntries(items.map(p => [p.name, typeof p.value === 'string' ? p.value : JSON.stringify(p.value)])));
   }
   async function loadParameters() {
     if (!node) return; setBusy(true);
@@ -238,6 +259,7 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
       </select></label>
       <span className={'connection-indicator ' + (enabled && status?.connected ? 'online' : '')}><i/>
         {!enabled ? '表示を一時停止' : status?.connected ? '観測接続中' : '未接続'}</span>
+      {gazebo && <GazeboVehicleControls key={operatorStatus?.instance ?? ''} status={operatorStatus}/>}
       {!capture && hasDriveNode && <button className="button" disabled={!liveInstance} onClick={() => setTuningInstance(liveInstance || '')}>
         <Icon name="settings" size={15}/>走行設定</button>}
       <button className="button" onClick={togglePolling}>{enabled ? '表示を一時停止' : '表示を再開'}</button>
@@ -275,6 +297,6 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
     <section className="content-card">{velocityPlot}</section>
     </>}
     {tuningInstance && <DriveTuningDialog target={target} instanceId={tuningInstance} connected={liveInstance === tuningInstance}
-      planLine={route.plan?.line ?? null} onClose={() => setTuningInstance('')}/>}
+      planLine={enabled ? route.plan?.line ?? null : null} onClose={() => setTuningInstance('')}/>}
   </div>;
 }

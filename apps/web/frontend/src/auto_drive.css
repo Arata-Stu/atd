@@ -119,6 +119,9 @@
 .live-overview .live-toolbar h2 { font-size: 19px; margin: 0; }
 .live-overview .live-toolbar .button-row { flex-direction: row; align-items: center; flex-wrap: wrap; }
 .live-toolbar label { white-space: nowrap; }
+.gazebo-vehicle-controls { display: grid; gap: 2px; }
+.gazebo-vehicle-controls [role="status"], .gazebo-vehicle-controls [role="alert"] { font-size: 12px; color: var(--muted); }
+.gazebo-vehicle-controls [role="alert"] { color: #91382d; }
 .drive-tuning .tuning-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
 .drive-tuning .tuning-fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .drive-tuning .field { margin: 0; }

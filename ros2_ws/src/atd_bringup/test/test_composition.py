@@ -73,8 +73,8 @@ class CompositionTests(unittest.TestCase):
         points = [[0., 0.], [1., 0.], [1., 1.]]
         route = dict(points=points, profile=[[i, x, y, 0., 0., 1., 0.] for i, (x, y) in enumerate(points)])
         hdmap = dict(frame='map', closed=True, lines=dict(raceline=route, centerline=route))
-        with fake_launch(), patch('atd_localization.assets.map_metadata', return_value=metadata), \
-                patch('atd_localization.assets.verified_hdmap', return_value=json.dumps(hdmap).encode()), \
+        with patch('atd_localization.assets.map_metadata', return_value=metadata), \
+                patch('atd_localization.assets.verified_hdmap', return_value=json.dumps(hdmap).encode()), fake_launch(), \
                 patch('ament_index_python.packages.get_package_share_directory',
                       side_effect=lambda name: str(path.parents[1]) if name == 'atd_bringup' else '/share/' + name):
             module = runpy.run_path(str(path))
@@ -104,6 +104,8 @@ class CompositionTests(unittest.TestCase):
             *_, headless, bridge = module['setup'](dict(context, web='true'))
             self.assertFalse(headless.parameters[0]['rviz'])
             self.assertEqual(bridge.parameters[0]['control_topic'], '/atd/gazebo/pursuit_status')
+            allowed = json.loads(bridge.parameters[0]['parameter_allowlist_json'].args[0])
+            self.assertIn('operator_paused', allowed['/atd_gazebo_control'])
             dims = dict(vehicle_length=.41, vehicle_width=.21, rear_axle_to_rear=.11, margin=.01)
             with TemporaryDirectory() as directory, patch.dict(os.environ, DISPLAY=':0'):
                 scene = Path(directory) / 'scene/scene.json'

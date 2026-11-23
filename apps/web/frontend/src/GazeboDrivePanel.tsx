@@ -4,7 +4,7 @@ import { AUTO_HISTORY_S } from './auto_drive_view';
 import { LINE_NAMES } from './planning_view';
 import type { GazeboDriveSample, LiveStatus } from './workspace_types';
 
-const states = {waiting:'発進待ち', waiting_observation:'自己位置・計画待ち', driving:'走行中', stopped:'停止'};
+const states = {waiting:'発進待ち', waiting_observation:'自己位置・計画待ち', driving:'走行中', paused:'一時停止指令中', stopped:'走行終了'};
 type Metric = 'target_mps' | 'estimated_mps' | 'steering_rad' | 'throttle';
 
 function series(history: GazeboDriveSample[], key: Metric, end: number) {

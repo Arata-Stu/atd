@@ -15,7 +15,7 @@ from atd_planning.core import DEFAULT_HORIZON_M, LINE_KEYS, yaw_from_quaternion
 COMMAND_TTL_NS = 250_000_000
 # Covers valid 90 Hz observations even if the other stream or /clock arrives later.
 MAX_PENDING_FRAMES = 32
-TUNABLE_PARAMETERS = ('line', 'max_speed_mps', *asdict(LookaheadConfig()),
+TUNABLE_PARAMETERS = ('operator_paused', 'line', 'max_speed_mps', *asdict(LookaheadConfig()),
                       *('speed_' + key for key in asdict(PIDConfig())))
 
 
@@ -59,6 +59,8 @@ class GazeboController:
             raise ValueError('起動ラインと選択可能な保存ラインを確認してください')
         self.switch_stamp = None
         self.switch_pending = False
+        self.operator_paused = False
+        self.resume_stamp = None
         self.lookahead = lookahead or LookaheadConfig(min_lookahead_m=default_min_lookahead(line))
         self.launch_speed_cap = max_speed
         self.full_throttle_speed = full_throttle_speed_mps
@@ -75,6 +77,11 @@ class GazeboController:
         """候補をまとめて検査し、走行中の状態は採用されるまで変更しない。"""
         if updates.keys() - set(TUNABLE_PARAMETERS):
             raise ValueError('Gazebo の走行中に変更できない設定です')
+        paused = updates.get('operator_paused', self.operator_paused)
+        if type(paused) is not bool:
+            raise ValueError('Gazebo の一時停止には真偽値が必要です')
+        if paused != self.operator_paused and self.state == 'stopped':
+            raise ValueError('異常停止した試行の一時停止状態は変更できません')
         line = updates.get('line', self.line)
         if line not in self.available_lines:
             raise ValueError(f'地図と速度 FF 表に適合するラインを選んでください（{", ".join(self.available_lines)}）')
@@ -86,14 +93,16 @@ class GazeboController:
         if lookahead.max_lookahead_m > self.horizon:
             raise ValueError(f'最大先読みは計画の前方軌道長 {self.horizon:g} m 以内です')
         pid = PIDConfig(**{k: updates.get('speed_' + k, v) for k, v in asdict(self.pid.config).items()})
-        return line, speed, lookahead, pid
+        return line, speed, lookahead, pid, paused
 
     def apply_tuning(self, updates, now=None):
-        line, speed, lookahead, pid = self.tuning(updates)
-        if (line, speed, lookahead, pid) == (self.line, self.max_speed, self.lookahead, self.pid.config):
+        line, speed, lookahead, pid, paused = self.tuning(updates)
+        if (line, speed, lookahead, pid, paused) == (self.line, self.max_speed, self.lookahead,
+                                                      self.pid.config, self.operator_paused):
             return False
+        stamp = self.clock_ns if now is None else now
         if line != self.line:
-            self.switch_stamp = self.clock_ns if now is None else now
+            self.switch_stamp = stamp
             self.switch_pending = True
             self.locations.clear()
             self.plans.clear()
@@ -101,18 +110,39 @@ class GazeboController:
         if line != self.line or speed != self.max_speed or pid != self.pid.config:
             self.pid = SpeedController(self.pid.table, pid)
         self.line, self.max_speed, self.lookahead = line, speed, lookahead
+        if paused != self.operator_paused:
+            self.operator_paused = paused
+            self.clear_observations()
+            if paused:
+                self.state, self.reason = 'paused', '調整のため模擬車両に位置保持を要求しました'
+            else:
+                self.resume_stamp = stamp
+                self.state, self.reason = 'waiting_observation', '再開後の新しい停止観測と走行ラインの計画を待っています'
         return True
+
+    def clear_observations(self):
+        self.observation = self.pursuit_sample = None
+        self.locations.clear()
+        self.plans.clear()
+        self.pid.reset()
 
     def inhibit(self, reason):
         if self.state != 'stopped':
             self.reason = reason
             if self.stamp:
                 self.state = 'stopped'
-        self.observation = None
-        self.pursuit_sample = None
-        self.locations.clear()
-        self.plans.clear()
-        self.pid.reset()
+        self.clear_observations()
+
+    def actuator_command(self, now, drive):
+        if self.state == 'paused':
+            return now, 0., 0., 2.
+        if self.state in ('stopped', 'waiting'):
+            return now, 0., 0., 0.
+        if drive is not None and self.state == 'driving':
+            return (*drive, 1.)
+        # During a data gap a moving plant expires its last command. A paused
+        # plant holds its position until the first eligible drive after resume.
+        return None
 
     def wait_for_observation(self, reason):
         if self.state in ('driving', 'waiting_observation'):
@@ -168,6 +198,8 @@ class GazeboController:
             return None
         if self.switch_stamp is not None and stamp <= self.switch_stamp:
             return None
+        if self.resume_stamp is not None and stamp <= self.resume_stamp:
+            return None
         if stamp <= self.stamp or now - stamp >= COMMAND_TTL_NS:
             return None
         pending = self.locations if is_pose else self.plans
@@ -205,6 +237,9 @@ class GazeboController:
             if not math.isfinite(plan.lateral_error_m) or not math.isfinite(p.z):
                 raise ValueError('車体姿勢または横ずれが有限値ではありません')
             yaw = yaw_from_quaternion(q.x, q.y, q.z, q.w)
+            if self.operator_paused or self.resume_stamp is not None and abs(measured) > STANDSTILL_MPS:
+                del self.locations[stamp], self.plans[stamp]
+                return None
             steering = pure_pursuit([(point.x, point.y) for point in plan.trajectory],
                                     x=p.x, y=p.y, yaw=yaw, speed_mps=measured, wheelbase_m=WHEELBASE_M,
                                     config=self.lookahead, low_speed_drive=True)
@@ -224,6 +259,7 @@ class GazeboController:
             self.inhibit(str(exc))
             return None
         self.stamp, self.expires = stamp, expiry
+        self.resume_stamp = None
         self.switch_pending = False
         self.locations = {t: value for t, value in self.locations.items() if t > stamp}
         self.plans = {t: value for t, value in self.plans.items() if t > stamp}

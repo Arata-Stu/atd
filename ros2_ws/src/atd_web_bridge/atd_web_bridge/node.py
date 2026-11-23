@@ -32,7 +32,7 @@ from .planning import live_plan, observation as planning_observation
 from .control import live_control, observation as control_observation
 from .speed_control import SpeedWindow
 from .drive_monitor import drive_monitor, joy_sample, publisher_gid, receive_feedback
-from .gazebo import GazeboDriveWindow, ground_truth_sample, live_ground_truth
+from .gazebo import GazeboDriveWindow, ground_truth_sample, live_gazebo_sample, vehicle_hold_sample
 from .core import Cache, ProfileStore, TeleopProfileStore, PropoProfileStore, VehicleProfileStore, prepare_parameter_value
 
 
@@ -72,6 +72,7 @@ class BridgeNode(Node):
         super().__init__('atd_web_bridge')
         defaults = {'port': 8790, 'environment': 'jetson', 'freshness_s': 2.5, 'esc_trials_enabled': False,
             'gazebo_control_topic': '/atd/gazebo/control_state',
+            'gazebo_hold_topic': '/atd/gazebo/vehicle_hold',
             'gazebo_gt_topic': '/atd/gazebo/aligned_ground_truth', 'gazebo_gt_stream_id': '',
             'localization_topic': '/localization/status',
             'planning_topic': '/planning/status',
@@ -124,6 +125,7 @@ class BridgeNode(Node):
         if environment == 'gazebo':
             self.gazebo_window = GazeboDriveWindow(self.settings['freshness_s'])
             self.subscribe(String, 'gazebo_control_topic', self.receive_gazebo)
+            self.subscribe(String, 'gazebo_hold_topic', self.receive_gazebo_hold)
             if self.settings['gazebo_gt_stream_id']:
                 self.subscribe(String, 'gazebo_gt_topic', self.receive_gazebo_gt)
             return
@@ -427,6 +429,15 @@ class BridgeNode(Node):
         if sample:
             self.cache.put('gazebo_gt', sample)
 
+    def receive_gazebo_hold(self, message, info):
+        try:
+            data = json.loads(message.data) if len(message.data) <= 1024 else None
+        except (ValueError, RecursionError):
+            return
+        sample = vehicle_hold_sample(data, publisher_gid(info))
+        if sample:
+            self.cache.put('gazebo_hold', sample)
+
     def dispatch(self, path, method, body):
         with self.operation_lock:
             simulation = self.identity.get('environment') == 'gazebo'
@@ -449,7 +460,11 @@ class BridgeNode(Node):
                     snapshot = self.gazebo_window.snapshot(now, gid)
                     gt_gid = (self.observation_gid('gazebo_gt_topic', '/atd_gazebo_closed_loop_paths')
                               if self.settings['gazebo_gt_stream_id'] else None)
-                    snapshot['ground_truth'] = live_ground_truth(self.cache, now, gt_gid)
+                    snapshot['ground_truth'] = live_gazebo_sample(self.cache, 'gazebo_gt', now, gt_gid)
+                    plant_gid = self.observation_gid('gazebo_hold_topic', '/atd_gazebo_actuators')
+                    snapshot['vehicle_hold'] = live_gazebo_sample(self.cache, 'gazebo_hold', now, plant_gid)
+                    snapshot['pause_supported'] = bool(plant_gid and
+                        'operator_paused' in self.allowed.get('/atd_gazebo_control', []))
                     control = None
                     if snapshot['current'] and snapshot['current']['state'] == 'driving':
                         count, pursuit_gid = self.observation_source('control_topic', '/atd_gazebo_control')
@@ -481,6 +496,19 @@ class BridgeNode(Node):
                     raise ValueError('Jetson が保存した校正表の出典が選択と一致しません')
                 return dict(saved=True, run_id=result.run_id, proposal_sha256=result.proposal_sha256)
             if path == '/live/parameters' and method == 'POST':
+                values = body.get('values')
+                if isinstance(values, dict) and 'operator_paused' in values:
+                    if (not simulation or body.get('node') != '/atd_gazebo_control'
+                            or type(values['operator_paused']) is not bool):
+                        raise ValueError('停車・再開は Gazebo 車両だけに指定できます')
+                    gid = self.observation_gid('gazebo_hold_topic', '/atd_gazebo_actuators')
+                    if not gid:
+                        raise ValueError('停車に対応する Gazebo 車両を確認できません')
+                    if not values['operator_paused']:
+                        now_s = self.get_clock().now().nanoseconds * 1e-9
+                        sample = live_gazebo_sample(self.cache, 'gazebo_hold', now_s, gid)
+                        if not sample or not sample['held']:
+                            raise ValueError('Gazebo 車両の停車確認を待ってから再開してください')
                 return self.apply_parameters(body.get('node'), body['values']) if 'values' in body else self.parameters(body.get('node'))
             if path == '/esc/status' and method == 'GET':
                 return {'enabled': self.settings['esc_trials_enabled'], **self.esc_trials.status()}

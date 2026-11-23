@@ -9,7 +9,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
@@ -210,3 +210,27 @@ sys.exit(1 if sys.argv[2] == 'early' else 0)
                     self.assertEqual(job.supervise(args, *processes), 0 if outcome == 'completed' else 1)
                 self.assertTrue((out / 'test.sim.exited').is_file())
                 self.assertTrue((out / 'test.ros.exited').is_file())
+
+    def test_startup_deadline_counts_only_unpaused_wall_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / 'gazebo.ready').touch()
+            (out / 'scene').mkdir()
+            pause = out / 'scene/closed_loop.paused'
+            events = iter([(10., True), (1010., True), (1011., False), (1300., False), (1301., False)])
+            wall = 0.
+
+            def next_event(_seconds):
+                nonlocal wall
+                wall, paused = next(events)
+                if paused:
+                    pause.touch()
+                else:
+                    pause.unlink(missing_ok=True)
+
+            clock = SimpleNamespace(monotonic=lambda: wall, sleep=next_event)
+            running = Mock(**{'poll.return_value': None})
+            with patch.object(job, 'time', clock), patch.object(job.subprocess, 'Popen', return_value=running), \
+                    patch.object(job, 'finish_children'), self.assertRaisesRegex(RuntimeError, '300実時間秒'):
+                job.supervise(SimpleNamespace(output=out, container='fixture'), ['gz'], ['ros'])
+            self.assertEqual(wall, 1301.)

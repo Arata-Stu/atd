@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from atd_web_bridge.core import Cache
-from atd_web_bridge.gazebo import GazeboDriveWindow, ground_truth_sample, live_ground_truth
+from atd_web_bridge.gazebo import GazeboDriveWindow, ground_truth_sample, live_gazebo_sample, vehicle_hold_sample
 from test_propo_routes import load_bridge_module
 
 
@@ -73,14 +73,17 @@ def test_vehicle_tuning_requires_an_autonomous_bridge_unique_writer_and_current_
         node.client('/atd_auto_drive')
 
 
-def test_live_dispatch_serves_actual_control_state_and_rejects_an_ambiguous_publisher():
+@pytest.fixture
+def live_bridge():
     node = object.__new__(load_bridge_module().BridgeNode)
     node.identity = dict(environment='gazebo', instance_id='one-run')
     node.operation_lock = RLock()
     node.cache = Cache()
     node.gazebo_window = GazeboDriveWindow(2.5)
+    node.allowed = {'/atd_gazebo_control': ['operator_paused']}
     node.settings = dict(localization_topic='/localization/status', planning_topic='/planning/status',
                          gazebo_control_topic='/atd/gazebo/control_state', control_topic='/atd/gazebo/pursuit_status',
+                         gazebo_hold_topic='/atd/gazebo/vehicle_hold',
                          gazebo_gt_stream_id='run', gazebo_gt_topic='/atd/gazebo/aligned_ground_truth',
                          parameter_node_prefix='/atd_gazebo_control')
     node.get_clock = Mock()
@@ -89,6 +92,11 @@ def test_live_dispatch_serves_actual_control_state_and_rejects_an_ambiguous_publ
     node.get_node_names_and_namespaces = Mock(return_value=[('atd_gazebo_control', '/')])
     endpoint = SimpleNamespace(node_namespace='/', node_name='atd_gazebo_control', endpoint_gid=b'writer')
     node.get_publishers_info_by_topic = Mock(return_value=[endpoint])
+    return node, endpoint
+
+
+def test_live_dispatch_serves_actual_control_state_and_rejects_an_ambiguous_publisher(live_bridge):
+    node, endpoint = live_bridge
     node.receive_gazebo(SimpleNamespace(data=json.dumps(report(2 * 10**9))), {'publisher_gid': {'data': b'writer'}})
     result = node.dispatch('/live/status', 'GET', {})
     assert result['gazebo']['current']['steering_rad'] == -.15
@@ -120,6 +128,46 @@ def test_live_dispatch_serves_actual_control_state_and_rejects_an_ambiguous_publ
     assert live['gazebo']['ground_truth']['x'] == .5
 
 
+def test_operator_pause_distinguishes_controller_acceptance_and_fresh_vehicle_feedback(live_bridge):
+    node, endpoint = live_bridge
+    plant = SimpleNamespace(node_namespace='/', node_name='atd_gazebo_actuators', endpoint_gid=b'plant')
+    node.get_publishers_info_by_topic.side_effect = lambda topic: (
+        [plant] if topic == node.settings['gazebo_hold_topic'] else [endpoint])
+    node.receive_gazebo(SimpleNamespace(data=json.dumps(report(2 * 10**9, 'paused'))),
+                        {'publisher_gid': {'data': b'writer'}})
+    paused = node.dispatch('/live/status', 'GET', {})['gazebo']
+    assert paused['current']['state'] == 'paused' and paused['pause_supported']
+    assert paused['vehicle_hold'] is None
+    request = dict(node='/atd_gazebo_control', instance_id='one-run')
+    node.apply_parameters = Mock(return_value={'applied': True})
+
+    def set_hold(value):
+        return node.dispatch('/live/parameters', 'POST', dict(request, values={'operator_paused': value}))
+
+    assert set_hold(True)['applied']
+    with pytest.raises(ValueError, match='停車確認'):
+        set_hold(False)
+    sample = dict(held=True, speed_mps=0., stamp_ns=2 * 10**9)
+    for update in (dict(held=1), dict(speed_mps=.1), dict(stamp_ns=-1), dict(speed_mps=float('nan'))):
+        assert vehicle_hold_sample(dict(sample, **update), 'plant') is None
+    node.receive_gazebo_hold(SimpleNamespace(data=json.dumps(sample)), {'publisher_gid': {'data': b'other'}})
+    assert node.dispatch('/live/status', 'GET', {})['gazebo']['vehicle_hold'] is None
+    node.receive_gazebo_hold(SimpleNamespace(data=json.dumps(sample)), {'publisher_gid': {'data': b'plant'}})
+    feedback = node.dispatch('/live/status', 'GET', {})['gazebo']['vehicle_hold']
+    assert feedback['held'] and feedback['speed_mps'] == 0 and feedback['stamp_s'] == 2.
+    assert set_hold(False)['applied']
+    node.get_clock.return_value.now.return_value.nanoseconds += 3 * 10**9
+    with pytest.raises(ValueError, match='停車確認'):
+        set_hold(False)
+    node.get_publishers_info_by_topic.side_effect = lambda _: [plant, plant]
+    assert not node.dispatch('/live/status', 'GET', {})['gazebo']['pause_supported']
+    with pytest.raises(ValueError, match='車両を確認'):
+        set_hold(True)
+    node.identity = dict(environment='jetson', instance_id='one-run')
+    with pytest.raises(ValueError, match='Gazebo 車両だけ'):
+        set_hold(True)
+
+
 def test_gt_requires_matching_run_writer_frame_dimensions_and_fresh_sim_and_wall_time():
     dims = dict(vehicle_length=.35, vehicle_width=.19, rear_axle_to_rear=.1065, margin=0.)
     row = dict(frame='map', stamp_s=20., x=1., y=2., yaw=.7, footprint=dims,
@@ -131,12 +179,12 @@ def test_gt_requires_matching_run_writer_frame_dimensions_and_fresh_sim_and_wall
     cache = Cache(.5)
     with patch('time.monotonic', return_value=10.):
         cache.put('gazebo_gt', sample)
-        gt = live_ground_truth(cache, 20.25, 'writer')
+        gt = live_gazebo_sample(cache, 'gazebo_gt', 20.25, 'writer')
         assert gt['x'] == 1. and gt['footprint'] == dims and gt['remaining_s'] == .25
         assert 'publisher_gid' not in gt and 'stream_id' not in gt
-        assert live_ground_truth(cache, 20., 'other') is None
-        assert live_ground_truth(cache, 20., None) is None
-        assert live_ground_truth(cache, 19., 'writer') is None
-        assert live_ground_truth(cache, 21., 'writer') is None
+        assert live_gazebo_sample(cache, 'gazebo_gt', 20., 'other') is None
+        assert live_gazebo_sample(cache, 'gazebo_gt', 20., None) is None
+        assert live_gazebo_sample(cache, 'gazebo_gt', 19., 'writer') is None
+        assert live_gazebo_sample(cache, 'gazebo_gt', 21., 'writer') is None
     with patch('time.monotonic', return_value=11.):
-        assert live_ground_truth(cache, 20., 'writer') is None
+        assert live_gazebo_sample(cache, 'gazebo_gt', 20., 'writer') is None

@@ -162,7 +162,9 @@ def supervise(args, gazebo_command, ros_command):
         ros_log = out / 'closed_loop.ros.log'
         with ros_log.open('x') as log:
             ros = subprocess.Popen(ros_command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            startup_deadline = time.monotonic() + 300
+            previous_check = time.monotonic()
+            startup_wait_s = 0.
+            operator_paused = False
             active = False
             while True:
                 result = out / 'closed_loop.result.json'
@@ -183,11 +185,16 @@ def supervise(args, gazebo_command, ros_command):
                     raise RuntimeError(f'評価完了前にプロセスが終了しました (Gazebo={gazebo_state}, '
                                        f'Isaac ROS={ros_state})。{detail or "closed_loop.ros.log・run.json を確認してください"}')
                 if not active:
+                    now = time.monotonic()
+                    if not operator_paused:
+                        startup_wait_s += now - previous_check
+                    previous_check = now
+                    operator_paused = (out / 'scene/closed_loop.paused').is_file()
                     if (out / 'scene/closed_loop.active').is_file():
                         active = True
                         print('保存地図での追跡と最初の有効な制御指令を確認。走行を評価中です。', flush=True)
-                    elif time.monotonic() >= startup_deadline:
-                        raise RuntimeError('300実時間秒以内に自己位置推定から有効な走行指令まで到達しませんでした。closed_loop.ros.log を確認してください')
+                    elif startup_wait_s >= 300:
+                        raise RuntimeError('操作による一時停止を除く300実時間秒以内に自己位置推定から有効な走行指令まで到達しませんでした。closed_loop.ros.log を確認してください')
                 time.sleep(.25)
     except KeyboardInterrupt:
         reason = 'ユーザーが走行を中断しました'

@@ -214,6 +214,68 @@ def test_missing_tf_update_waits_then_resumes_with_new_matched_plan_and_pose():
     assert c.state == 'driving' and c.pid.last['i_raw'] == 0.
 
 
+@pytest.mark.parametrize('started', (False, True))
+def test_operator_hold_preserves_trial_and_resume_requires_fresh_stationary_pair(started):
+    c = GazeboController(ROUTE, 'raceline', 1.5, simulation_table(), available_lines=('raceline', 'centerline'))
+    if started:
+        run(c)
+        run(c, START + 10_000_000, speed=.3)
+    now = START + 20_000_000
+    before_pause, _ = inputs(now)
+    c.observe('localization', before_pause, now)
+    assert c.apply_tuning(dict(operator_paused=True), now)
+    assert c.state == 'paused' and not c.locations and not c.plans and c.pid.last is None
+    assert c.actuator_command(now, None) == (now, 0., 0., 2.)
+    assert run(c, now + 1, speed=.2) is None and c.observation is None
+    with pytest.raises(ValueError):
+        c.apply_tuning(dict(operator_paused=False, speed_kp=-3), now + 2)
+    assert c.state == 'paused'
+    c.apply_tuning(dict(line='centerline', speed_kp=7.), now + 3)
+    assert c.state == 'paused' and not c.plans
+    resumed = now + 5_000_000_000
+    assert c.ready(resumed) is None and c.actuator_command(resumed, None) == (resumed, 0., 0., 2.)
+    assert c.apply_tuning(dict(operator_paused=False), resumed)
+    assert c.state == 'waiting_observation' and c.actuator_command(resumed, None) is None
+    loc, plan = inputs(resumed)
+    plan.line = 'centerline'
+    assert c.observe('planning', plan, resumed + 1) is None
+    assert c.observe('localization', loc, resumed + 1) is None
+    for delta, speed in ((3, .1), (4, .01)):
+        stamp = resumed + delta
+        loc, plan = inputs(stamp, speed=speed)
+        plan.line = 'centerline'
+        assert c.observe('planning', plan, stamp) is None
+        drive = c.observe('localization', loc, stamp)
+        if speed == .1:
+            assert drive is None and c.actuator_command(stamp, drive) is None
+        else:
+            assert drive and c.actuator_command(stamp, drive) == (*drive, 1.)
+            assert c.pid.last['i_raw'] == 0.
+
+
+@pytest.mark.parametrize('fault', ('tracking_loss', 'session', 'publisher', 'rewind'))
+def test_fault_during_operator_hold_prevents_resume(fault):
+    c = gate()
+    run(c)
+    c.apply_tuning(dict(operator_paused=True), START + 1)
+    now = START + 2
+    if fault == 'publisher':
+        c.check_sources(1, 0)
+    elif fault == 'rewind':
+        c.tick(START - 1)
+    else:
+        loc, _ = inputs(now)
+        if fault == 'session':
+            loc.epoch += 1
+        else:
+            loc.state = 'lost'
+        c.observe('localization', loc, now)
+    assert c.state == 'stopped' and c.actuator_command(now, None) == (now, 0., 0., 0.)
+    with pytest.raises(ValueError, match='異常停止'):
+        c.apply_tuning(dict(operator_paused=False), now + 1)
+    assert c.actuator_command(now + 2, run(c, now + 2))[-1] == 0.
+
+
 def test_explicit_loss_while_waiting_is_terminal():
     c = gate()
     run(c)
@@ -372,9 +434,25 @@ def test_ros_actuator_goes_neutral_when_the_planner_disconnects():
         poses.publish(pose)
         plans.publish(plan)
         wait(lambda: commands[-1].header.stamp == tick.clock and commands[-1].position[-1] == 1.)
+        assert controller.set_parameters_atomically([Parameter('operator_paused', value=True)]).successful
+        wait(lambda: list(commands[-1].position) == [0., 0., 2.])
+        tick.clock.nanosec = 150_000_000
+        clock.publish(tick)
+        wait(lambda: commands[-1].header.stamp == tick.clock and commands[-1].position[-1] == 2.)
+        assert controller.set_parameters_atomically([
+            Parameter('operator_paused', value=False), Parameter('speed_kp', value=12.)]).successful
+        assert controller.controller.state == 'waiting_observation'
+        tick.clock.nanosec = 200_000_000
+        clock.publish(tick)
+        wait(lambda: controller.get_clock().now().nanoseconds == START + 200_000_000)
+        pose.header.stamp = tick.clock
+        plan.header = pose.header
+        poses.publish(pose)
+        plans.publish(plan)
+        wait(lambda: commands[-1].header.stamp == tick.clock and commands[-1].position[-1] == 1.)
         driver.destroy_publisher(plans)
         wait(lambda: controller.observers[1].get_publisher_count() == 0)
-        tick.clock.nanosec = 100_000_000
+        tick.clock.nanosec = 250_000_000
         clock.publish(tick)
         wait(lambda: list(commands[-1].position) == [0., 0., 0.])
         wait(lambda: not previews[-1].valid)

@@ -25,8 +25,10 @@ class Trial:
         self.previous_distance = 0.
         self.last_gate = (0, 0)
         self.last_gate_s = None
+        self.operator_paused = False
 
     def sample(self, row):
+        previous_time = self.last_sim_s
         t = self.last_sim_s = row["sim_time_s"]
         if row["first_active_ns"] is None:
             if row["actuator_state"] == "stopped":
@@ -47,6 +49,16 @@ class Trial:
             return None
         if result is not None:
             return result
+        # Course scoring uses the full simulation clock. Only the immobility
+        # watchdogs exclude an operator hold. Start them again at resume request
+        # even if the plant is still waiting for a fresh drive command.
+        if self.operator_paused and self.last_progress_s is not None:
+            duration = t - previous_time
+            self.last_progress_s += duration
+            self.last_gate_s += duration
+        control_state = (row.get("control_state") or {}).get("state")
+        self.operator_paused = (row["actuator_state"] == "held"
+                                and control_state not in ("waiting_observation", "stopped"))
         # Distinguish immobility from circling without reaching another sector gate.
         if self.last_progress_s is None or self.evaluator.distance >= self.previous_distance + .05:
             self.last_progress_s = t

@@ -91,15 +91,16 @@ class PlanningMonitor(Node):
         gid, name, stamp = self.pending_selection
         writers = self.get_publishers_info_by_topic(self.selection_topic)
         # Discovery can supply a durable sample before the graph associates its writer with a ROS node.
-        if len(writers) != 1 or writers[0].node_name != self.selection_source or writers[0].node_namespace != '/':
+        if (len(writers) != 1 or bytes(writers[0].endpoint_gid) != gid
+                or writers[0].node_name == '_NODE_NAME_UNKNOWN_' or writers[0].node_namespace == '_NODE_NAMESPACE_UNKNOWN_'):
             return
         self.pending_selection = None
-        if bytes(writers[0].endpoint_gid) != gid or stamp < self.switch_stamp:
+        if writers[0].node_name != self.selection_source or writers[0].node_namespace != '/' or stamp <= self.switch_stamp:
             return
+        self.switch_stamp = stamp
         if name != self.line:
             self.line, self.planner = name, self.planners[name]
             self.planner.reset()
-            self.switch_stamp = stamp
 
     def publish(self, data):
         msg = PlanningStatus()

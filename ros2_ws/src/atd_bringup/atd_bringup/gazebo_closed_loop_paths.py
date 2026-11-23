@@ -11,7 +11,7 @@ from .gazebo_control import COMMAND_TTL_NS
 from .replay_gt_geometry import Alignment, PlanarPose, Trace
 
 
-def lookahead_remaining_ns(msg, now_ns, identity, line, segment):
+def lookahead_remaining_ns(msg, now_ns, identity, line, segment, *, selection_stamp_ns=0):
     """現在の走行地図・追跡区間で、この操舵計算を表示できる残りシミュレーション時間。"""
     if (msg is None or not msg.valid or msg.controller != CONTROLLER or msg.header.frame_id != 'map'
             or (msg.map_id, msg.map_sha256, msg.hdmap_sha256) != identity or msg.line != line
@@ -20,7 +20,7 @@ def lookahead_remaining_ns(msg, now_ns, identity, line, segment):
     stamp = stamp_ns(msg.header.stamp)
     p, t = msg.pose.position, msg.target
     if (not all(map(math.isfinite, (p.x, p.y, t.x, t.y, msg.validity_s)))
-            or not 0 < stamp <= now_ns or msg.validity_s <= 0):
+            or not selection_stamp_ns < stamp <= now_ns or msg.validity_s <= 0):
         return 0
     ttl = round(min(msg.validity_s, COMMAND_TTL_NS * 1e-9) * 1e9)
     return max(0, stamp + ttl - now_ns)

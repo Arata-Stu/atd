@@ -46,7 +46,8 @@ class GazeboControlNode(Node):
         status_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.status = self.create_publisher(String, '/atd/gazebo/control_state', status_qos)
         self.selection = self.create_publisher(String, '/atd/gazebo/reference_line', status_qos)
-        self.publish_selection(self.get_clock().now().nanoseconds)
+        self.selection_stamp = self.get_clock().now().nanoseconds
+        self.publish_selection(self.selection_stamp)
         self.pursuit = self.create_publisher(ControlStatus, '/atd/gazebo/pursuit_status', 1)
         self.last_status = None
         self.last_report_ns = 0
@@ -69,9 +70,12 @@ class GazeboControlNode(Node):
         updates = {p.name: p.value for p in params}
         now = self.get_clock().now().nanoseconds
         previous_line = self.controller.line
-        if self.controller.apply_tuning(updates, now):
+        # Two settings can be accepted on the same /clock tick while simulation is paused.
+        switch_stamp = max(now, self.selection_stamp + 1)
+        if self.controller.apply_tuning(updates, switch_stamp):
             if self.controller.line != previous_line:
-                self.publish_selection(now)
+                self.selection_stamp = switch_stamp
+                self.publish_selection(switch_stamp)
                 self.last_status = None
                 self.publish(now, None)
             self.get_logger().info(f'Gazebo 制御設定を適用 sim_time_ns={now} '

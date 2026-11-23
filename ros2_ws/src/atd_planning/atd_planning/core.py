@@ -10,7 +10,7 @@ DEFAULT_HORIZON_M = 2.
 
 def selected_reference(data, identity, available_lines):
     """走行中の地図と版を照合し、採用された参照ラインの名前を返す。"""
-    if (not isinstance(data, dict) or type(data.get('stamp_ns')) is not int or data['stamp_ns'] < 0
+    if (not isinstance(data, dict) or type(data.get('stamp_ns')) is not int or not 0 <= data['stamp_ns'] < 2**63
             or any(not identity.get(k) or data.get(k) != identity[k]
                    for k in ('map_id', 'map_sha256', 'hdmap_sha256'))):
         raise ValueError('参照ラインの地図 ID・版または選択時刻が一致しません')

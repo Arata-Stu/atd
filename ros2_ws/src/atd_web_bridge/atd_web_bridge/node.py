@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 import uuid
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import rclpy
@@ -69,7 +70,6 @@ class BridgeNode(Node):
         from atd_esc_trials.store import TrialStore
         from rclpy.qos import QoSProfile, ReliabilityPolicy
         super().__init__('atd_web_bridge')
-        fixed = ParameterDescriptor(read_only=True)
         defaults = {'port': 8790, 'environment': 'jetson', 'freshness_s': 2.5, 'esc_trials_enabled': False,
             'gazebo_control_topic': '/atd/gazebo/control_state',
             'gazebo_gt_topic': '/atd/gazebo/aligned_ground_truth', 'gazebo_gt_stream_id': '',
@@ -91,7 +91,8 @@ class BridgeNode(Node):
             'vehicle_profile_path': '/data/results/runs/vehicle/layout.yaml',
             'recording_status_topic': '/recording/status',
             'parameter_node_prefix': '/atd_', 'parameter_allowlist_json': '{}', 'drive_tuning': False}
-        self.settings = {key: self.declare_parameter(key, value, fixed).value for key, value in defaults.items()}
+        self.settings = {key: self.declare_parameter(key, value, ParameterDescriptor(read_only=True)).value
+                         for key, value in defaults.items()}
         if not 1024 <= self.settings['port'] <= 65535 or not .1 <= self.settings['freshness_s'] <= 30:
             raise ValueError('Invalid bridge port or freshness_s')
         self.allowed = json.loads(self.settings['parameter_allowlist_json'])
@@ -332,10 +333,10 @@ class BridgeNode(Node):
 
     def nodes(self):
         prefix = self.settings['parameter_node_prefix']
-        names = [namespace.rstrip('/') + '/' + name for name, namespace in self.get_node_names_and_namespaces()]
+        counts = Counter(namespace.rstrip('/') + '/' + name for name, namespace in self.get_node_names_and_namespaces())
         if self.identity.get('environment') == 'gazebo':
-            return ['/atd_gazebo_control'] if names.count('/atd_gazebo_control') == 1 else []
-        return sorted(name for name in set(names) if name.startswith(prefix) and names.count(name) == 1
+            return ['/atd_gazebo_control'] if counts['/atd_gazebo_control'] == 1 else []
+        return sorted(name for name, count in counts.items() if name.startswith(prefix) and count == 1
                       and (name != '/atd_auto_drive' or self.settings.get('drive_tuning')))
 
     def client(self, node):

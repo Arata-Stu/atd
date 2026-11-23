@@ -193,14 +193,15 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
     : expired || loc.stale ? '更新途絶' : trackingLabels[loc.state];
   const plan = status?.planning;
   const route = captureRoute(status, expired || planExpired);
-  const selectedLine = route.line;
+  const selectedLine = gazebo || hasDriveNode ? route.line : plan?.line && LINE_NAMES[plan.line] ? plan.line : null;
   const planningIssue = !enabled ? '表示を一時停止しています。' : issue || route.issue || livePlanIssue(status, expired || planExpired);
   const planFrame = !planningIssue && doc && usablePlan(plan) ? plan : null;
   const control = status?.control;
   const controlIssue = planFrame ? liveControlIssue(status, controlExpired) : '有効な走行計画を待っています。';
   const controlFrame = !controlIssue ? control : null;
-  const mapControl = route.plan && selectedLine &&
-    (doc?.lines[selectedLine]?.points?.length ?? 0) >= 2 ? controlFrame : null;
+  const displayedLine = selectedLine ?? (gazebo || hasDriveNode ? null : 'raceline');
+  const mapControl = route.plan && displayedLine && route.line === displayedLine &&
+    (doc?.lines[displayedLine]?.points?.length ?? 0) >= 2 ? controlFrame : null;
   const autoActive = (status?.auto_drive?.publishers ?? 0) > 0;
   const groundTruth = gazebo ? gazeboGroundTruth(status, doc ? reference : null, !enabled || gtExpired) : undefined;
   const captureMap = <CaptureMap status={status} reference={doc ? reference : null} trail={trail} groundTruth={groundTruth}
@@ -255,11 +256,11 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
         {!gazebo && <ControlReadout frame={controlFrame} issue={controlIssue}>
           {controlFrame?.config && <LiveControlConfig config={controlFrame.config}/>}
         </ControlReadout>}</div>
-      <MapCanvas doc={doc} groundTruth={groundTruth} controlTarget={controlOverlay(mapControl, mapControl?.vehicle_pose)} cloud={doc ? cloud : null} referenceLine={selectedLine} forwardPath={planFrame?.trajectory}
+      <MapCanvas doc={doc} groundTruth={groundTruth} controlTarget={controlOverlay(mapControl, mapControl?.vehicle_pose)} cloud={doc ? cloud : null} referenceLine={displayedLine} forwardPath={planFrame?.trajectory}
         pose={planFrame?.vehicle_pose || mapPose} trail={mapPose ? trail : []}/>
       <div className="planning-legend">
-        {selectedLine && <ReferenceLineLegend raceline={selectedLine === 'raceline' ? doc?.lines.raceline : undefined}>
-          <span><i/>{LINE_NAMES[selectedLine]}</span>
+        {displayedLine && <ReferenceLineLegend raceline={displayedLine === 'raceline' ? doc?.lines.raceline : undefined}>
+          <span><i/>{LINE_NAMES[displayedLine]}</span>
         </ReferenceLineLegend>}
         <span><i className="plan-path"/>前方軌道</span><LookaheadLegend distance={mapControl?.actual_lookahead_m}/>
         <span><i className="plan-trail"/>{gazebo ? '推定軌跡・姿勢' : '実走軌跡'}</span>
@@ -267,7 +268,7 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
       </div>
       {(issue || mapError) && <div className="inline-note" role="status"><span>{mapError ? `Notebook の地図「${selectedId}」を確認してください。${mapError}` : issue}</span>
         <button className="button small" onClick={() => setMapReload(n => n + 1)}>地図を再読込</button></div>}
-      {doc && selectedLine && !doc.lines[selectedLine]?.points?.length && <p className="inline-note">この地図には {LINE_NAMES[selectedLine]} が保存されていません。</p>}
+      {doc && displayedLine && !doc.lines[displayedLine]?.points?.length && <p className="inline-note">この地図には {LINE_NAMES[displayedLine]} が保存されていません。</p>}
       {loc && tracking !== '追跡中' && <p className="small-note">{expired ? '新しい状態の受信を待っています。' : loc.reason}</p>}</section>
     <section className="content-card parameter-card"><div className="card-heading"><h3>パラメータ調整</h3><Icon name="settings" size={18}/></div><div className="parameter-body"><Field label="対象ノード"><select value={node} disabled={busy} onChange={e => { setNode(e.target.value); setParameters([]); setParameterInstance(''); }}><option value="">ノードを選択</option>{status?.parameter_nodes?.map(name => <option key={name} value={name}>{name}</option>)}</select></Field><button className="button full" disabled={!node || busy || !enabled || !status?.connected} onClick={() => void loadParameters()}><Icon name="refresh" size={15}/>現在値を取得</button>{!parameters.length && <p className="small-note">変更を許可されたパラメータだけを操作できます。値は明示的に適用します。</p>}<div className="parameter-list">{parameters.map(parameter => <div className="parameter-item" key={parameter.name}><div><strong>{parameter.name}</strong>{(parameter.read_only || !parameter.allowed) && <Tag>{parameter.read_only ? '読取専用' : '変更対象外'}</Tag>}</div>{parameter.description && <p>{parameter.description}</p>}<div className="parameter-input"><input aria-label={parameter.name} disabled={!allowApply || parameter.read_only || !parameter.allowed || busy} value={drafts[parameter.name] ?? ''} onChange={e => setDrafts({ ...drafts, [parameter.name]: e.target.value })}/><button className="button small" disabled={!allowApply || parameter.read_only || !parameter.allowed || busy || drafts[parameter.name] === (typeof parameter.value === 'string' ? parameter.value : JSON.stringify(parameter.value))} onClick={() => void applyParameter(parameter)}>適用</button></div></div>)}</div></div></section></div>
     {!gazebo && !autoActive && <LiveSpeed status={status} expired={speedExpired || expired || planExpired} enabled={enabled}/>}

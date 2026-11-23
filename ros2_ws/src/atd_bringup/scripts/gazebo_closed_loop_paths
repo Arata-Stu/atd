@@ -117,6 +117,7 @@ class ClosedLoopViewer(Node):
         self.estimate = self.create_publisher(Path, '/atd/gazebo/estimated_path', qos)
         self.markers = self.create_publisher(MarkerArray, '/atd/gazebo/current_poses', qos)
         self.selection = None
+        self.selection_stamp_ns = 0
         self.pursuit_sample = self.drawn_pursuit = None
         self.lookahead = self.create_publisher(MarkerArray, '/atd/gazebo/lookahead_markers', 1)
         self.create_subscription(ControlStatus, '/atd/gazebo/pursuit_status', self.pursuit, 1)
@@ -126,7 +127,11 @@ class ClosedLoopViewer(Node):
 
     def receive_reference(self, msg):
         try:
-            name = selected_reference(json.loads(msg.data), self.identity, self.document['lines'])
+            data = json.loads(msg.data)
+            name = selected_reference(data, self.identity, self.document['lines'])
+            if data['stamp_ns'] < self.selection_stamp_ns:
+                return
+            self.selection_stamp_ns = data['stamp_ns']
             if name != self.selection:
                 self.show_reference(name)
                 self.publish_lookahead()
@@ -158,7 +163,8 @@ class ClosedLoopViewer(Node):
 
     def publish_lookahead(self):
         ns = lookahead_remaining_ns(self.pursuit_sample, self.get_clock().now().nanoseconds,
-                                    self.paths.identity, self.selection, self.paths.segment)
+                                    self.paths.identity, self.selection, self.paths.segment,
+                                    selection_stamp_ns=self.selection_stamp_ns)
         sample = self.pursuit_sample if ns else None
         if sample is not self.drawn_pursuit:
             self.lookahead.publish(lookahead_markers(sample, ns))

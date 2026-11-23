@@ -185,6 +185,52 @@ def test_ch3_rc_directly_releases_without_braking():
     assert not run.gate.active
 
 
+def test_retune_requires_new_matched_frame_and_keeps_physical_speed_ceiling():
+    run = Run()
+    run.start()
+    run.gate.retune('raceline', .25, T+10)
+    # Old samples, including messages delivered after the switch, cannot drive.
+    run.sample(T+9)
+    run.step(T+11, ARMED)
+    assert run.board.writes[-1] == (0., 0.) and not run.gate.fault
+    run.sample(T+12, line='raceline', measured=.32, target_speed_mps=.25)
+    run.step(T+13, ARMED)
+    assert run.board.writes[-1] == (.3, .2) and not run.gate.switching
+    run.gate.receive('localization', message('localization', T+14, measured=.51), T+14, T+14)
+    run.step(T+15, ARMED)
+    assert run.board.writes[-1] == 'brake'
+
+
+def test_repeated_retuning_cannot_extend_the_last_command_or_rearm_after_loss():
+    run = Run()
+    run.start()
+    run.sample(T+10, measured=.2)
+    run.step(T+11, ARMED)
+    for offset in (20, 180_000_000):
+        run.gate.retune('centerline', .4, T+offset)
+        run.step(T+offset, ARMED)
+        assert run.board.writes[-1] == (0., 0.)
+    run.step(T+10+MAX_AGE_NS, ARMED)
+    assert not run.gate.active and '期限内' in run.gate.fault
+    run.gate.retune('raceline', .5, T+11+MAX_AGE_NS)
+    run.sample(T+12+MAX_AGE_NS, line='raceline')
+    run.step(T+13+MAX_AGE_NS, ARMED)
+    assert run.board.writes.count('arm') == 1
+
+
+def test_ch3_release_and_tracking_loss_during_switch_take_priority():
+    for manual in (True, False):
+        run = Run()
+        run.start()
+        run.gate.retune('raceline', .4, T+10)
+        if manual:
+            run.step(T+11, RC)
+        else:
+            run.gate.receive('localization', message('localization', T+10, state='lost'), T+11, T+11)
+            run.step(T+11, ARMED)
+        assert not run.gate.active and run.board.writes[-1] == 'disable'
+
+
 def test_leaving_host_for_middle_requires_observed_rc_before_rearm():
     run = Run()
     run.start()

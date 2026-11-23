@@ -10,7 +10,7 @@ from atd_control.speed import DEFAULT_FEEDFORWARD_PATH
 from atd_interfaces.msg import ControlStatus, LocalizationStatus, SpeedControlStatus
 from atd_localization.assets import map_metadata, verified_hdmap
 from atd_planning.core import DEFAULT_HORIZON_M, LINE_KEYS, ReferenceLine
-from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
+from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor, SetParametersResult
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -34,10 +34,9 @@ PLANNER = ('/planning/status', 'atd_planning')
 class AutoDriveNode(Node):
     def __init__(self, **kwargs):
         super().__init__('atd_auto_drive', **kwargs)
-        fixed = ParameterDescriptor(read_only=True)
 
         def setting(name, value):
-            return self.declare_parameter(name, value, fixed).value
+            return self.declare_parameter(name, value, ParameterDescriptor(read_only=True)).value
 
         self.port = setting('port', '')
         self.serial = setting('serial', '')
@@ -54,32 +53,7 @@ class AutoDriveNode(Node):
             from atd_interfaces.msg import TunedControlStatus, TunedSpeedControlStatus
             self.input_sources.update(steering=('/control/tuned_steering', 'atd_control', TunedControlStatus),
                                       speed=('/control/tuned_speed', 'atd_speed_control', TunedSpeedControlStatus))
-            values = {k: self.declare_parameter(k, v).value for k, v in DEFAULT_DRIVE_TUNING.values().items()
-                      if k not in ('line', 'max_speed_mps')}
-            self.tuning = DriveTuning.from_dict(dict(values, line=line, max_speed_mps=cap))
-            self.horizon = max(DEFAULT_HORIZON_M, self.tuning.lookahead.max_lookahead_m)
-            root = setting('results_root', '/data/results')
-            meta = map_metadata(root, map_id)
-            self.map_identity = {k: meta[k] for k in ('map_id', 'map_sha256', 'hdmap_sha256')}
-            doc = json.loads(verified_hdmap(root, meta))
-            self.available = []
-            for name in LINE_KEYS:
-                try:
-                    ref = ReferenceLine.from_document(doc, name)
-                except ValueError:
-                    continue
-                if min(ref.speeds) >= self.calibration.table.speeds[0]:
-                    self.available.append(name)
-            self.validate_tuning(self.tuning)
-            # These values describe the verified startup assets, even with ROS parameter overrides.
-            self.declare_parameter('available_lines', self.available, fixed, ignore_override=True)
-            self.declare_parameter('launch_speed_cap_mps', cap, fixed, ignore_override=True)
-            self.tuning_pub = self.create_publisher(String, '/vehicle/drive_tuning',
-                                                    QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-            self.tuning_stamp_ns = 0
-            self.publish_tuning(self.tuning)
-            self.add_on_set_parameters_callback(self.validate_parameters)
-            self.add_post_set_parameters_callback(self.apply_parameters)
+            self.configure_tuning(setting('results_root', '/data/results'), map_id, line, cap)
         self.sources = {}
         self.next_graph = self.next_open = self.last_wall = self.next_heartbeat = 0
         self.board = None
@@ -90,6 +64,36 @@ class AutoDriveNode(Node):
         for kind, (topic, _, message_type) in self.input_sources.items():
             self.create_subscription(message_type, topic, partial(self.receive, kind), 10)
         self.board_timer = self.create_timer(.02, self.tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
+
+    def configure_tuning(self, root, map_id, line, cap):
+        values = {k: self.declare_parameter(k, v).value for k, v in DEFAULT_DRIVE_TUNING.values().items()
+                  if k not in ('line', 'max_speed_mps')}
+        self.tuning = DriveTuning.from_dict(dict(values, line=line, max_speed_mps=cap))
+        self.horizon = max(DEFAULT_HORIZON_M, self.tuning.lookahead.max_lookahead_m)
+        meta = map_metadata(root, map_id)
+        self.map_identity = {k: meta[k] for k in ('map_id', 'map_sha256', 'hdmap_sha256')}
+        doc = json.loads(verified_hdmap(root, meta))
+        self.available = []
+        for name in LINE_KEYS:
+            try:
+                ref = ReferenceLine.from_document(doc, name)
+            except ValueError:
+                continue
+            if min(ref.speeds) >= self.calibration.table.speeds[0]:
+                self.available.append(name)
+        self.validate_tuning(self.tuning)
+        limits = self.describe_parameter('max_speed_mps')
+        limits.floating_point_range = [FloatingPointRange(from_value=self.calibration.table.speeds[0], to_value=cap)]
+        self.set_descriptor('max_speed_mps', limits)
+        # These values describe the verified startup assets, even with ROS parameter overrides.
+        self.declare_parameter('available_lines', self.available, ParameterDescriptor(read_only=True), ignore_override=True)
+        self.declare_parameter('launch_speed_cap_mps', cap, ParameterDescriptor(read_only=True), ignore_override=True)
+        self.tuning_pub = self.create_publisher(String, '/vehicle/drive_tuning',
+                                                QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.tuning_stamp_ns = 0
+        self.publish_tuning(self.tuning)
+        self.add_on_set_parameters_callback(self.validate_parameters)
+        self.add_post_set_parameters_callback(self.apply_parameters)
 
     def validate_tuning(self, tuning):
         if tuning.line not in self.available:
@@ -159,8 +163,7 @@ class AutoDriveNode(Node):
                 if msg.tuning_stamp_ns != self.tuning_stamp_ns:
                     return
                 msg = msg.status
-            if msg.map_id != self.map_identity['map_id'] or (
-                    msg.map_sha256, msg.hdmap_sha256) != (self.map_identity['map_sha256'], self.map_identity['hdmap_sha256']):
+            if any(getattr(msg, key) != value for key, value in self.map_identity.items()):
                 self.gate.invalidate('ROS 観測の地図と起動時の地図が一致しません')
                 return
         matched = self.gate.receive(kind, msg, time.time_ns(), time.monotonic_ns())

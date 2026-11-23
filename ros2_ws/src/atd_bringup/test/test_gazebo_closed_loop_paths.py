@@ -117,6 +117,8 @@ class LookaheadTests(unittest.TestCase):
             return lookahead_remaining_ns(msg, now, self.identity, 'raceline', self.segment)
 
         self.assertEqual(remaining(self.stamp), 250_000_000)
+        self.assertEqual(lookahead_remaining_ns(msg, self.stamp, self.identity, 'raceline', self.segment,
+                                                selection_stamp_ns=self.stamp), 0)
         self.assertEqual(remaining(self.stamp + 240_000_000), 10_000_000)
         self.assertEqual(remaining(self.stamp + 250_000_000), 0)
         self.assertEqual(remaining(self.stamp - 1_000_000_000), 0)

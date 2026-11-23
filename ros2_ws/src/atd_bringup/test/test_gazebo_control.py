@@ -1,4 +1,5 @@
 """Gazebo 制御での同一画像時刻の照合・速度制御・停止ラッチ。"""
+import json
 import math
 import os
 from pathlib import Path
@@ -294,13 +295,16 @@ def test_ros_actuator_goes_neutral_when_the_planner_disconnects():
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.node import Node
     from rclpy.parameter import Parameter
+    from rclpy.qos import DurabilityPolicy, QoSProfile
     from rosgraph_msgs.msg import Clock
     from sensor_msgs.msg import JointState
+    from std_msgs.msg import String
 
     executable = Path(__file__).resolve().parents[1] / 'scripts/gazebo_control'
     control_node = runpy.run_path(str(executable))['GazeboControlNode']
     keys = dict(zip(('map_id', 'map_sha256', 'hdmap_sha256'), ROUTE))
-    parameters = [Parameter(k, value=v) for k, v in dict(keys, use_sim_time=True).items()]
+    parameters = [Parameter(k, value=v) for k, v in dict(keys, use_sim_time=True,
+                  available_lines=['raceline', 'centerline']).items()]
     context = Context()
     rclpy.init(context=context, domain_id=160 + os.getpid() % 30)
     controller = control_node(context=context, parameter_overrides=parameters)
@@ -320,6 +324,13 @@ def test_ros_actuator_goes_neutral_when_the_planner_disconnects():
         subscription = driver.create_subscription(JointState, '/atd/gazebo/actuators', commands.append, 10)
         previews = []
         driver.create_subscription(ControlStatus, '/atd/gazebo/pursuit_status', previews.append, 10)
+        selections = []
+        driver.create_subscription(String, '/atd/gazebo/reference_line',
+            lambda msg: selections.append(json.loads(msg.data)), QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        wait(lambda: selections and selections[-1]['line'] == 'raceline')
+        assert controller.describe_parameter('available_lines').read_only
+        assert controller.describe_parameter('max_speed_mps').floating_point_range[0].to_value == 1.5
+        assert controller.get_parameter('launch_speed_cap_mps').value == 1.5
         poses = driver.create_publisher(LocalizationStatus, '/localization/status', 10)
         plans = driver.create_publisher(PlanningStatus, '/planning/status', 10)
         clock = driver.create_publisher(Clock, '/clock', 10)
@@ -348,8 +359,19 @@ def test_ros_actuator_goes_neutral_when_the_planner_disconnects():
         assert not controller.set_parameters_atomically([
             Parameter('max_speed_mps', value=.8), Parameter('max_lookahead_m', value=20.)]).successful
         assert controller.controller.max_speed == controller.get_parameter('max_speed_mps').value == 1.5
-        assert controller.set_parameters_atomically([Parameter('max_speed_mps', value=.8)]).successful
+        assert controller.set_parameters_atomically([
+            Parameter('max_speed_mps', value=.8), Parameter('line', value='centerline')]).successful
+        wait(lambda: selections[-1]['line'] == 'centerline')
+        assert selections[-1] == dict(keys, line='centerline', stamp_ns=START)
         assert controller.controller.max_speed == controller.get_parameter('max_speed_mps').value == .8
+        tick.clock.nanosec = 50_000_000
+        clock.publish(tick)
+        wait(lambda: controller.get_clock().now().nanoseconds == START + 50_000_000)
+        pose.header.stamp = tick.clock
+        plan.header, plan.line = pose.header, 'centerline'
+        poses.publish(pose)
+        plans.publish(plan)
+        wait(lambda: commands[-1].header.stamp == tick.clock and commands[-1].position[-1] == 1.)
         driver.destroy_publisher(plans)
         wait(lambda: controller.observers[1].get_publisher_count() == 0)
         tick.clock.nanosec = 100_000_000

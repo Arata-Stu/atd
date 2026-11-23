@@ -173,7 +173,7 @@ Notebook の VGL export は `vgl-export`、Web API は `web`、Raceline の最�
 | --- | --- |
 | 地図 | rosbag から NVIDIA 公式処理で cuVSLAM / VGL 地図を準備し、保存地図の localize と点群取得後に HDMap を編集。centerline / raceline / 必要に応じた custom line を生成。駐車機能は不要 |
 | Jetson との転送 | SCP を簡単に実行する UI。Jetson → ノート PC の rosbag 受信、ノート PC → Jetson の作成地図送信 |
-| ライブ表示・調整 | Jetson・Gazebo の自動走行中は、選択ライン・自己位置・Pure Pursuit の先読み点と速度・操舵・スロットルの時系列を Notebook の一画面で確認する。ROS 2 parameter を動的に調整できる。 |
+| ライブ表示・調整 | Jetson・Gazebo の自動走行中は、選択ライン・自己位置・Pure Pursuit の先読み点と速度・操舵・スロットルの時系列を Notebook の一画面で確認する。走行中の地図にある参照ライン、速度上限、先読み、速度 PID ゲインを同じ画面から一括変更する。速度は起動時の上限までとし、現在の走行に適用する。 |
 | 自動走行の監視 | Notebook で CH3 の位置、Pico が採用した操作元、自動走行の状態と停止要求の理由を確認する。目標速度・推定速度、Jetson が送信した操舵・スロットル、Pico の報告 PWM を同じ時間軸の折れ線で比較する。スクリーンキャスト向けに、これらと走行地図・選択ライン上の自己位置と向きを一画面に表示する |
 | 車両配置・寸法 | 上面図・側面図と寸法線で寸法と入力欄を対応付け、mm／度で実測値を編集。Jetsonへ保存し、static TF node再起動で反映 |
 | 入力監視・設定 | Jetson の Joy 入力監視、物理配置の調整、操舵・スロットル・操作要求への役割設定を共通アプリへ統合。Pico USBのraw・PWM相当µs・基板状態を監視し、6／10／16ch表示とCH4〜CH16のJetson側役割設定を扱う |

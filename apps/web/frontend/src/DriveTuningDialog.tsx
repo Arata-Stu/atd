@@ -73,7 +73,7 @@ export function DriveTuningDialog({target, instanceId, connected, planLine, onCl
       if (result.applied !== true) throw new Error('適用後の読戻し値が指定値と一致しません。');
       setDraft({}); setMessage(`${count} 項目を適用し、${source} から現在値を読み戻しました。`);
     } catch (e) {
-      setNeedsReadback(true); setError((e as Error).message);
+      setNeedsReadback(true); setError((e as Error).message + ' 現在値を再取得してください。');
     } finally { setBusy(null); }
   }
   const feedback = !connected ? '接続先を確認できません。接続後に走行設定を開き直してください。'

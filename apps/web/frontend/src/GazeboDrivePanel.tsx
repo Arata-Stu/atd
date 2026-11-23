@@ -38,11 +38,12 @@ export function GazeboDrivePanel({data, enabled, captureMap}: {
   const value = (v: number | null | undefined, digits = 2) => v == null ? '—' : v.toFixed(digits);
   return <section className="content-card auto-drive-panel" aria-label="Gazebo 自動走行モニター">
     <header className="card-heading"><h3>Gazebo 自動走行</h3>
-      <span>{!enabled ? '表示停止' : row ? states[row.state] : '制御状態を待っています'}
+      <span>
+        <span className="gazebo-control-state">{!enabled ? '表示停止' : row ? states[row.state] : '制御状態を待っています'}</span>
         {row && <> · {row.map_id} · {LINE_NAMES[row.line]}</>}
         {data && <> · シミュレーション時刻 {end.toFixed(2)} s</>}</span>
     </header>
-    {row?.reason && <p className="auto-notice">{row.reason}</p>}
+    <p className="auto-notice gazebo-control-reason">{row?.reason}</p>
     <div className="auto-body">
       <dl className="auto-speed-current">
         <div><dt>目標速度</dt><dd>{value(row?.target_mps)} <small>m/s</small></dd></div>

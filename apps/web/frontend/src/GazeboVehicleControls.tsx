@@ -73,7 +73,9 @@ export function GazeboVehicleControls({status}: {status: GazeboOperatorStatus | 
       <button type="button" className="button" disabled={busy || !status || !view.canResume}
         onClick={() => void apply(false)}>走行を再開</button>
     </div>
-    <span role="status">{feedback}</span>
-    {error && <span role="alert">{error}</span>}
+    <div className="gazebo-vehicle-feedback">
+      {error && <div role="alert">{error}</div>}
+      <div role="status">{feedback}</div>
+    </div>
   </div>;
 }

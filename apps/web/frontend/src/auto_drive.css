@@ -120,7 +120,16 @@
 .live-overview .live-toolbar .button-row { flex-direction: row; align-items: center; flex-wrap: wrap; }
 .live-toolbar label { white-space: nowrap; }
 .gazebo-vehicle-controls { display: grid; gap: 2px; }
-.gazebo-vehicle-controls [role="status"], .gazebo-vehicle-controls [role="alert"] { font-size: 12px; color: var(--muted); }
+.gazebo-vehicle-feedback {
+  /* The two buttons size the grid column; acknowledgements wrap inside it. */
+  contain: inline-size;
+  block-size: 2lh;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--muted);
+}
 .gazebo-vehicle-controls [role="alert"] { color: #91382d; }
 .drive-tuning .tuning-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
 .drive-tuning .tuning-fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -136,6 +145,11 @@
 .live-page.live-overview { display: flex; flex-direction: column; gap: 8px; padding: 12px 18px 58px; }
 .live-page.live-overview > .auto-drive-panel { margin: 0; }
 .live-overview > .inline-note, .live-overview .auto-notice { margin: 0; padding-block: 6px; }
+.gazebo-control-state { display: inline-block; min-inline-size: 9em; text-align: end; white-space: nowrap; }
+.gazebo-control-reason { min-block-size: calc(1lh + 12px); overflow-wrap: anywhere; }
+@media (max-width: 650px) {
+  .gazebo-control-reason { min-block-size: calc(2lh + 12px); }
+}
 .live-overview .auto-drive-panel > .card-heading { padding: 6px 14px; min-height: 36px; gap: 4px 10px; }
 .live-overview .auto-drive-panel :is(.card-heading, .auto-stop) > span { overflow-wrap: anywhere; }
 .live-overview .auto-details { min-width: 0; }

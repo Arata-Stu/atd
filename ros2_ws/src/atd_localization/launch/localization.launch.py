@@ -23,6 +23,9 @@ def setup(context):
     if clock not in ('true', 'false'):
         raise ValueError('use_sim_time に true / false を指定してください')
     sim_time = clock == 'true'
+    gazebo_imu_frequency = value('gazebo_imu_frequency')
+    if gazebo_imu_frequency and not sim_time:
+        raise ValueError('Gazebo の統合 IMU にはシミュレーション時刻が必要です')
     work = tempfile.TemporaryDirectory(prefix='atd-localization-')
     try:
         assets = prepare_runtime(value('results_root'), value('map_id'), value('engine_dir'), work.name)
@@ -35,6 +38,10 @@ def setup(context):
     tracking = component_configuration(Path(get_package_share_directory('atd_mapping')) / 'config', workflow,
         assets['map_dir'], assets['map_root'], assets['model_dir'], assets['config_dir'],
         namespace='/localization', use_sim_time=sim_time, capture_visualization=value('visualize_landmarks') == 'true')
+    if gazebo_imu_frequency:
+        tracking['parameters']['cuvslam'].update(tracking_mode=1, imu_frame='camera_gyro_optical_frame',
+                                                calibration_frequency=float(gazebo_imu_frequency))
+        tracking['remaps']['cuvslam'].append(('visual_slam/imu', '/camera/camera/imu'))
     nodes = []
     for kind, package, plugin, name in (
         ('cuvslam', 'isaac_ros_cuvslam', 'nvidia::isaac_ros::visual_slam::VisualSlamNode', 'visual_slam'),
@@ -51,7 +58,9 @@ def setup(context):
     monitor.update(simulation_freshness=ParameterValue(LaunchConfiguration('simulation_freshness'), value_type=bool),
                    allow_sparse_tf=ParameterValue(LaunchConfiguration('allow_sparse_tf'), value_type=bool),
                    use_sim_time=sim_time, image_height=assets['input_shape'][2], image_width=assets['input_shape'][3])
-    print(f"ATD localization map={assets['map_id']} engine={assets['model_dir']} stereo={assets['input_shape'][2:]}",
+    tracking_label = f'VIO (IMU {gazebo_imu_frequency} Hz)' if gazebo_imu_frequency else 'VO'
+    print(f"ATD localization map={assets['map_id']} engine={assets['model_dir']} "
+          f"stereo={assets['input_shape'][2:]} tracking={tracking_label}",
           flush=True)
     return [
         Node(package='atd_localization', executable='localization_monitor', name='atd_localization_monitor',
@@ -67,6 +76,7 @@ def generate_launch_description():
         DeclareLaunchArgument('map_id'), DeclareLaunchArgument('results_root', default_value='/data/results'),
         DeclareLaunchArgument('engine_dir', default_value=''), DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('visualize_landmarks', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('gazebo_imu_frequency', default_value='', choices=['', '200', '400']),
         DeclareLaunchArgument('simulation_freshness', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('allow_sparse_tf', default_value='false', choices=['true', 'false']),
         OpaqueFunction(function=setup),

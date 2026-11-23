@@ -142,8 +142,11 @@ class CommandMotionTests(unittest.TestCase):
             self.assertEqual(stamp.sec * 10**9 + stamp.nanosec, round(sample["sim_time_s"] * 1e9))
             self.assertEqual((pose.position.x, pose.position.y, pose.position.z), (3., -2., REAR_AXLE_HEIGHT_M))
             self.assertAlmostEqual(2 * math.atan2(pose.orientation.z, pose.orientation.w), sample["yaw_rad"])
+            # The closed-loop IMU needs every measured pose between the 20 Hz GT samples.
+            plugin.imu = Mock()
             info.sim_time.total_seconds.return_value = .04
             plugin.post_update(info, None)
+            plugin.imu.update.assert_called_once_with(40_000_000, observed)
             plugin.ground_truth.publish.assert_called_once()
 
     def test_partial_trace_line_waits_and_tracked_stop_exports_reason(self):
@@ -184,6 +187,11 @@ class CommandMotionTests(unittest.TestCase):
                 scene = json.loads((out / "scene/scene.json").read_text())
                 self.assertEqual(scene["trajectory"]["laps"], 0)
                 self.assertIsNone(scene["trajectory"]["total_travel_seconds"])
+                self.assertEqual(imu_hz, 400)
+                self.assertEqual(scene["imu"]["streams"][run.IMU_TOPIC], {"frame_id": run.GYRO_FRAME, "rate_hz": 400})
+                bridge = json.loads((out / "bridge.yaml").read_text())
+                self.assertIn(run.IMU_TOPIC, [topic["ros_topic_name"] for topic in bridge])
+                self.assertIn("tf_" + run.GYRO_FRAME, children)
                 samples = scene["trajectory"]["samples_s_x_y_yaw"][:-1:2]
                 with (out / "scene/rig_motion.jsonl").open("w") as trace:
                     for index, (_, x, y, yaw) in enumerate(samples * 3 + samples[:12]):
@@ -193,7 +201,7 @@ class CommandMotionTests(unittest.TestCase):
             def stop_after_trace(_):
                 (out / "closed_loop.cancel").write_text("ユーザーが走行を中断しました\n")
 
-            argv = ["run.py", "--mode", "closed-loop", "--output", tmp, "--laps", "0"]
+            argv = ["run.py", "--mode", "closed-loop", "--output", tmp, "--laps", "0", "--imu", "400"]
             with patch.object(sys, "argv", argv), patch.object(world, "odaiba_track"), \
                     patch.object(run.shutil, "which", return_value=None), patch.object(run.subprocess, "Popen"), \
                     patch.object(run, "check_children"), patch.object(run, "stop_group"), \

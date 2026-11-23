@@ -202,16 +202,22 @@ exit 130
         (self.scripts / 'gazebo.sh').write_text(
             f'#!/bin/bash\nif [[ "$1" = list ]]; then exec bash {script} list; fi\n'
             f'exec bash {script} "$@" --dry-run > "$MENU_TEST_CALLS"\n')
-        for display, enabled, laps in [('off', 'false', 2), ('rviz', 'true', 2),
-                                       ('web', 'false', 0), ('both', 'true', 0)]:
-            self.menu('gazebo', picks=['closed-loop', 'odaiba', '30', display, fixture.name, 'centerline'],
+        for display, enabled, laps, tracking, imu in [('off', 'false', 2, 'vo', 'off'), ('rviz', 'true', 2, 'vio', '400'),
+                                                      ('web', 'false', 0, 'vio', '200'), ('both', 'true', 0, 'vo', 'off')]:
+            choices = ['closed-loop', 'odaiba', '30', tracking]
+            if tracking == 'vio':
+                choices.append(imu)
+            self.menu('gazebo', picks=[*choices, display, fixture.name, 'centerline'],
                       keys=f'1.25\n{laps}\n'.encode(), ATD_RESULT_DIR=str(self.root))
             result = self.calls.read_text()
             self.assertIn('map_id:=odaiba_saved line:=centerline max_speed_mps:=1.25', result)
             self.assertIn(f'rviz:={enabled}', result)
+            self.assertIn(f'tracking:={tracking}', result)
             self.assertEqual('web:=true' in result, display in ('web', 'both'))
-            self.assertIn('--mode closed-loop', result)
-            self.assertIn(f'--resolution 1280x720 --camera-hz 30 --imu off --laps {laps}', result)
+            gazebo = shlex.split(next(line for line in result.splitlines() if line.startswith('docker run ')))
+            for key, expected in (('--mode', 'closed-loop'), ('--resolution', '1280x720'), ('--camera-hz', '30'),
+                                  ('--imu', imu), ('--laps', str(laps))):
+                self.assertEqual(gazebo[gazebo.index(key) + 1], expected)
         self.assertNotIn('bringup\t', self.invoke('--list', MENU_TEST_OS='Darwin').stdout)
 
     def test_replay_menu_and_notebook_launcher(self):

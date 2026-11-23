@@ -12,7 +12,7 @@ import sys
 import time
 
 from map_job import INSIDE, ISAAC, PROJECT, check_isaac_mounts, read_json, wait_exit, worker
-from sensor_profile import RESOLUTIONS
+from sensor_profile import IMU_MODES, RESOLUTIONS
 
 sys.path.insert(0, str(PROJECT / 'ros2_ws/src/atd_planning'))
 sys.path.insert(0, str(PROJECT / 'ros2_ws/src/atd_control'))
@@ -208,6 +208,9 @@ def supervise(args, gazebo_command, ros_command):
 
 def host(args):
     full_speed = resolve_full_throttle_speed(args.speed, args.full_throttle_speed)
+    imu = args.imu or ('400' if args.tracking == 'vio' else 'off')
+    if args.tracking == 'vio' and imu == 'off':
+        raise ValueError('VIO には --imu 200 または 400 が必要です')
     if args.engine_dir and (Path(args.engine_dir).is_absolute() or '..' in Path(args.engine_dir).parts):
         raise ValueError('--engine-dir は results からの相対パスを指定してください')
     results = args.results.resolve()
@@ -216,11 +219,13 @@ def host(args):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         raise ValueError('Gazebo 起動コマンドを指定してください')
-    command = [*command, '--full-throttle-speed', str(full_speed)]
+    command = [*command, '--full-throttle-speed', str(full_speed), '--imu', imu]
     launch = ['ros2', 'launch', 'atd_bringup', 'gazebo_closed_loop.launch.py',
               f'map_id:={args.map}', f'line:={args.line}', f'max_speed_mps:={args.speed}',
-              f'full_throttle_speed_mps:={full_speed}',
+              f'full_throttle_speed_mps:={full_speed}', f'tracking:={args.tracking}',
               f'rviz:={str(args.rviz).lower()}', f'run_dir:={remote}']
+    if args.tracking == 'vio':
+        launch.append('imu_frequency:=' + imu)
     if args.engine_dir:
         launch.append('engine_dir:=' + args.engine_dir)
     if args.web:
@@ -238,6 +243,7 @@ def host(args):
         print(shlex.join(ros))
         return 0
     session = dict(map_id=args.map, line=args.line, circuit=args.circuit, ros_domain_id=int(args.domain),
+                   tracking=args.tracking, imu_hz=IMU_MODES[imu],
                    max_speed_mps=args.speed, full_throttle_speed_mps=full_speed, engine_dir=args.engine_dir,
                    min_lookahead_override_m=args.min_lookahead,
                    rviz=args.rviz, web=args.web, started=time.time())
@@ -284,6 +290,8 @@ def main():
     launch.add_argument('--min-lookahead', type=float)
     launch.add_argument('--rviz', action='store_true')
     launch.add_argument('--web', action='store_true')
+    launch.add_argument('--tracking', choices=('vo', 'vio'), default='vo')
+    launch.add_argument('--imu', choices=IMU_MODES)
     launch.add_argument('--speed', required=True, type=float)
     launch.add_argument('--full-throttle-speed', type=float)
     launch.add_argument('--dry-run', action='store_true')

@@ -27,6 +27,7 @@ usage() {
                       同じ車両モデルで比較する場合は、各試行の --speed 以上の共通値を指定
   --map ID            closed-loop の保存地図 ID（省略すると指定ライン・解像度に合う地図から選択）
   --line 種類         closed-loop の raceline / centerline / custom（省略で保存済みラインから選択）
+  --tracking vo|vio   closed-loop の追跡方式。vo は左右画像（既定）、vio は左右画像＋統合 IMU
   --engine-dir 相対パス  closed-loop の VGL engine を明示する場合の results からの相対パス
   --min-lookahead m   closed-loop の Pure Pursuit 最短先読み距離を指定
   --rviz / --no-rviz  closed-loop の走行ライン・GT・推定軌跡・cuVSLAM の特徴点を RViz で表示するか選択（既定 OFF）
@@ -41,7 +42,7 @@ usage() {
   --camera-height m   地面から左右光学中心までの高さを指定
   --resolution WxH    左右とも 424x240 / 640x480（既定）/ 848x480 / 1280x720。closed-loop は VGL 地図と同じ解像度
   --camera-hz Hz      左右の撮影周期を 30 / 60 / 90 Hz から選択。既定は closed-loop が30 Hz、他は90 Hz
-  --imu off|200|400   加速度 200 Hz、ジャイロと統合 IMU は指定 Hz で配信（既定 off）
+  --imu off|200|400   加速度 200 Hz、ジャイロと統合 IMU は指定 Hz で配信（VIO では既定 400、他は off）
   --camera-pitch-deg 度   カメラの下向き角度を指定（既定 0）
   --dry-run           対象イメージ・保存先・実行コマンドを表示
 
@@ -71,7 +72,8 @@ laps=
 duration=
 resolution=640x480
 camera_hz=90
-imu=off
+imu=
+tracking=vo
 map_id=
 line=
 engine_dir=
@@ -90,6 +92,10 @@ while (( $# )); do
         --speed)
             [[ "$action" != prepare && -n "${2:-}" ]] || fail "走行時に --speed と速度（m/s）を指定してください"
             speed="$2"; shift 2 ;;
+        --tracking)
+            [[ "$action" = closed-loop ]] || fail "--tracking は closed-loop で指定してください"
+            case "${2:-}" in vo|vio) ;; *) fail "--tracking は vo または vio を指定してください";; esac
+            tracking="$2"; shift 2 ;;
         --map|--line|--engine-dir|--min-lookahead|--full-throttle-speed)
             [[ "$action" = closed-loop && -n "${2:-}" ]] || fail "$1 は closed-loop で値を指定してください"
             case "$1" in
@@ -144,6 +150,12 @@ while (( $# )); do
         *) fail "不明な引数: $1";;
     esac
 done
+if [[ "$tracking" = vio ]]; then
+    [[ "$imu" != off ]] || fail "--tracking vio には統合 IMU が必要です。--imu 200 または 400 を指定してください"
+    imu="${imu:-400}"
+else
+    imu="${imu:-off}"
+fi
 if [[ -n "$speed" ]]; then
     python3 -c 'import math, sys
 try:
@@ -284,7 +296,8 @@ run_mode() {
     fi
     command+=("$image" python3 /workspaces/atd/tools/gazebo_monza/run.py --mode "$mode" --output /output --circuit "$circuit")
     if (( ${#sim_args[@]} )); then command+=("${sim_args[@]}"); fi
-    command+=(--resolution "$resolution" --camera-hz "$camera_hz" --imu "$imu")
+    command+=(--resolution "$resolution" --camera-hz "$camera_hz")
+    if [[ "$mode" != closed-loop ]]; then command+=(--imu "$imu"); fi
     if [[ -n "$laps" && "$mode" != benchmark ]]; then command+=(--laps "$laps"); fi
     if [[ "$mode" = bag ]]; then
         bag_name="${out##*/}"
@@ -299,7 +312,7 @@ run_mode() {
             --output "$out" --results "${runs%/runs}" --circuit "$circuit" --domain "$domain"
             --profile "$profile" --container "$map_container")
         if [[ "$mode" = closed-loop ]]; then
-            job+=(--map "$map_id" --line "$line" --speed "$speed")
+            job+=(--map "$map_id" --line "$line" --speed "$speed" --tracking "$tracking" --imu "$imu")
             if [[ -n "$full_throttle_speed" ]]; then job+=(--full-throttle-speed "$full_throttle_speed"); fi
             if $rviz; then job+=(--rviz); fi
             if $web; then
@@ -310,7 +323,7 @@ run_mode() {
             if [[ -n "$min_lookahead" ]]; then job+=(--min-lookahead "$min_lookahead"); fi
             local lap_label="${laps} 周"
             if [[ "$laps" = 0 ]]; then lap_label='周回無制限（Ctrl+C で終了）'; fi
-            printf '地図 %s / %s　速度上限 %s m/s　%s　ステレオ %s @ %s Hz\n' "$map_id" "$line" "$speed" "$lap_label" "$resolution" "$camera_hz"
+            printf '地図 %s / %s　速度上限 %s m/s　%s　ステレオ %s @ %s Hz　追跡方式 %s\n' "$map_id" "$line" "$speed" "$lap_label" "$resolution" "$camera_hz" "$tracking"
         fi
         if $dry_run; then job+=(--dry-run); fi
         exec "${job[@]}" -- "${command[@]}"

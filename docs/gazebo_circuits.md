@@ -88,6 +88,14 @@ atd build --packages-up-to atd_bringup
 atd gazebo closed-loop --course odaiba --map odaiba_1p5 --line centerline --speed 1.5 --laps 2
 ```
 
+追跡方式は `--tracking vo`（既定、左右画像）と `--tracking vio`（左右画像＋Gazebo の統合 IMU）から選ぶ。同じ地図・ラインで VIO を試す例を以下に示す。既存の保存地図をそのまま選べる。対話操作では `atd gazebo` → `closed-loop` →「追跡方式」で選択する。
+
+```bash
+atd gazebo closed-loop --course odaiba --map odaiba_1p5 --line centerline --speed 1.5 --laps 2 --tracking vio
+```
+
+VIO 選択時は加速度 200 Hz、ジャイロと統合 IMU 400 Hz が既定。200 Hz の統合 IMU で試すには `--tracking vio --imu 200` を指定する。cuVSLAM は走行中の `/camera/camera/imu` を購読し、VGL は初期位置の照合に左右画像を使う。VO で IMU も配信して条件をそろえるには `--tracking vo --imu 400` を使う。試行の設定は `closed_loop.host.json` の `tracking` と `imu_hz`、ROS 側の起動設定は `closed_loop.ros.log` の `ATD localization` 行で確認できる。
+
 Raceline の速度上限を 10 m/s で試す場合は、Web UI「地図とライン」で「速度上限」を 10 にして Raceline を再生成し、Notebook ホストから次を実行する。
 
 ```bash
@@ -118,7 +126,7 @@ atd gazebo closed-loop --course odaiba --line raceline --speed 1.5 --laps 2 --rv
 
 同じ計時線から Raceline を試すときは `--line raceline` に切り替える。シミュレーションでの Pure Pursuit の最短先読み距離は Centerline・Customline が0.35 m、Raceline が0.65 m。同梱のお台場の Raceline は計時線中央から約0.49 mずれており、停止時にも先読み円とラインが交わるようにした。編集したラインに合わせて `--min-lookahead` で上書きできる。
 
-車両は保存地図上で追跡が成立し、有効な計画・制御指令を受けると発進する。Gazebo の閉ループでは、画像ごとの `map → odom` 発行は不要。位置合わせ後は、観測時刻までに得た最新の地図補正と、その時刻の VO オドメトリ・追跡診断から車体姿勢を求める。補正が届く間の移動量は VO の推定に依存する。
+車両は保存地図上で追跡が成立し、有効な計画・制御指令を受けると発進する。Gazebo の閉ループでは、画像ごとの `map → odom` 発行は不要。位置合わせ後は、観測時刻までに得た最新の地図補正と、その時刻のオドメトリ・追跡診断から車体姿勢を求める。補正が届く間の移動量は選択した VO または VIO の推定に依存する。
 
 自己位置と計画の更新が一時的に途切れると模擬車両はニュートラルで減速し、同じ追跡区間で新しい有効な組がそろうと走行を再開する。明示的な追跡喪失は試行の停止理由になる。車両は前進用の運動学的自転車モデルで、既定のスロットル FF 表と操舵・速度応答はシミュレーション用の設定値。
 

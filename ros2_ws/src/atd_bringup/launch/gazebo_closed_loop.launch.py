@@ -86,6 +86,9 @@ def setup(context):
 
     common = dict(map_id=key, results_root=root, use_sim_time='true', simulation_freshness='true',
                   allow_sparse_tf='true')
+    localization = dict(common, engine_dir=arg('engine_dir'), visualize_landmarks=arg('rviz'))
+    if arg('tracking') == 'vio':
+        localization['gazebo_imu_frequency'] = arg('imu_frequency')
     control = {k: ParameterValue(metadata[k], value_type=str) for k in ('map_id', 'map_sha256', 'hdmap_sha256')}
     control.update(line=ParameterValue(line, value_type=str), available_lines=available,
                    feedforward_path=ParameterValue(arg('feedforward_path'),
@@ -93,8 +96,7 @@ def setup(context):
                    use_sim_time=True, **asdict(lateral),
                    **{'speed_' + k: v for k, v in asdict(pid).items()})
     actions = [
-        include('atd_localization', 'localization.launch.py',
-                dict(common, engine_dir=arg('engine_dir'), visualize_landmarks=arg('rviz'))),
+        include('atd_localization', 'localization.launch.py', localization),
         include('atd_planning', 'planning.launch.py', dict(common, line=line, reference_line_topic='/atd/gazebo/reference_line',
                 horizon_m=str(max(DEFAULT_HORIZON_M, lateral.max_lookahead_m)))),
         Node(package='atd_bringup', executable='gazebo_control', output='screen', parameters=[control],
@@ -155,6 +157,8 @@ def generate_launch_description():
     defaults['min_lookahead_m'] = ''
     return LaunchDescription([
         DeclareLaunchArgument('map_id'),
+        DeclareLaunchArgument('tracking', default_value='vo', choices=['vo', 'vio']),
+        DeclareLaunchArgument('imu_frequency', default_value='400', choices=['200', '400']),
         DeclareLaunchArgument('rviz', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('web', default_value='false', choices=['true', 'false']),
         *(DeclareLaunchArgument(k, default_value=str(v)) for k, v in defaults.items()),

@@ -177,6 +177,27 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
                     else:
                         self.assertEqual(args[args.index("--laps") + 1], "3")
 
+    def test_closed_loop_resolves_tracking_and_imu_for_both_containers(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh"), "closed-loop", "--dry-run", "--map", "test-map"]
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, "ATD_RESULT_DIR": tmp}
+            for options, tracking, imu in [
+                ([], "vo", "off"), (["--tracking", "vio"], "vio", "400"),
+                (["--tracking", "vio", "--imu", "200"], "vio", "200"),
+                (["--imu", "200", "--tracking", "vo"], "vo", "200"),
+            ]:
+                with self.subTest(options=options):
+                    output = subprocess.check_output([*command, *options], env=env, text=True)
+                    gazebo, ros = [shlex.split(line) for line in output.splitlines() if line.startswith("docker ")]
+                    self.assertEqual(gazebo.count("--imu"), 1)
+                    self.assertEqual(gazebo[gazebo.index("--imu") + 1], imu)
+                    self.assertIn(f"tracking:={tracking}", ros)
+                    if tracking == "vio":
+                        hz = next(arg.split(":=")[1] for arg in ros if arg.startswith("imu_frequency:="))
+                        self.assertEqual(float(hz), float(imu))
+                    else:
+                        self.assertFalse(any(arg.startswith("imu_frequency:=") for arg in ros))
+
     def test_invalid_drive_settings_fail_before_start_and_diagnostics_accept_speed(self):
         command = ["bash", str(ROOT / "scripts/gazebo.sh")]
         cases = [("bag", "--resolution", "320x240"), ("bag", "--imu", "100"),
@@ -184,6 +205,8 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
                  ("prepare", "--imu", "400"), ("prepare", "--speed", "2"), ("video", "--speed", "nan"),
                  ("bag", "--speed", "-1"), ("video", "--speed", "1e500"),
                  ("bag", "--full-throttle-speed", "10"), ("serve", "--full-throttle-speed", "10"),
+                 ("bag", "--tracking", "vio"), ("closed-loop", "--tracking", "unknown"),
+                 ("closed-loop", "--tracking", "vio", "--imu", "off"), ("closed-loop", "--imu", "off", "--tracking", "vio"),
                  ("map", "--laps", "0"), ("video", "--laps", "0"), ("bag", "--laps", "0"),
                  ("run", "--laps", "0"), ("closed-loop", "--laps", "-1"), ("serve", "--web"),
                  ("video", "--laps", "1.2"), ("bag", "--laps"),

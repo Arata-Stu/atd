@@ -127,9 +127,12 @@ class ClosedLoopJobTests(unittest.TestCase):
             argv = ['closed_loop_job.py', 'host', '--output', tmp, '--results', tmp,
                     '--circuit', 'odaiba', '--domain', '74', '--container', 'fixture',
                     '--profile', '/test.xml', '--map', 'test', '--line', 'centerline',
-                    '--speed', '1.5', '--web', '--', 'gazebo', '--laps', '0']
+                    '--speed', '1.5', '--web', '--tracking', 'vio', '--imu', '200', '--', 'gazebo', '--laps', '0']
 
-            def interrupt(_args, _command, _ros):
+            def interrupt(_args, command, ros):
+                self.assertEqual(command[command.index('--imu') + 1], '200')
+                self.assertIn('tracking:=vio', ros)
+                self.assertIn('imu_frequency:=200', ros)
                 (out / 'closed_loop.result.json').write_text(json.dumps(dict(status='stopped', laps_completed=3)))
                 raise KeyboardInterrupt
 
@@ -139,6 +142,7 @@ class ClosedLoopJobTests(unittest.TestCase):
             session = json.loads((out / 'closed_loop.host.json').read_text())
             self.assertEqual(session['status'], 'stopped')
             self.assertTrue(session['web'])
+            self.assertEqual((session['tracking'], session['imu_hz']), ('vio', 200))
 
     def test_result_or_early_exit_cancels_both_children(self):
         for outcome in ('completed', 'off_course', 'early', 'interrupted'):

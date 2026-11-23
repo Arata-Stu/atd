@@ -90,6 +90,11 @@ class CompositionTests(unittest.TestCase):
                                  ('true', 'true', 'odaiba'))
                 self.assertEqual(params['allow_sparse_tf'], 'true')
             self.assertEqual(dict(loc.actions[0].launch_arguments)['visualize_landmarks'], 'false')
+            self.assertEqual(context['tracking'], 'vo')
+            self.assertNotIn('gazebo_imu_frequency', dict(loc.actions[0].launch_arguments))
+            for frequency in ('200', '400'):
+                vio_loc = module['setup'](dict(context, tracking='vio', imu_frequency=frequency))[0]
+                self.assertEqual(dict(vio_loc.actions[0].launch_arguments)['gazebo_imu_frequency'], frequency)
             self.assertEqual(dict(plan.actions[0].launch_arguments)['reference_line_topic'], '/atd/gazebo/reference_line')
             self.assertEqual((node.package, node.executable), ('atd_bringup', 'gazebo_control'))
             self.assertTrue(node.parameters[0]['use_sim_time'])
@@ -152,6 +157,37 @@ class CompositionTests(unittest.TestCase):
                              ('reference_path', 'ground_truth_path', 'estimated_path', 'current_poses')})
             for topic in topics.values():
                 self.assertEqual((topic['Reliability Policy'], topic['Durability Policy']), ('Reliable', 'Transient Local'))
+
+    def test_saved_map_localization_feeds_the_gazebo_imu_only_to_vio(self):
+        src = Path(__file__).resolve().parents[2]
+        assets = dict(workflow=dict(base_frame='base_link', left_image='/left', right_image='/right',
+                                    left_info='/li', right_info='/ri', left_frame='left_optical',
+                                    right_frame='right_optical', ground_constraint=False),
+                      map_id='odaiba', map_sha256='a' * 64, hdmap_sha256='b' * 64, input_shape=[1, 3, 480, 640],
+                      map_root=Path('/map'), map_dir=Path('/map/cuvslam_map'),
+                      model_dir=Path('/models'), config_dir=Path('/config'))
+        with fake_launch(), patch('atd_localization.assets.prepare_runtime', return_value=assets), \
+                patch('ament_index_python.packages.get_package_share_directory', side_effect=lambda name: src / name):
+            launch = runpy.run_path(str(src / 'atd_localization/launch/localization.launch.py'))
+            args = launch['generate_launch_description']().entities
+            defaults = {e.args[0]: e.default_value for e in args if hasattr(e, 'default_value')}
+            self.assertEqual(defaults['gazebo_imu_frequency'], '')
+            for clock, hz in [('false', ''), ('true', ''), ('true', '200'), ('true', '400')]:
+                with self.subTest(clock=clock, hz=hz):
+                    context = dict(defaults, map_id='odaiba', use_sim_time=clock, gazebo_imu_frequency=hz)
+                    _, container = launch['setup'](context)
+                    slam, vgl = container.composable_node_descriptions
+                    params, = slam.parameters
+                    self.assertEqual(params['load_map_folder_path'], str(assets['map_dir']))
+                    self.assertEqual(params['tracking_mode'], int(bool(hz)))
+                    self.assertNotIn('visual_slam/imu', dict(vgl.remappings))
+                    if hz:
+                        self.assertEqual(params['calibration_frequency'], float(hz))
+                        self.assertEqual(params['imu_frame'], 'camera_gyro_optical_frame')
+                        self.assertEqual(params['imu_qos'], 'SENSOR_DATA')
+                        self.assertEqual(dict(slam.remappings)['visual_slam/imu'], '/camera/camera/imu')
+                    else:
+                        self.assertNotIn('visual_slam/imu', dict(slam.remappings))
 
     def test_gazebo_profile_runs_only_stereo_vo_with_the_simulation_clock(self):
         path = Path(__file__).resolve().parents[1] / 'launch/gazebo.launch.py'

@@ -1,4 +1,5 @@
 import type { GenerationSettings, LineKind, MapDocument, RacelineLimitKey } from './types';
+import { NumberInput } from './NumberInput';
 import { Field, Icon } from './ui';
 
 type NumericSetting = Exclude<keyof GenerationSettings, 'optimizer' | 'centerline_method'>;
@@ -24,10 +25,16 @@ interface Props {
 }
 export function LineSettingsPanel({ doc, kind, settings, busy, issue, onKind, onSettings, onGenerate, onClearCalibration, dirty }: Props) {
   const calibration = kind === 'raceline' ? doc.raceline_calibration : undefined;
+  const missing = (Object.keys(NUMBERS) as NumericSetting[]).find(key => !Number.isFinite(settings[key]));
+  const generationIssue = issue || (missing ? `${NUMBERS[missing].label} を入力してください` : '');
   function numberField(key: NumericSetting) {
     const definition = NUMBERS[key];
     const adopted = calibration && key in calibration.limits;
-    return <Field key={key} label={definition.label + (adopted ? ' · 校正値' : '')}><input type="number" {...{ min: definition.min, max: definition.max, step: definition.step }} value={settings[key]} disabled={busy} readOnly={adopted} onChange={e => onSettings({ ...settings, [key]: Number(e.target.value) })}/></Field>;
+    return <Field key={key} label={definition.label + (adopted ? ' · 校正値' : '')}>
+      <NumberInput min={definition.min} max={definition.max} step={definition.step}
+        value={settings[key]} disabled={busy} readOnly={adopted} required
+        onValueChange={value => onSettings({ ...settings, [key]: value })}/>
+    </Field>;
   }
   const line = doc.lines[kind];
   return <div className="property-section">
@@ -50,8 +57,8 @@ export function LineSettingsPanel({ doc, kind, settings, busy, issue, onKind, on
     {numberField('spacing')}
     <details className="generation-details"><summary>車体寸法・制約</summary><div className="field-grid">{(['width', 'vehicle_length', 'rear_axle_to_rear', 'margin', 'curvature_limit'] as NumericSetting[]).map(numberField)}</div></details>
     <details className="generation-details"><summary>速度・加減速</summary><div className="field-grid">{(['max_speed', 'lateral_accel', 'accel', 'decel'] as NumericSetting[]).map(numberField)}</div></details>
-    {issue && <div className="generation-issue"><p>{issue}</p>{kind === 'raceline' && (issue === '先にCenterlineを生成してください' || issue === '領域方式でCenterlineを再生成してください') && <button className="text-button" disabled={busy} onClick={() => onGenerate('centerline')}>Centerlineを先に生成<Icon name="arrow" size={13}/></button>}</div>}
-    <button className="button primary full" disabled={busy || !!issue} onClick={() => onGenerate(kind)}><Icon name="play" size={16}/>{dirty ? '保存してライン生成' : 'ラインを生成'}</button>
+    {generationIssue && <div className="generation-issue"><p>{generationIssue}</p>{kind === 'raceline' && (issue === '先にCenterlineを生成してください' || issue === '領域方式でCenterlineを再生成してください') && <button className="text-button" disabled={busy} onClick={() => onGenerate('centerline')}>Centerlineを先に生成<Icon name="arrow" size={13}/></button>}</div>}
+    <button className="button primary full" disabled={busy || !!generationIssue} onClick={() => onGenerate(kind)}><Icon name="play" size={16}/>{dirty ? '保存してライン生成' : 'ラインを生成'}</button>
     {line && <p className="small-note">保存済み: {METHOD_NAMES[line.method || ''] || '以前の方式'} · {line.points.length} 点</p>}
     <p className="small-note">生成された速度は目標値です。実車の速度・制動性能は別に確認します。</p>
   </div>;

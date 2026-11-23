@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, bytes } from './api';
 import { receivedBag } from './calibration';
+import { NumberInput } from './NumberInput';
 import { addTransferPreset, BUILTIN_TRANSFER_PRESETS, loadTransferPresets, saveTransferPresets, transferNetwork } from './transferPresets';
 import type { Job, MapDocument } from './types';
 import { Field, Icon, Modal } from './ui';
@@ -41,7 +42,8 @@ export function TransferWorkspace({ notify, onJob, jobs, onCalibration }: {
   if (!connection) return <div className="content-page">{loadError
     ? <p role="alert">接続設定を読み込めませんでした。{loadError} <button className="button" onClick={() => window.location.reload()}>再読み込み</button></p>
     : '接続設定を読み込み中…'}</div>;
-  const configured = [connection.host, connection.user, connection.record_root, connection.map_root].every(value => value.trim());
+  const configured = [connection.host, connection.user, connection.record_root, connection.map_root].every(value => value.trim())
+    && [connection.port, connection.bridge_port].every(port => Number.isInteger(port) && port >= 1 && port <= 65535);
   const canTransfer = saved && configured && !busy;
   const presets = [...BUILTIN_TRANSFER_PRESETS, ...customPresets];
   const selectedMap = maps.find(item => item.id === map);
@@ -77,6 +79,7 @@ export function TransferWorkspace({ notify, onJob, jobs, onCalibration }: {
       <div className="connection-heading"><span className="card-symbol"><Icon name="settings"/></span><div><h3>Jetson の接続先</h3><p>SSH 鍵と known_hosts を使用します。</p></div><span className={'save-state ' + (saved && configured ? 'ok' : '')}>{!configured ? '未設定' : saved ? '保存済み' : '未保存'}</span></div>
       <form onSubmit={e => {
         e.preventDefault();
+        if (!configured) return;
         void run(async () => {
           const result = await api<Connection>('connection', connection, 'PUT');
           setConnection(result); setSaved(true); notify('接続設定を保存しました');
@@ -91,9 +94,9 @@ export function TransferWorkspace({ notify, onJob, jobs, onCalibration }: {
           <button type="button" className="button small" onClick={() => { setPresetError(''); setPresetDraft({ name: '', host: connection.host }); }}><Icon name="plus" size={15}/>プリセットを追加</button>
         </div>
         <div className="connection-fields">{(['host', 'user', 'port', 'bridge_port'] as const).map(key =>
-          <Field key={key} label={connectionLabels[key]}><input required value={connection[key]}
-            type={key.includes('port') ? 'number' : 'text'} min={key.includes('port') ? 1 : undefined} max={key.includes('port') ? 65535 : undefined}
-            onChange={e => changeConnection({ ...connection, [key]: key.includes('port') ? Number(e.target.value) : e.target.value })}/></Field>
+          <Field key={key} label={connectionLabels[key]}>{key === 'port' || key === 'bridge_port'
+            ? <NumberInput required value={connection[key]} min={1} max={65535} onValueChange={port => changeConnection({ ...connection, [key]: port })}/>
+            : <input required value={connection[key]} onChange={e => changeConnection({ ...connection, [key]: e.target.value })}/>}</Field>
         )}</div>
         <div className="field-grid">{(['record_root', 'map_root'] as const).map(key =>
           <Field key={key} label={key === 'record_root' ? 'Jetsonホストの記録ディレクトリ' : 'Jetsonホストの地図ディレクトリ'}>

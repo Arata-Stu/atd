@@ -87,6 +87,9 @@ def test_stamp_matching_ackermann_and_real_pid():
 def test_runtime_tuning_updates_real_commands_without_rearming_or_partial_changes():
     c = gate()
     _, angle, throttle = run(c, y=.1)
+    plan, pose, pursuit = c.pursuit_sample
+    assert plan.session_id == 'localize' and pose.position.y == .1
+    assert pursuit['target'] == pytest.approx([math.sqrt(.65**2 - .1**2), 0.])
     before = c.pid
     with pytest.raises(ValueError, match='前方軌道'):
         c.apply_tuning(dict(max_lookahead_m=20., speed_kp=0.))
@@ -95,9 +98,11 @@ def test_runtime_tuning_updates_real_commands_without_rearming_or_partial_change
         c.apply_tuning(dict(max_speed_mps=2.))
     c.apply_tuning(dict(max_speed_mps=.8, min_lookahead_m=.9, speed_kp=0.))
     _, updated_angle, updated_throttle = run(c, START + 33_333_333, y=.1)
+    assert c.pursuit_sample[2]['actual_lookahead_m'] == pytest.approx(.9)
     assert c.observation['target_speed_mps'] == .8 and 0 < updated_throttle < throttle
     assert abs(updated_angle) < abs(angle)
     c.inhibit('lost')
+    assert c.pursuit_sample is None
     c.apply_tuning(dict(max_speed_mps=1.5))
     assert c.state == 'stopped' and run(c, START + 100_000_000) is None
 
@@ -250,7 +255,7 @@ def test_raceline_acquisition_lookahead_and_unreachable_start_reason():
 
 def test_ros_actuator_goes_neutral_when_the_planner_disconnects():
     rclpy = pytest.importorskip('rclpy')
-    from atd_interfaces.msg import LocalizationStatus, PlanningStatus
+    from atd_interfaces.msg import ControlStatus, LocalizationStatus, PlanningStatus
     from geometry_msgs.msg import Point
     from rclpy.context import Context
     from rclpy.executors import SingleThreadedExecutor
@@ -280,10 +285,12 @@ def test_ros_actuator_goes_neutral_when_the_planner_disconnects():
     try:
         commands = []
         subscription = driver.create_subscription(JointState, '/atd/gazebo/actuators', commands.append, 10)
+        previews = []
+        driver.create_subscription(ControlStatus, '/atd/gazebo/pursuit_status', previews.append, 10)
         poses = driver.create_publisher(LocalizationStatus, '/localization/status', 10)
         plans = driver.create_publisher(PlanningStatus, '/planning/status', 10)
         clock = driver.create_publisher(Clock, '/clock', 10)
-        wait(lambda: subscription.get_publisher_count() == 1 and all(
+        wait(lambda: subscription.get_publisher_count() == 1 and controller.pursuit.get_subscription_count() and all(
             p.get_subscription_count() for p in (clock, poses, plans)))
         tick = Clock()
         tick.clock.sec = 15
@@ -298,6 +305,11 @@ def test_ros_actuator_goes_neutral_when_the_planner_disconnects():
         poses.publish(pose)
         plans.publish(plan)
         wait(lambda: commands and commands[-1].position[-1] == 1.)
+        wait(lambda: previews and previews[-1].valid)
+        preview = previews[-1]
+        assert preview.header == pose.header and preview.pose == pose.pose and preview.session_id == 'run'
+        assert preview.target.x == pytest.approx(.65) and preview.actual_lookahead_m == pytest.approx(.65)
+        assert preview.validity_s == pytest.approx(COMMAND_TTL_NS * 1e-9)
         assert commands[-1].name == ['steering', 'throttle', 'enable']
         assert commands[-1].header.stamp == tick.clock and commands[-1].position[1] > 0.
         assert not controller.set_parameters_atomically([
@@ -310,6 +322,7 @@ def test_ros_actuator_goes_neutral_when_the_planner_disconnects():
         tick.clock.nanosec = 100_000_000
         clock.publish(tick)
         wait(lambda: list(commands[-1].position) == [0., 0., 0.])
+        wait(lambda: not previews[-1].valid)
         assert controller.controller.state == 'stopped'
     finally:
         executor.shutdown()

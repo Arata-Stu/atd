@@ -18,6 +18,28 @@ from .vehicle import load_measured_wheelbase
 IDENTITY_FIELDS = ('map_id', 'map_sha256', 'hdmap_sha256', 'session_id', 'epoch', 'line')
 
 
+def pursuit_status(source, data, config, wheelbase, *, pose=None, validity_limit=MAX_AGE_S):
+    """操舵を計算した観測の地図・時刻・姿勢と、その計算が選んだ目標を組にする。"""
+    msg = ControlStatus(controller=CONTROLLER, valid=data['valid'], reason=data['reason'], **asdict(config))
+    if source is None:
+        msg.header.frame_id = 'map'
+    else:
+        msg.header = source.header
+        for key in IDENTITY_FIELDS:
+            setattr(msg, key, getattr(source, key))
+        if math.isfinite(source.validity_s) and source.validity_s > 0:
+            msg.validity_s = min(validity_limit, source.validity_s)
+    if msg.valid:
+        msg.pose = source.pose if pose is None else pose
+        msg.target.x, msg.target.y = data['target']
+        for key in ('requested_lookahead_m', 'actual_lookahead_m', 'curvature_per_m', 'preview_limited'):
+            setattr(msg, key, data[key])
+        if data['steering_rad'] is not None:
+            msg.has_steering = True
+            msg.steering_rad, msg.wheelbase_m = data['steering_rad'], wheelbase
+    return msg
+
+
 class ControlMonitor(Node):
     def __init__(self, **kwargs):
         super().__init__('atd_control', **kwargs)
@@ -44,25 +66,7 @@ class ControlMonitor(Node):
         self.create_timer(.1, self.watch, clock=Clock(clock_type=ClockType.STEADY_TIME))
 
     def publish(self, data):
-        msg = ControlStatus(controller=CONTROLLER, valid=data['valid'], reason=data['reason'], **asdict(self.config))
-        source = self.source
-        if source is None:
-            msg.header.frame_id = 'map'
-        else:
-            msg.header = source.header
-            for key in IDENTITY_FIELDS:
-                setattr(msg, key, getattr(source, key))
-            if math.isfinite(source.validity_s) and source.validity_s > 0:
-                msg.validity_s = min(MAX_AGE_S, source.validity_s)
-        if msg.valid:
-            msg.pose = source.pose
-            msg.target.x, msg.target.y = data['target']
-            for key in ('requested_lookahead_m', 'actual_lookahead_m', 'curvature_per_m', 'preview_limited'):
-                setattr(msg, key, data[key])
-            if data['steering_rad'] is not None:
-                msg.has_steering = True
-                msg.steering_rad, msg.wheelbase_m = data['steering_rad'], self.wheelbase
-        self.publisher.publish(msg)
+        self.publisher.publish(pursuit_status(self.source, data, self.config, self.wheelbase))
 
     def issue(self):
         source = self.source

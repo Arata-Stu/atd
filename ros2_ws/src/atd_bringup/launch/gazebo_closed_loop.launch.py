@@ -115,6 +115,7 @@ def setup(context):
         allowed = json.dumps({'/atd_gazebo_control': TUNABLE_PARAMETERS})
         actions.append(Node(package='atd_web_bridge', executable='web_bridge', output='screen',
                             parameters=[dict(use_sim_time=True, environment='gazebo', port=8791,
+                                             control_topic='/atd/gazebo/pursuit_status',
                                              parameter_node_prefix='/atd_gazebo_control',
                                              parameter_allowlist_json=ParameterValue(allowed, value_type=str))],
                             on_exit=[Shutdown(reason='Gazebo の Web bridge が終了しました')]))

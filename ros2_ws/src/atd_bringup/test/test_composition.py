@@ -94,6 +94,8 @@ class CompositionTests(unittest.TestCase):
             self.assertTrue(node.parameters[0]['use_sim_time'])
             self.assertEqual(node.parameters[0]['map_sha256'].args[0], metadata['map_sha256'])
             self.assertEqual(node.parameters[0]['min_lookahead_m'], .65)
+            *_, bridge = module['setup'](dict(context, web='true'))
+            self.assertEqual(bridge.parameters[0]['control_topic'], '/atd/gazebo/pursuit_status')
             with TemporaryDirectory() as directory:
                 folder = Path(directory)
                 *_, recorder = module['setup'](dict(context, run_dir=directory))

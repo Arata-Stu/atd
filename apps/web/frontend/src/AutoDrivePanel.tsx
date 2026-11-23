@@ -66,9 +66,9 @@ export function LiveTrace({name, unit, labels, lines, end, low, high, last, stop
   </figure>;
 }
 
-export function AutoDrivePanel({data, enabled, connected, requestStartedAt, capture, receivedAtMs, roundTripMs, captureMap}: {
+export function AutoDrivePanel({data, enabled, connected, requestStartedAt, capture, receivedAtMs, roundTripMs, captureMap, fallbackPlot}: {
   data?: AutoObservation | null; enabled: boolean; connected: boolean; requestStartedAt: number;
-  capture: boolean; receivedAtMs?: number; roundTripMs?: number; captureMap?: ReactNode;
+  capture: boolean; receivedAtMs?: number; roundTripMs?: number; captureMap: ReactNode; fallbackPlot: ReactNode;
 }) {
   const [, refresh] = useState(0);
   // Jetson と Notebook の時計を比較せず、通信時間を含む経過の上限で現在値を判定する。
@@ -106,16 +106,14 @@ export function AutoDrivePanel({data, enabled, connected, requestStartedAt, capt
         <dt>基板報告の経過（受信時）</dt><dd>{timing.boardAgeMs?.join('–') ?? '—'} <small>ms</small></dd></div>
     </dl>}
     {issue && <p className="auto-notice" role="status">{issue}</p>}
-    {capture && stopMessage}
-    {(history || state || captureMap) && <div className="auto-body">
+    {stopMessage}
+    <div className="auto-body">
       {(history || state) && <div className="auto-details">
       <dl className="auto-authority">
         <div><dt>プロポ CH3</dt><dd>{board ? (live.board ? '' : '前回 ') + switchPositions[board.ch3] : '未確認'} <small>{board?.rx_mode_us != null && board.rx_mode_us + ' µs'}</small></dd></div>
         <div><dt>現在の操作元</dt><dd>{board && !live.board && '前回 '}{controlSources[live.board ? live.source : source]}</dd></div>
         <div><dt>自動走行ノード</dt><dd>{state ? (live.state ? '' : '前回 ') + autoStates[state.state] : '未確認'}</dd></div>
       </dl>
-      {!capture && stopMessage}
-      {state?.reason && !['driving','propo','braking','latched_stop'].includes(state.state) && <p className="auto-reason">{state.reason}</p>}
       <div className="auto-readings">
         <dl className="auto-speed-current">
           <div><dt>目標速度</dt><dd>{value(speed?.target_mps,2)} <small>m/s</small></dd></div>
@@ -133,12 +131,13 @@ export function AutoDrivePanel({data, enabled, connected, requestStartedAt, capt
         <div className="auto-stamps"><span>送信 {clockText(command?.stamp_s)} {command && commandLabels[command.kind]}{command && !live.command && ' · 前回取得'}</span>
           <span>基板報告の受信 {clockText(board?.stamp_s)}{board?.pwm_enabled === false && ' · PWM 無効'}{board && !live.board && ' · 前回取得'}</span></div></div>
       </div>
+      {state?.reason && !['driving','propo','braking','latched_stop'].includes(state.state) && <p className="auto-reason">{state.reason}</p>}
       </div>}
       {captureMap}
-      {history && <div className="auto-timeline"><div className="auto-timeline-title"><h4>直近 {AUTO_HISTORY_S} 秒</h4>
+      {history ? <div className="auto-timeline"><div className="auto-timeline-title"><h4>直近 {AUTO_HISTORY_S} 秒</h4>
         <span>右端 {clockText(data.now_s)}</span>
         {stop && stop.stamp_s >= data.now_s - AUTO_HISTORY_S && <span className="auto-stop-key">停止要求</span>}</div>
-        {axes.map((axis, i) => <AutoPlot key={axis.name} axis={axis} data={data} last={i === axes.length-1}/>)}</div>}
-    </div>}
+        {axes.map((axis, i) => <AutoPlot key={axis.name} axis={axis} data={data} last={i === axes.length-1}/>)}</div> : fallbackPlot}
+    </div>
   </section>;
 }

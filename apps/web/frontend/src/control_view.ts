@@ -51,7 +51,7 @@ export function controlFrameIssue(frame: ControlFrame | null | undefined): strin
 
 export function liveControlIssue(status: LiveStatus | null, timedOut: boolean): string {
   const control = status?.control, plan = status?.planning;
-  if (!status?.connected || !control) return 'Jetson の追従計算を待っています。';
+  if (!status?.connected || !control) return '追従計算の受信を待っています。';
   if (!control.stale && !control.valid) return controlFrameIssue(control);
   if (timedOut || control.stale || !Number.isFinite(control.remaining_s) || control.remaining_s <= 0)
     return '新しい追従計算の受信を待っています。';

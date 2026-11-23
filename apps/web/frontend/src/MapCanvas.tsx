@@ -10,11 +10,12 @@ const COLORS = { left: '#40aa96', right: '#d78d51', custom: '#9c7be2', centerlin
 interface Props {
   doc: MapDocument | null; cloud?: Cloud | null; target?: EditTarget; mode?: 'select' | 'add' | 'pan';
   visible?: Record<string, boolean>; onChange?: (target: EditTarget, points: Point[]) => void;
-  referenceLine?: LineKind | null; forwardPath?: Point[]; controlTarget?: ControlOverlay;
+  referenceLine?: LineKind | null; forwardPath?: Point[]; planPose?: {x: number; y: number} | null;
+  controlTarget?: ControlOverlay;
   overlay?: TrajectoryOverlay; selectedGap?: {index: number} | null; onSelectGap?: (index: number | null) => void;
   pose?: { x?: number; y?: number; yaw?: number } | null; fitKey?: number; autoFit?: boolean; trail?: Point[];
 }
-export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visible = {}, onChange, pose, fitKey = 0, autoFit = false, trail = [], overlay, selectedGap, onSelectGap, referenceLine, forwardPath, controlTarget }: Props) {
+export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visible = {}, onChange, pose, fitKey = 0, autoFit = false, trail = [], overlay, selectedGap, onSelectGap, referenceLine, forwardPath, planPose, controlTarget }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const manualView = useRef(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -175,29 +176,31 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
       path(forwardPath, '#ffffff', 6);
       path(forwardPath, '#a04715', 3.5);
       const projection = forwardPath[0];
-      if (typeof pose?.x === 'number' && typeof pose?.y === 'number')
-        path([[pose.x, pose.y], projection], '#a04715', 1.5, true);
+      const origin = planPose ?? pose;
+      if (typeof origin?.x === 'number' && typeof origin?.y === 'number')
+        path([[origin.x, origin.y], projection], '#a04715', 1.5, true);
       const [x, y] = project(projection);
       ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2);
       ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#a04715'; ctx.lineWidth = 2; ctx.stroke();
     }
+    if (doc && controlTarget) path([controlTarget.origin, controlTarget.target], '#5234aa', 2, true);
+    if (pose && typeof pose.x === 'number' && typeof pose.y === 'number') {
+      const [x, y] = project([pose.x, pose.y]); ctx.save(); ctx.translate(x, y); ctx.rotate(-(pose.yaw || 0));
+      ctx.shadowColor = '#2a806755'; ctx.shadowBlur = 12; ctx.fillStyle = '#16835e';
+      ctx.beginPath(); ctx.moveTo(13, 0); ctx.lineTo(-9, -8); ctx.lineTo(-5, 0); ctx.lineTo(-9, 8); ctx.closePath(); ctx.fill(); ctx.restore();
+    }
+    // 全周表示で先読み点が車両矢印に重なっても、輪郭を確認できるようにする。
     if (doc && controlTarget) {
-      path([controlTarget.origin, controlTarget.target], '#5234aa', 2, true);
       const [x, y] = project(controlTarget.target);
       ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2);
       ctx.strokeStyle = 'white'; ctx.lineWidth = 5; ctx.stroke();
       ctx.strokeStyle = '#5234aa'; ctx.lineWidth = 2.5; ctx.stroke();
       ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI * 2); ctx.fillStyle = '#5234aa'; ctx.fill();
     }
-    if (pose && typeof pose.x === 'number' && typeof pose.y === 'number') {
-      const [x, y] = project([pose.x, pose.y]); ctx.save(); ctx.translate(x, y); ctx.rotate(-(pose.yaw || 0));
-      ctx.shadowColor = '#2a806755'; ctx.shadowBlur = 12; ctx.fillStyle = '#16835e';
-      ctx.beginPath(); ctx.moveTo(13, 0); ctx.lineTo(-9, -8); ctx.lineTo(-5, 0); ctx.lineTo(-9, 8); ctx.closePath(); ctx.fill(); ctx.restore();
-    }
     const scaleWidth = Math.max(1, Math.floor(90 / view.scale / step)) * step * view.scale;
     ctx.strokeStyle = '#65796d'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(24, size.height - 31); ctx.lineTo(24 + scaleWidth, size.height - 31); ctx.stroke();
     ctx.fillStyle = '#65796d'; ctx.font = '11px ui-monospace, monospace'; ctx.fillText(`${(scaleWidth / view.scale).toFixed(step < 1 ? 1 : 0)} m`, 24, size.height - 40);
-  }, [doc, cloud, view, size, target, mode, selected, draft, visible, pose, project, onChange, trail, overlay, selectedGap, referenceLine, raceStrokes, forwardPath, controlTarget]);
+  }, [doc, cloud, view, size, target, mode, selected, draft, visible, pose, project, onChange, trail, overlay, selectedGap, referenceLine, raceStrokes, forwardPath, planPose, controlTarget]);
   const pointAt = (e: React.PointerEvent | React.WheelEvent): Point => { const rect = canvas.current!.getBoundingClientRect(); return [e.clientX - rect.left, e.clientY - rect.top]; };
   function zoomBy(factor: number) {
     manualView.current = true;

@@ -111,6 +111,8 @@ class BridgeNode(Node):
                        lambda m: self.cache.put('localization', observation(m)))
         self.subscribe(PlanningStatus, 'planning_topic',
                        lambda m: self.cache.put('planning', planning_observation(m)))
+        self.subscribe(ControlStatus, 'control_topic', lambda m, info: self.cache.put(
+            'control', dict(control_observation(m), publisher_gid=publisher_gid(info))))
         if environment == 'gazebo':
             self.gazebo_window = GazeboDriveWindow(self.settings['freshness_s'])
             self.subscribe(String, 'gazebo_control_topic', self.receive_gazebo)
@@ -122,8 +124,6 @@ class BridgeNode(Node):
         self.teleop_profiles = TeleopProfileStore(self.settings['teleop_profile_path'])
         self.propo_profiles = PropoProfileStore(self.settings['rc_profile_path'])
         self.vehicle_profiles = VehicleProfileStore(self.settings['vehicle_profile_path'])
-        self.subscribe(ControlStatus, 'control_topic',
-                       lambda m: self.cache.put('control', control_observation(m)))
         self.subscribe(SpeedControlStatus, 'speed_control_topic', self.speed_window.receive)
         self.subscribe(String, 'auto_drive_topic', self.receive_auto_drive, 10)
         self.speed_table_client = self.create_client(SetSpeedTable, '/control/set_speed_table')
@@ -424,9 +424,15 @@ class BridgeNode(Node):
                 plan = live_plan(self.cache, self.count_publishers(self.settings['planning_topic']), live['localization'], now)
                 if simulation:
                     gid = self.observation_gid('gazebo_control_topic', '/atd_gazebo_control')
-                    return {**live, 'planning': plan, 'gazebo': self.gazebo_window.snapshot(now, gid),
+                    snapshot = self.gazebo_window.snapshot(now, gid)
+                    control = None
+                    if snapshot['current'] and snapshot['current']['state'] == 'driving':
+                        count, pursuit_gid = self.observation_source('control_topic', '/atd_gazebo_control')
+                        if pursuit_gid:
+                            control = live_control(self.cache, count, plan, now, gid=pursuit_gid)
+                    return {**live, 'planning': plan, 'gazebo': snapshot, 'control': control,
                             'parameter_nodes': self.nodes(), 'topics': [self.settings[k] for k in
-                            ('localization_topic', 'planning_topic', 'gazebo_control_topic')]}
+                            ('localization_topic', 'planning_topic', 'gazebo_control_topic', 'control_topic')]}
                 count, gid = self.observation_source('auto_drive_topic', '/atd_auto_drive')
                 return {**live, 'planning': plan,
                         'auto_drive': self.auto_drive.current(gid, time.time_ns(), time.monotonic_ns(), count),

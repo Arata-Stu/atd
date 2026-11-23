@@ -79,6 +79,9 @@ def test_control_target_has_its_own_pose_and_requires_a_matching_fresh_plan():
     assert current['valid'] and current['vehicle_pose']['x'] == 2. and current['target'] == [3., -1.]
     assert current['steering_rad'] is None and current['config']['wheelbase_m'] is None
     assert 0 < current['remaining_s'] <= .4
+    cache.put('control', dict(status, publisher_gid='gazebo'))
+    assert live_control(cache, 1, plan, now, gid='gazebo')['target'] == [3., -1.]
+    assert live_control(cache, 1, plan, now, gid='another')['target'] is None
     for publishers, latest, clock in [
             (0, plan, now), (2, plan, now), (1, None, now), (1, dict(plan, valid=False), now),
             (1, dict(plan, epoch=9), now), (1, dict(plan, session_id='restart'), now),

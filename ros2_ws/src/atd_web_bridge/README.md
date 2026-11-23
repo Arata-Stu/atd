@@ -26,6 +26,7 @@ node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_a
 | --- | --- | --- |
 | /planning/status | atd_interfaces/msg/PlanningStatus | 選択ライン・前方軌道と元の車体姿勢・横ずれ・速度。有効期限と自己位置の地図・追跡世代を照合して `/live/status` の `planning` に返す |
 | /control/status | atd_interfaces/msg/ControlStatus | `/live/status` の `control` に、同じ観測の後輪軸姿勢と目標点、曲率、等価前輪舵角、先読み設定を返す。舵角を計算できない場合は null |
+| /atd/gazebo/pursuit_status | atd_interfaces/msg/ControlStatus | Gazebo 接続時の `control`。仮想車両の操舵を計算した画像時刻の後輪軸姿勢と先読み点を map 座標 [m] で返す。待機・失効・停止時は点を無効にする。 |
 | /control/speed_status | atd_interfaces/msg/SpeedControlStatus | `speed_control` に目標・推定速度、計算 CH2、プロポ手動 CH2、正規化された DualSense 入力、操作経路と直近 5 秒の履歴を返す |
 | /vehicle/auto_drive/status | std_msgs/msg/String (JSON) | 低速自動走行で、CH3・操作元、実際の送信指令と基板報告 PWM、速度、停止理由をライブ画面へ返す。速度の元時刻、USB 送信時刻、基板報告の受信時刻を保つ |
 | /localization/odometry | nav_msgs/msg/Odometry | poseとvelocity。速度はchild_frame_id |

@@ -142,7 +142,7 @@ atd gazebo closed-loop --course odaiba --map gazebo --line centerline --speed 1.
 
 Web UI 更新時は Notebook の Isaac ROS コンテナで `atd-web prepare` を一度実行し、`atd-web` を起動する。「ライブ」の観測先で **Gazebo（Notebook）** を選ぶと、同じ Notebook 上の bridge から自己位置と走行ライン、目標・推定速度、操舵角指令、スロットル指令を確認できる。折れ線の時間軸はシミュレーション秒。走行中にブラウザを閉じても計測は続く。[ライブ画面](http://127.0.0.1:8766/#live)
 
-「パラメータ調整」で `/atd_gazebo_control` を選び、「現在値を取得」して変更した値を適用する。実行中の速度上限は起動時の `--speed` まで変更できる。Pure Pursuit の先読み距離・先読み時間や速度 PID も試せる。変更はその試行に適用され、`closed_loop.ros.log` に変更値とシミュレーション時刻が残る。
+走行地図では、紫の丸がその操舵指令を計算した Pure Pursuit の先読み点を示す。後輪軸から先読み点までの直線距離 [m] を地図の凡例に表示する。「詳細・設定」→「パラメータ調整」で `/atd_gazebo_control` を選び、「現在値を取得」して先読み時間を変えると、次の制御計算で選んだ点を地図上で確認できる。速度上限（起動時の `--speed` まで）や速度 PID も調整できる。変更はその試行に適用され、`closed_loop.ros.log` に変更値とシミュレーション時刻が残る。
 
 ### 走行後に接触直前を確認する
 

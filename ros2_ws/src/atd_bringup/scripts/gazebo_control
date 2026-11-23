@@ -6,15 +6,16 @@ import json
 
 import rclpy
 from rcl_interfaces.msg import SetParametersResult
-from atd_interfaces.msg import LocalizationStatus, PlanningStatus
+from atd_interfaces.msg import ControlStatus, LocalizationStatus, PlanningStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
 from atd_bringup.gazebo_control import GazeboController, default_min_lookahead, simulation_table
-from atd_control.bicycle import resolve_full_throttle_speed
-from atd_control.core import LookaheadConfig
+from atd_control.bicycle import WHEELBASE_M, resolve_full_throttle_speed
+from atd_control.core import LookaheadConfig, unavailable
+from atd_control.monitor import pursuit_status
 from atd_control.speed import PIDConfig
 
 
@@ -36,6 +37,7 @@ class GazeboControlNode(Node):
         self.actuators = self.create_publisher(JointState, '/atd/gazebo/actuators', 1)
         status_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.status = self.create_publisher(String, '/atd/gazebo/control_state', status_qos)
+        self.pursuit = self.create_publisher(ControlStatus, '/atd/gazebo/pursuit_status', 1)
         self.last_status = None
         self.last_report_ns = 0
         self.observers = [
@@ -99,6 +101,14 @@ class GazeboControlNode(Node):
             if drive is not None:
                 report.update(controller.observation, steering_rad=drive[1], throttle=drive[2])
             self.status.publish(String(data=json.dumps(report, ensure_ascii=False, allow_nan=False)))
+            if self.pursuit.get_subscription_count():
+                if drive is None:
+                    msg = pursuit_status(None, unavailable(controller.reason), controller.lookahead, WHEELBASE_M)
+                else:
+                    plan, pose, steering = controller.pursuit_sample
+                    msg = pursuit_status(plan, steering, controller.lookahead, WHEELBASE_M, pose=pose,
+                                         validity_limit=(controller.expires - controller.stamp) * 1e-9)
+                self.pursuit.publish(msg)
 
 
 def main():

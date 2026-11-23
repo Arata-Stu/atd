@@ -34,11 +34,12 @@ def observation(message):
                 preview_limited=message.preview_limited)
 
 
-def live_control(cache, publishers, plan, ros_now):
+def live_control(cache, publishers, plan, ros_now, *, gid=None):
     control = cache.get('control')
     if control is None:
         return None
-    if publishers != 1:
+    source_gid = control.pop('publisher_gid', None)
+    if publishers != 1 or (gid is not None and gid != source_gid):
         return _invalid(control, '操舵計算の配信元が一つに定まりません')
     if not control['valid']:
         return control

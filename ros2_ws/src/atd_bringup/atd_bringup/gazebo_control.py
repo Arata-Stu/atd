@@ -61,6 +61,7 @@ class GazeboController:
         self.pid = SpeedController(table, pid)
         self.locations, self.plans = {}, {}
         self.observation = None
+        self.pursuit_sample = None
         self.session = None
         self.state, self.reason = 'waiting', '保存地図での自己位置推定と走行指令を待っています'
         self.stamp = self.expires = self.clock_ns = 0
@@ -94,6 +95,7 @@ class GazeboController:
             if self.stamp:
                 self.state = 'stopped'
         self.observation = None
+        self.pursuit_sample = None
         self.locations.clear()
         self.plans.clear()
         self.pid.reset()
@@ -102,6 +104,7 @@ class GazeboController:
         if self.state == 'driving':
             self.state, self.reason = 'waiting_observation', reason
             self.observation = None
+            self.pursuit_sample = None
             self.pid.reset()
 
     def tick(self, now):
@@ -206,5 +209,6 @@ class GazeboController:
                                 estimated_speed_mps=measured, profile_target_mps=plan.target_speed_mps,
                                 target_speed_mps=target, lateral_error_m=plan.lateral_error_m,
                                 feedforward_ch2_raw=speed['feedforward_raw'], calculated_ch2_raw=speed['calculated_raw'])
+        self.pursuit_sample = plan, pose.pose, steering
         self.state, self.reason = 'driving', ''
         return (stamp, angle, throttle)

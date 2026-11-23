@@ -59,7 +59,8 @@ def test_live_dispatch_serves_actual_control_state_and_rejects_an_ambiguous_publ
     node.cache = Cache()
     node.gazebo_window = GazeboDriveWindow(2.5)
     node.settings = dict(localization_topic='/localization/status', planning_topic='/planning/status',
-                         gazebo_control_topic='/atd/gazebo/control_state', parameter_node_prefix='/atd_gazebo_control')
+                         gazebo_control_topic='/atd/gazebo/control_state', control_topic='/atd/gazebo/pursuit_status',
+                         parameter_node_prefix='/atd_gazebo_control')
     node.get_clock = Mock()
     node.get_clock.return_value.now.return_value.nanoseconds = 2 * 10**9
     node.count_publishers = Mock(return_value=0)
@@ -69,7 +70,18 @@ def test_live_dispatch_serves_actual_control_state_and_rejects_an_ambiguous_publ
     node.receive_gazebo(SimpleNamespace(data=json.dumps(report(2 * 10**9))), {'publisher_gid': {'data': b'writer'}})
     result = node.dispatch('/live/status', 'GET', {})
     assert result['gazebo']['current']['steering_rad'] == -.15
+    assert result['control'] is None
     assert result['parameter_nodes'] == ['/atd_gazebo_control']
     assert result['pose'] is None and 'auto_drive' not in result
+    source = dict(map_id='odaiba', map_sha256='a'*64, hdmap_sha256='b'*64, session_id='run', epoch=1, stamp=1.95)
+    node.count_publishers.return_value = 1
+    node.cache.put('localization', dict(source, state='tracking', pose={'x': 1., 'y': 2.}, velocity={}))
+    plan = dict(source, valid=True, validity_s=.5, line='centerline')
+    node.cache.put('planning', plan)
+    node.cache.put('control', dict(plan, publisher_gid=b'writer'.hex(), target=[1.3, 2.4], validity_s=.25))
+    assert node.dispatch('/live/status', 'GET', {})['control']['target'] == [1.3, 2.4]
+    stopped = json.dumps(report(2 * 10**9, 'stopped'))
+    node.receive_gazebo(SimpleNamespace(data=stopped), {'publisher_gid': {'data': b'writer'}})
+    assert node.dispatch('/live/status', 'GET', {})['control'] is None
     node.get_publishers_info_by_topic.return_value.append(endpoint)
     assert node.dispatch('/live/status', 'GET', {})['gazebo']['current'] is None

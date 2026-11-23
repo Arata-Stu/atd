@@ -4,12 +4,19 @@ import { ReferenceLineLegend } from './SpeedLegend';
 import { mapIssue, trackingLabels, trackingPose } from './localization_view';
 import type { MapReference } from './localization_view';
 import { captureRoute, LINE_NAMES } from './planning_view';
+import { controlOverlay, liveControlIssue } from './control_view';
 import type { Point } from './types';
 import type { LiveStatus } from './workspace_types';
 
-export function CaptureMap({status, reference, trail, enabled, expired, planExpired, error, reload}: {
+export function LookaheadLegend({distance}: {distance?: number | null}) {
+  return <span title="Pure Pursuit の計算時の後輪軸から先読み点までの直線距離">
+    <i className="control-target"/>先読み点 {distance == null ? '—' : `${distance.toFixed(2)} m`}
+  </span>;
+}
+
+export function CaptureMap({status, reference, trail, enabled, expired, planExpired, controlExpired, error, reload}: {
   status: LiveStatus | null; reference: MapReference | null; trail: Point[];
-  enabled: boolean; expired: boolean; planExpired: boolean; error: string; reload: () => void;
+  enabled: boolean; expired: boolean; planExpired: boolean; controlExpired: boolean; error: string; reload: () => void;
 }) {
   const loc = status?.localization;
   const mismatch = loc && reference ? mapIssue(loc, reference) : '';
@@ -19,7 +26,8 @@ export function CaptureMap({status, reference, trail, enabled, expired, planExpi
   const pose = doc && enabled && !expired ? trackingPose(status) : null;
   const {line, plan, issue: routeIssue} = captureRoute(status, expired || planExpired);
   const hasLine = !!doc && !!line && (doc.lines[line]?.points?.length ?? 0) >= 2;
-  const path = hasLine && pose && plan?.stamp === pose.stamp ? plan?.trajectory : undefined;
+  const path = hasLine && pose ? plan?.trajectory : undefined;
+  const control = hasLine && pose && plan && !liveControlIssue(status, controlExpired) ? status?.control : null;
   const mapId = loc?.map_id || status?.auto_drive?.current?.map_id;
   const mapLabel = doc?.title && doc.title !== mapId ? `${doc.title} (${mapId})` : mapId;
   let issue = mismatch || error;
@@ -36,12 +44,14 @@ export function CaptureMap({status, reference, trail, enabled, expired, planExpi
     <header className="capture-map-heading"><h4>走行地図と自己位置</h4><span>{tracking}</span></header>
     <p className="capture-map-id">{mapLabel || '地図未確認'} · {line ? LINE_NAMES[line] : 'ライン未確認'}</p>
     {doc && <MapCanvas doc={doc} autoFit referenceLine={hasLine ? line : null}
-      pose={pose} trail={pose ? trail : []} forwardPath={path}/>}
+      pose={pose} trail={pose ? trail : []} forwardPath={path} planPose={plan?.vehicle_pose}
+      controlTarget={controlOverlay(control, control?.vehicle_pose)}/>}
     {doc && <div className="capture-map-legend planning-legend">
       {line && hasLine && <ReferenceLineLegend raceline={line === 'raceline' ? doc.lines.raceline : undefined}>
         <span><i/>{LINE_NAMES[line]}</span>
       </ReferenceLineLegend>}
       {!!path?.length && <span><i className="plan-path"/>前方軌道</span>}
+      {hasLine && <LookaheadLegend distance={control?.actual_lookahead_m}/>}
       {!!pose && <><span><i className="plan-trail"/>実走軌跡</span><span>矢印は車両の向き</span></>}
     </div>}
     {pose && loc && <p className="capture-map-meta">X {pose.x.toFixed(2)} m · Y {pose.y.toFixed(2)} m ·

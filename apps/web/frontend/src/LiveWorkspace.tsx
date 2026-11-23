@@ -11,6 +11,7 @@ import { PlanningMetrics } from './PlanningMetrics';
 import { AutoDrivePanel } from './AutoDrivePanel';
 import { LiveSpeed } from './LiveSpeed';
 import { MapCanvas } from './MapCanvas';
+import { ReferenceLineLegend } from './SpeedLegend';
 import { CaptureMap } from './CaptureMap';
 import { Field, Icon, Tag } from './workspace_ui';
 
@@ -170,7 +171,12 @@ export function LiveWorkspace({notify, capture, onCapture}: {
         </ControlReadout></div>
       <MapCanvas doc={doc} controlTarget={controlOverlay(controlFrame, controlFrame?.vehicle_pose)} cloud={doc ? cloud : null} referenceLine={displayedLine} forwardPath={planFrame?.trajectory}
         pose={planFrame?.vehicle_pose || mapPose} trail={mapPose ? trail : []}/>
-      <div className="planning-legend"><span><i/>{LINE_NAMES[displayedLine]}</span><span><i className="plan-path"/>前方軌道</span><span><i className="control-target"/>追従点</span><span><i className="plan-trail"/>実走軌跡</span><span>矢印は車両の向き</span></div>
+      <div className="planning-legend">
+        <ReferenceLineLegend raceline={displayedLine === 'raceline' ? doc?.lines.raceline : undefined}>
+          <span><i/>{LINE_NAMES[displayedLine]}</span>
+        </ReferenceLineLegend>
+        <span><i className="plan-path"/>前方軌道</span><span><i className="control-target"/>追従点</span><span><i className="plan-trail"/>実走軌跡</span><span>矢印は車両の向き</span>
+      </div>
       {(issue || mapError) && <div className="inline-note" role="status"><span>{mapError ? `Notebook の地図「${selectedId}」を確認してください。${mapError}` : issue}</span>
         <button className="button small" onClick={() => setMapReload(n => n + 1)}>地図を再読込</button></div>}
       {doc && !doc.lines[displayedLine]?.points?.length && <p className="inline-note">この地図には {LINE_NAMES[displayedLine]} が保存されていません。</p>}

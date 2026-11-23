@@ -3,6 +3,8 @@ import { api } from './api';
 import { around, chartsFor, poseAt, runKey, statuses, timeBounds, valueAt } from './closed_loop';
 import type { ClosedLoopDetail, GazeboRun, XY } from './closed_loop';
 import { ClosedLoopMap, TimelinePlot } from './ClosedLoopPlots';
+import { SpeedLegend } from './SpeedLegend';
+import { speedScale } from './raceline_speed';
 import { Empty, Field, Icon } from './ui';
 import './replay_errors.css';
 import './closed_loop.css';
@@ -19,6 +21,7 @@ function RunTimeline({data}: {data:ClosedLoopDetail}) {
   const [focus,setFocus] = useState(data.contact_s !== null);
   const [cursor,setCursor] = useState<number|null>(null);
   const [showCurrent,setShowCurrent] = useState(false);
+  const lineScale = useMemo(()=>data.run.line === 'raceline' ? speedScale(data.reference_speeds_mps,data.reference.length) : null,[data]);
   const event = data.contact_s ?? full?.[1] ?? 0;
   const span = useMemo(()=>full && focus ? around(event,full) : full,[full,focus,event]);
   if (!span) return <p className="cl-missing" role="status">この試行には時刻付きの走行データがありません。</p>;
@@ -50,13 +53,14 @@ function RunTimeline({data}: {data:ClosedLoopDetail}) {
         <header><h3>走行軌跡</h3><span>Gazebo world · 後輪軸</span></header>
         <div className="replay-legend cl-legend">
           <span className="replay-truth">Gazebo GT</span><span className="replay-estimate">推定軌跡</span>
-          {showLine && <span className="cl-reference">{data.run.line ?? '選択ライン'}{currentMap && '（現在の地図）'}</span>}
+          {showLine && !lineScale && <span className="cl-reference">{data.run.line ?? '選択ライン'}{currentMap && '（現在の地図）'}</span>}
           {data.boundaries.left.length>0 && <span className="cl-wall">舗装境界</span>}
         </div>
         {currentMap && lineAvailable && <label className="cl-toggle"><input type="checkbox" checked={showCurrent} onChange={e=>setShowCurrent(e.target.checked)}/>
           現在の地図のラインを参考表示（走行時との一致は未確認）</label>}
         {!lineAvailable && <p className="cl-missing">この試行に重ねられる選択ラインがありません。</p>}
-        <ClosedLoopMap run={data} span={span} focus={focus} showLine={showLine} at={at} select={setCursor}/>
+        {showLine && lineScale && <SpeedLegend scale={lineScale}/>}
+        <ClosedLoopMap run={data} span={span} focus={focus} showLine={showLine} lineScale={showLine ? lineScale : null} at={at} select={setCursor}/>
         <p className="cl-guide">+X 右・+Y 上{data.footprint && ' · 矩形は選択時刻の GT 車体外形'}{isContact && ' · × は接触判定時の後輪軸'}</p>
         <label className="replay-slider"><span>シミュレーション時刻 <output>{at.toFixed(3)} s</output></span>
           <input aria-label="シミュレーション時刻（秒）" type="range" min={span[0]} max={span[1]} step="any" value={at}

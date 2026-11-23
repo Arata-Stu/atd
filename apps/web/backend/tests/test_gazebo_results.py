@@ -38,7 +38,8 @@ def archive(tmp_path):
     save(folder/'closed_loop.host.json', dict(map_id='map1', line='raceline', started=50))
     save(folder/'scene/scene.json', dict(course_evaluation=dict(frame='gazebo_world', left=LEFT, right=RIGHT,
                                                                  footprint=LEGACY_FOOTPRINT)))
-    doc = dict(id='map1', frame='map', closed=True, lines=dict(raceline=dict(points=[[10, 20], [10, 21], [11, 20]])))
+    doc = dict(id='map1', frame='map', closed=True,
+               lines=dict(raceline=dict(points=[[10, 20], [10, 21], [11, 20]], speeds=[.5, 2, 1.2])))
     save(folder/'hdmap.json', doc)
     digest = hashlib.sha256((folder/'hdmap.json').read_bytes()).hexdigest()
     save(folder/'closed_loop.reference.json', dict(map_id='map1', frame='map', line='raceline', hdmap_sha256=digest))
@@ -73,6 +74,7 @@ def test_contact_review_uses_image_stamp_and_archived_line(archive):
     data = response.json()
     assert data['reference_source'] == 'snapshot'
     assert data['reference'][1] == pytest.approx([1.025, 0])
+    assert data['reference_speeds_mps'] == [.5, 2, 1.2]
     assert data['anchor_s'] == 1.025 and data['contact_s'] == 1.15
     a, b = data['estimates']
     assert b['x'] == pytest.approx(.075)
@@ -158,10 +160,40 @@ def test_verified_current_map_and_noncontact_finish(archive):
     assert data['contact_s'] is None
     assert data['run']['lap_times_s'] == [.15]
     assert data['reference_source'] == 'verified_map'
+    assert data['reference_speeds_mps'] == [.5, 2, 1.2]
     doc = json.loads(path.read_bytes())
     doc['lines']['raceline']['points'][1][0] += .3
+    doc['lines']['raceline']['speeds'][1] = 3
     save(path, doc)
-    assert api.get(URL+RUN).json()['reference_source'] == 'current_map'
+    current = api.get(URL+RUN).json()
+    assert current['reference_source'] == 'current_map'
+    assert current['reference_speeds_mps'] == [.5, 3, 1.2]
+
+
+@pytest.mark.parametrize('speeds,profile,expected', [
+    (None, 'missing', []), (None, 'aligned', [.5, 2, 1.2]), (None, 'misaligned', []),
+    ([1, 2], 'aligned', []), ([.5, None, 1.2], 'aligned', []), ([.5, -1, 1.2], 'aligned', []),
+])
+def test_legacy_or_invalid_speed_profile_keeps_the_reference_geometry(archive, speeds, profile, expected):
+    api, folder, _ = archive
+    doc = json.loads((folder/'hdmap.json').read_bytes())
+    line = doc['lines']['raceline']
+    if profile != 'missing':
+        stations = [0, 1, 1 + math.sqrt(2)]
+        line['profile'] = [[s, x, y, 0, 0, v, 0] for s, (x, y), v in zip(stations, line['points'], line['speeds'])]
+        if profile == 'misaligned':
+            line['profile'][1][1] += 1
+    if speeds is None:
+        del line['speeds']
+    else:
+        line['speeds'] = speeds
+    save(folder/'hdmap.json', doc)
+    meta = json.loads((folder/'closed_loop.reference.json').read_bytes())
+    meta['hdmap_sha256'] = hashlib.sha256((folder/'hdmap.json').read_bytes()).hexdigest()
+    save(folder/'closed_loop.reference.json', meta)
+    data = api.get(URL+RUN).json()
+    assert data['reference_source'] == 'snapshot' and len(data['reference']) == 3
+    assert data['reference_speeds_mps'] == expected
 
 
 def test_no_extrapolation_wrap_yaw_and_protect_contact_samples():

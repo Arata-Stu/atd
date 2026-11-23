@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { api, bytes } from './api';
 import type { Bag, CaptureOptions, Cloud, EditTarget, GenerationSettings, Job, LineKind, MapDocument, RacelineLimitKey } from './types';
 import { MapCanvas } from './MapCanvas';
+import { ReferenceLineLegend } from './SpeedLegend';
 import { Field, Icon, Modal, Tag } from './workspace_ui';
 import { CaptureModal, PreparationPanel } from './MapPreparation';
 import { VglExportsModal } from './VglExportsModal';
@@ -256,7 +257,14 @@ export function MapWorkspace({ notify, onDirty, onJob, jobs, onTransfer }: Props
       <div className="map-canvas-stage"><MapCanvas doc={doc} cloud={cloud} target={target} mode={editable ? mode : 'pan'} visible={visible} fitKey={fitKey} onChange={editable ? (key, points) => doc && change({ ...doc, [key]: points, lines: key === 'custom' ? Object.fromEntries(Object.entries(doc.lines).filter(([line]) => line !== 'custom')) : {} }) : undefined}/>
         {nvidia && editIssue && !mapWorking && <div className="capture-stage"><span className="empty-icon"><Icon name="map" size={27}/></span><h3>点群を取得して、編集を始める。</h3><p>cuVSLAM地図は作成済みです。<br/>{capture?.vgl_ready ? '元bagとVGLモデルは自動で選択します。' : 'VGL地図の準備後に、保存地図から点群を取得します。'}</p><button className="button primary" disabled={locked || captureLoading} onClick={() => setShowCapture(true)}><Icon name="arrow" size={16}/>点群取得の準備を確認</button></div>}
       </div>
-      <footer className="editor-footer"><div className="legend">{['centerline', 'raceline', 'custom'].map(line => <label key={line}><input type="checkbox" checked={visible[line]} onChange={e => setVisible({ ...visible, [line]: e.target.checked })}/><i className={line}/>{line === 'centerline' ? 'Center' : line === 'raceline' ? 'Race' : 'Custom'}</label>)}</div><span>右ドラッグで移動 · ホイールで拡大</span></footer>
+      <footer className="editor-footer"><div className="legend">
+        {['centerline', 'raceline', 'custom'].map(line => <label key={line}>
+          <input type="checkbox" aria-label={`${line} を表示`} checked={visible[line]} onChange={e => setVisible({ ...visible, [line]: e.target.checked })}/>
+          <ReferenceLineLegend raceline={line === 'raceline' && visible.raceline ? doc?.lines.raceline : undefined}>
+            <i className={line}/>{line === 'centerline' ? 'Center' : line === 'raceline' ? 'Race' : 'Custom'}
+          </ReferenceLineLegend>
+        </label>)}
+      </div><span>右ドラッグで移動 · ホイールで拡大</span></footer>
     </section>
     <aside className="properties-panel">
       <div className="panel-title"><span>地図の設定</span><Icon name="settings" size={17}/></div>

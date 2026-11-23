@@ -1,6 +1,8 @@
 import { useMemo, type PointerEvent } from 'react';
 import { maxGap, poseAt, valueAt, windowRows } from './closed_loop';
 import type { Chart, ClosedLoopDetail, Pose, Series, Span, XY } from './closed_loop';
+import { RacelineSpeedPath } from './RacelineSpeedPath';
+import type { SpeedScale } from './raceline_speed';
 
 const truth = '#1878a0', estimate = '#ad511c', reference = '#577743', contact = '#a73532';
 const between = (n:number, [lo,hi]:Span) => n >= lo && n <= hi;
@@ -14,8 +16,9 @@ function format(value:number|null, digits:number, unit:string) {
   return value === null ? '—' : value.toFixed(digits) + ' ' + unit;
 }
 
-export function ClosedLoopMap({run,span,focus,showLine,at,select}: {
-  run:ClosedLoopDetail; span:Span; focus:boolean; showLine:boolean; at:number; select:(t:number)=>void;
+export function ClosedLoopMap({run,span,focus,showLine,lineScale,at,select}: {
+  run:ClosedLoopDetail; span:Span; focus:boolean; showLine:boolean; lineScale:SpeedScale | null;
+  at:number; select:(t:number)=>void;
 }) {
   const picture = useMemo(() => {
     const gt = windowRows(run.samples,span), est = windowRows(run.estimates,span);
@@ -39,7 +42,8 @@ export function ClosedLoopMap({run,span,focus,showLine,at,select}: {
       return (newSegment ? 'M' : 'L') + point(x(p.x),y(p.y)) + (newSegment ? 'l0 0' : '');
     }).join(' ');
     return {x,y,scale,bar:10 ** Math.floor(Math.log10(80/scale)), gt,est, gtPath:trace(gt), estPath:trace(est),
-      line:course(line), walls:[course(run.boundaries.left),course(run.boundaries.right)]};
+      line:course(line), linePoints:line.map(([a,b]):XY=>[x(a),y(b)]),
+      walls:[course(run.boundaries.left),course(run.boundaries.right)]};
   },[run,span,focus,showLine]);
 
   if (!picture) return <p className="cl-missing">この範囲に描画できる座標がありません。</p>;
@@ -63,7 +67,9 @@ export function ClosedLoopMap({run,span,focus,showLine,at,select}: {
     <defs><pattern id="cl-map-grid" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".8" fill="#c6d2c9"/></pattern></defs>
     <rect width="500" height="350" fill="url(#cl-map-grid)"/>
     {picture.walls.map((d,i)=><path key={i} d={d} fill="none" stroke="#8b9990" strokeWidth="1.4"/>)}
-    <path d={picture.line} fill="none" stroke={reference} strokeWidth="2.3" strokeDasharray="2 4" strokeLinecap="round"/>
+    {lineScale && run.reference_speeds_mps
+      ? <RacelineSpeedPath points={picture.linePoints} speeds={run.reference_speeds_mps} scale={lineScale} width={5.5}/>
+      : <path d={picture.line} fill="none" stroke={reference} strokeWidth="2.3" strokeDasharray="2 4" strokeLinecap="round"/>}
     <path d={picture.gtPath} fill="none" stroke={truth} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>
     <path d={picture.estPath} fill="none" stroke={estimate} strokeWidth="2.2" strokeDasharray="7 3" strokeLinecap="round"/>
     {gt && est && <line x1={x(gt[0])} y1={y(gt[1])} x2={x(est[0])} y2={y(est[1])} stroke="#243b32" strokeWidth="1.5"/>}

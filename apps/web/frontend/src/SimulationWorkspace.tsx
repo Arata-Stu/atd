@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { Icon } from './ui';
 import { BenchmarkResults, type Circuit } from './BenchmarkResults';
 import { ACTIVE, STATUS } from './job_status';
 import type { Job } from './types';
 import { CourseOverlay, TimePlots } from './SimulationPlots';
+import { speedScale, type SpeedScale } from './raceline_speed';
+import { SpeedLegend } from './SpeedLegend';
 import { defaultSettings, modeColor, modeLabel, sampleAt } from './simulation';
 import type { Comparison, SimSettings } from './simulation';
 import './simulation.css';
@@ -30,9 +32,9 @@ function Inputs({ controls }: { controls: Control[] }) {
   </label>)}</div>;
 }
 
-function Legend({ reference = false }: { reference?: boolean }) {
+function Legend({ reference = false, lineScale }: { reference?: boolean; lineScale?: SpeedScale | null }) {
   return <div className="sim-legend" aria-label="凡例">
-    {reference && <span><i className="sim-swatch reference"/>基準ライン</span>}
+    {lineScale ? <SpeedLegend scale={lineScale}/> : reference && <span><i className="sim-swatch reference"/>基準ライン</span>}
     <span><i className="sim-swatch fixed"/>固定</span>
     <span><i className={'sim-swatch ' + (reference ? 'adaptive dashed' : 'adaptive')}/>速度連動</span>
   </div>;
@@ -40,6 +42,8 @@ function Legend({ reference = false }: { reference?: boolean }) {
 
 function Results({ result }: { result: Comparison }) {
   const [time, setTime] = useState(0);
+  const { course } = result;
+  const lineScale = useMemo(() => course.line === 'raceline' ? speedScale(course.speeds_mps, course.points.length) : null, [course]);
   const end = Math.max(result.model.dt_s, ...result.runs.map(run => run.samples.at(-1)?.t_s ?? 0));
   const step = result.model.dt_s;
   const select = (t: number) => setTime(Math.max(0, Math.min(end, Number((Math.round(t/step)*step).toFixed(6)))));
@@ -47,8 +51,8 @@ function Results({ result }: { result: Comparison }) {
     <div className="sim-grid">
       <section className="sim-card sim-track">
         <div className="sim-section-title"><h2>走行軌跡</h2><span>{result.course.name} · {result.course.length_m.toFixed(1)} m</span></div>
-        <Legend reference/>
-        <CourseOverlay result={result} time={time}/>
+        <Legend reference lineScale={lineScale}/>
+        <CourseOverlay result={result} time={time} lineScale={lineScale}/>
         <div className="sim-track-foot"><span>矢印は車両の向き、○ は先読み点{result.course.left && '、× は接触時の車両位置'}</span><span>+X 右 / +Y 上</span></div>
         <label className="sim-scrubber"><span>比較時刻 <output>{time.toFixed(2)} <small>s</small></output></span>
           <input type="range" min="0" max={end} step={step} value={time} onChange={e => select(e.target.valueAsNumber)} aria-label="比較時刻（秒）"/>

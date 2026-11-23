@@ -1,4 +1,6 @@
 import { useMemo } from 'react';
+import { RacelineSpeedPath } from './RacelineSpeedPath';
+import type { SpeedScale } from './raceline_speed';
 import { modeColor, modeLabel, sampleAt } from './simulation';
 import type { Comparison, Point, SimRun, SimSample } from './simulation';
 
@@ -6,7 +8,7 @@ function xyLine(points: Point[], x: (v: number) => number, y: (v: number) => num
   return points.map(p => x(p.x_m).toFixed(2) + ',' + y(p.y_m).toFixed(2)).join(' ');
 }
 
-export function CourseOverlay({ result, time }: { result: Comparison; time: number }) {
+export function CourseOverlay({ result, time, lineScale }: { result: Comparison; time: number; lineScale: SpeedScale | null }) {
   const view = useMemo(() => {
     const w = 500, h = 324, pad = 30;
     let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
@@ -21,7 +23,8 @@ export function CourseOverlay({ result, time }: { result: Comparison; time: numb
     const x = (v: number) => w/2 + (v - (xmax + xmin)/2) * scale;
     const y = (v: number) => h/2 - (v - (ymax + ymin)/2) * scale;
     const barMeters = 10 ** Math.floor(Math.log10(90 / scale));
-    return { x, y, scale, barMeters, reference: xyLine(result.course.points, x, y),
+    const reference = result.course.points.map((p): [number, number] => [x(p.x_m), y(p.y_m)]);
+    return { x, y, scale, barMeters, reference, referencePath: reference.join(' '),
       edges: [result.course.left, result.course.right].map(edge => edge ? xyLine(edge, x, y) : ''),
       traces: result.runs.map(run => ({ mode: run.mode, line: xyLine(run.samples, x, y) })) };
   }, [result]);
@@ -29,8 +32,12 @@ export function CourseOverlay({ result, time }: { result: Comparison; time: numb
     <defs><pattern id="sim-grid" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" fill="#c8d5cc"/></pattern></defs>
     <rect width="500" height="324" fill="url(#sim-grid)"/>
     {view.edges.map((edge,i) => edge && <polygon key={i} points={edge} fill="none" stroke="#66786c" strokeWidth="1"/>)}
-    <polygon points={view.reference} fill="none" stroke="#77857c" strokeWidth="6" strokeOpacity=".32"/>
-    <polygon points={view.reference} fill="none" stroke="#5e7063" strokeWidth="1.6" strokeDasharray="4 4"/>
+    {lineScale && result.course.speeds_mps
+      ? <RacelineSpeedPath points={view.reference} speeds={result.course.speeds_mps} scale={lineScale} width={6}/>
+      : <>
+        <polygon points={view.referencePath} fill="none" stroke="#77857c" strokeWidth="6" strokeOpacity=".32"/>
+        <polygon points={view.referencePath} fill="none" stroke="#5e7063" strokeWidth="1.6" strokeDasharray="4 4"/>
+      </>}
     {view.traces.map(trace => <polyline key={trace.mode} points={trace.line} fill="none" stroke={modeColor[trace.mode]}
       strokeWidth={trace.mode === 'fixed' ? 3.3 : 2.2} strokeDasharray={trace.mode === 'adaptive' ? '7 3' : undefined} strokeLinejoin="round"/>)}
     {result.runs.map(run => run.collision && <path key={run.mode} d="M -4 -4 L 4 4 M 4 -4 L -4 4"

@@ -17,7 +17,7 @@ export type GazeboRun = {
 };
 export type ClosedLoopDetail = {
   run: GazeboRun; samples: Sample[]; estimates: Estimate[]; vslam: Vslam[]; reference: XY[];
-  reference_source: 'snapshot' | 'verified_map' | 'current_map' | 'missing';
+  reference_speeds_mps?: number[]; reference_source: 'snapshot' | 'verified_map' | 'current_map' | 'missing';
   boundaries: {left: XY[]; right: XY[]}; contact_s: number | null; warnings: string[]; anchor_s: number | null;
   footprint: {vehicle_length: number; vehicle_width: number; rear_axle_to_rear: number} | null;
 };

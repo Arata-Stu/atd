@@ -1,5 +1,6 @@
 import { clockText } from './live_timing';
 import { MapCanvas } from './MapCanvas';
+import { ReferenceLineLegend } from './SpeedLegend';
 import { mapIssue, trackingLabels, trackingPose } from './localization_view';
 import type { MapReference } from './localization_view';
 import { captureRoute, LINE_NAMES } from './planning_view';
@@ -37,7 +38,9 @@ export function CaptureMap({status, reference, trail, enabled, expired, planExpi
     {doc && <MapCanvas doc={doc} autoFit referenceLine={hasLine ? line : null}
       pose={pose} trail={pose ? trail : []} forwardPath={path}/>}
     {doc && <div className="capture-map-legend planning-legend">
-      {line && hasLine && <span><i/>{LINE_NAMES[line]}</span>}
+      {line && hasLine && <ReferenceLineLegend raceline={line === 'raceline' ? doc.lines.raceline : undefined}>
+        <span><i/>{LINE_NAMES[line]}</span>
+      </ReferenceLineLegend>}
       {!!path?.length && <span><i className="plan-path"/>前方軌道</span>}
       {!!pose && <><span><i className="plan-trail"/>実走軌跡</span><span>矢印は車両の向き</span></>}
     </div>}

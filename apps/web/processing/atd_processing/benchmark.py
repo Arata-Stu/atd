@@ -128,6 +128,7 @@ def compare_course(document, settings=None, *, line='raceline', laps=2, trial=1,
         return [dict(x_m=x, y_m=y) for x, y in points]
 
     return dict(course=dict(id=document['id'], name=document.get('title') or document['id'],
+                            line=line, speeds_mps=course.reference.speeds,
                             length_m=course.reference.length, points=xy(document['lines'][line]['points']),
                             left=xy(document['left']), right=xy(document['right'])),
                 model=course.model(), settings=course.settings, trial=trial,

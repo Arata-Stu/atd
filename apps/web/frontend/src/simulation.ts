@@ -16,7 +16,8 @@ export const defaultSettings = {
 };
 export type SimSettings = typeof defaultSettings;
 export interface Comparison {
-  course: { name: string; points: Point[]; length_m: number; left?: Point[]; right?: Point[] };
+  course: { name: string; points: Point[]; length_m: number; left?: Point[]; right?: Point[];
+    line?: string; speeds_mps?: number[] };
   model: { wheelbase_m: number; steering_limit_deg: number; dt_s: number; laps: number };
   settings: SimSettings; runs: SimRun[];
 }

@@ -42,6 +42,8 @@ def test_paired_trials_lap_metrics_and_detailed_replay_agree():
         assert 0 <= run['elapsed_s'] - sum(run['lap_times_s']) <= data['model']['dt_s']
         assert run['lap_times_s'][0] > run['lap_times_s'][1]  # First lap starts from rest.
     trace = compare_course(doc, config, trial=2)
+    assert trace['course']['line'] == 'raceline'
+    assert trace['course']['speeds_mps'] == [row[5] for row in doc['lines']['raceline']['profile']]
     assert trace['course']['left'][0]['x_m'] == doc['left'][0][0]
     assert trace['runs'][0]['lap_times_s'] == fixed['runs'][1]['lap_times_s']
     assert trace['runs'][0]['samples'][-1]['t_s'] == fixed['runs'][1]['elapsed_s']

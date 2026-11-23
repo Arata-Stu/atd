@@ -64,7 +64,7 @@
 .sim-error { color: #9e372b; }
 .sim-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .sim-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
-.sim-legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.sim-legend > span:not(.raceline-speed-key) { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .sim-swatch { width: 21px; height: 0; border-top: 3px solid; }
 .sim-swatch.reference { color: #6b796e; border-top-style: dotted; }
 .sim-swatch.fixed { color: #226ca1; }

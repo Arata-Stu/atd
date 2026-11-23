@@ -249,3 +249,14 @@
   font-weight: 650;
 }
 .evaluation-nav a:focus-visible { outline-offset: -3px; }
+
+.editor-footer {
+  height: auto;
+  min-height: 47px;
+  flex-wrap: wrap;
+  padding-block: 7px;
+}
+.editor-footer .legend {
+  flex-wrap: wrap;
+  gap: 6px 13px;
+}

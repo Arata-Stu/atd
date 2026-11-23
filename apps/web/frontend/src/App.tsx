@@ -51,7 +51,12 @@ export function App() {
   const notify = useCallback((message: string, error = false) => setNotice({ message, error }), []);
   const onDirty = useCallback((value: boolean) => { dirty.current = value; }, []);
   const refreshJobs = useCallback(async () => { const result = await api<{ items: Job[] }>('jobs'); setJobs(result.items); setConnected(true); }, []);
-  const onJob = useCallback((id?: string) => { if (id) setJobId(id); setDrawer(true); void refreshJobs().catch(e => notify(e.message, true)); }, [refreshJobs, notify]);
+  const updateJobList = useCallback(() => { void refreshJobs().catch(e => notify(e.message, true)); }, [refreshJobs, notify]);
+  function openJobLog(id: string) {
+    setJobId(id);
+    setDrawer(true);
+    updateJobList();
+  }
   useEffect(() => {
     let cancelled = false; let timer: ReturnType<typeof setTimeout>;
     async function poll() { try { await api('health'); if (!cancelled) await refreshJobs(); } catch { if (!cancelled) setConnected(false); } if (!cancelled) timer = setTimeout(poll, 2000); }
@@ -104,16 +109,16 @@ export function App() {
       {!connected && <div className="backend-banner"><Icon name="info" size={16}/>ローカルサーバーに接続できません。起動状態を確認してください。</div>}
       <div className="page-container">
         <Suspense fallback={<p role="status">画面を読み込んでいます…</p>}>
-          {page === 'map' && <MapWorkspace notify={notify} onDirty={onDirty} onJob={onJob} jobs={jobs} onTransfer={() => navigate('transfer')}/>}
-          {page === 'transfer' && <TransferWorkspace notify={notify} onJob={onJob} jobs={jobs} onCalibration={bag => navigate('calibration', bag)}/>}
-          {page === 'localization' && <LocalizationWorkspace jobs={jobs} onLog={onJob}/>}
+          {page === 'map' && <MapWorkspace notify={notify} onDirty={onDirty} onJob={updateJobList} jobs={jobs} onTransfer={() => navigate('transfer')}/>}
+          {page === 'transfer' && <TransferWorkspace notify={notify} onJob={updateJobList} jobs={jobs} onCalibration={bag => navigate('calibration', bag)}/>}
+          {page === 'localization' && <LocalizationWorkspace jobs={jobs} onLog={openJobLog}/>}
           {page === 'live' && <LiveWorkspace notify={notify} capture={capture} onCapture={showCapture}/>}
-          {page === 'input' && <InputWorkspace notify={notify} onDirty={onDirty} jobs={jobs} onLog={onJob}/>}
-          {page === 'calibration' && <CalibrationWorkspace jobs={jobs} onLog={onJob} onTransfer={() => navigate('transfer')} onOpenMap={id => navigate('map', id)}/>}
+          {page === 'input' && <InputWorkspace notify={notify} onDirty={onDirty} jobs={jobs} onLog={openJobLog}/>}
+          {page === 'calibration' && <CalibrationWorkspace jobs={jobs} onLog={openJobLog} onTransfer={() => navigate('transfer')} onOpenMap={id => navigate('map', id)}/>}
           {page === 'esc' && <EscTrialWorkspace/>}
           {page === 'closed-loop' && <ClosedLoopWorkspace/>}
           {page === 'replay' && <ReplayErrorsWorkspace/>}
-          {page === 'simulation' && <SimulationWorkspace jobs={jobs} onOpenMap={id => navigate('map', id)} onLog={onJob}/>}
+          {page === 'simulation' && <SimulationWorkspace jobs={jobs} onOpenMap={id => navigate('map', id)} onLog={openJobLog}/>}
           {page === 'vehicle' && <VehicleWorkspace notify={notify} onDirty={onDirty}/>}
         </Suspense>
       </div>

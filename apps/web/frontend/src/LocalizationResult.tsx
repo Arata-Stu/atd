@@ -6,6 +6,7 @@ import { controlOverlay } from './control_view';
 import type { ControlConfig } from './control_view';
 import type { SpeedSettings } from './ReplaySpeed';
 import { MapCanvas } from './MapCanvas';
+import { ReferenceLineLegend } from './SpeedLegend';
 import { GAP_LABELS, OUTCOMES, resultMapIssue, seconds, validationOverlay } from './localization_validation';
 import type { Observation, ValidationResult } from './localization_validation';
 import { trackingLabels } from './localization_view';
@@ -70,7 +71,10 @@ function LineResult({result, jobs, onLog, line, lines, chooseLine, time, seek, c
               referenceLine={line} controlTarget={plan.frame?.valid ? controlOverlay(plan.frame.control, plan.frame.vehicle_pose) : undefined} pose={plan.frame?.vehicle_pose} forwardPath={plan.frame?.valid ? plan.frame.trajectory : undefined}/>
           </div>
           <div className="validation-legend" aria-label="地図の凡例">
-            <span><i className="race"/>{LINE_NAMES[line]}</span><span><i className="plan-path"/>前方軌道</span><span><i className="control-target"/>追従点</span><span><i className="track"/>推定軌跡</span>
+            <ReferenceLineLegend raceline={line === 'raceline' ? result.document?.lines.raceline : undefined}>
+              <span><i className="race"/>{LINE_NAMES[line]}</span>
+            </ReferenceLineLegend>
+            <span><i className="plan-path"/>前方軌道</span><span><i className="control-target"/>追従点</span><span><i className="track"/>推定軌跡</span>
             <span><i className="before"/>途絶前の最終姿勢</span><span><i className="after"/>復帰後の初回姿勢</span>
           </div>
           </>}

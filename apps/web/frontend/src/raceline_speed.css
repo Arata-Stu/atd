@@ -1,0 +1,24 @@
+.raceline-speed-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #40594c;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.raceline-speed-key .raceline-speed-values {
+  display: inline-grid;
+  gap: 3px;
+}
+.raceline-speed-key .raceline-speed-bar {
+  display: block;
+  height: 4px;
+  border-radius: 3px;
+}
+.raceline-speed-key .raceline-speed-ticks {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font: 10px/1.1 ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}

@@ -10,6 +10,7 @@ from atd_processing.gazebo_review import (
     motion_sample, number, timing_sample,
 )
 
+from .planning_replay import _core
 from .store import confined, identifier
 
 ROOT = Path('runs/gazebo')
@@ -124,9 +125,22 @@ def road_for(folder, warnings):
         return None
 
 
+def raceline_speeds(doc, saved, point_count):
+    if 'speeds' not in saved:
+        try:
+            return _core().ReferenceLine.from_document(doc, 'raceline').speeds
+        except ValueError:
+            return []
+    speeds = saved['speeds']
+    if (not isinstance(speeds, list) or len(speeds) != point_count
+            or any(number(v) is None or v < 0 for v in speeds)):
+        return []
+    return speeds
+
+
 def reference(store, folder, run, identity, comparison, warnings):
     if comparison.anchor is None:
-        return [], 'missing'
+        return [], [], 'missing'
     try:
         map_id = identifier(run['map_id'])
         line = run['line']
@@ -157,10 +171,11 @@ def reference(store, folder, run, identity, comparison, warnings):
         if not isinstance(saved, dict):
             raise ValueError(f'{map_id} に {line} の点列がありません')
         coords = points(saved.get('points'), minimum=3)
-        return [comparison.to_world(*p) for p in coords], source
+        speeds = raceline_speeds(doc, saved, len(coords)) if line == 'raceline' else []
+        return [comparison.to_world(*p) for p in coords], speeds, source
     except (ValueError, OSError) as error:
         warnings.append(f'選択ラインを表示できません。{error}')
-        return [], 'missing'
+        return [], [], 'missing'
 
 
 def review(store, circuit, key):
@@ -206,7 +221,7 @@ def review(store, circuit, key):
             warnings.append('独立した自己位置ログに対応点がないため、保存された制御状態に含まれる画像時刻の推定姿勢を使っています。')
     if comparison.anchor is None:
         warnings.append('同じシミュレーション時刻で GT と対応する推定姿勢がなく、位置合わせできません。')
-    ref, source = reference(store, folder, run, identity, comparison, warnings)
+    ref, speeds, source = reference(store, folder, run, identity, comparison, warnings)
     timing = DisplaySeries(contact)
     last_t = None
     for row in rows(folder, 'closed_loop.vslam.jsonl', warnings):
@@ -219,7 +234,8 @@ def review(store, circuit, key):
     if max(motion.stride, comparison.series.stride, timing.stride) > 1:
         warnings.append('長い記録は全体表示を間引いています。接触判定の前後10秒は記録の各時刻を保持しています。')
     return dict(run=run, samples=samples, estimates=comparison.series.result(), vslam=timing.result(),
-                contact_s=contact, anchor_s=comparison.anchor_s, reference=ref, reference_source=source,
+                contact_s=contact, anchor_s=comparison.anchor_s, reference=ref,
+                reference_speeds_mps=speeds, reference_source=source,
                 warnings=warnings, boundaries=road.boundaries if road else dict(left=[], right=[]),
                 footprint=road.footprint if road else None)
 

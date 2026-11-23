@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Cloud, EditTarget, LineKind, MapDocument, Point } from './types';
 import { Icon } from './ui';
 import { cloudFitCorners } from './map_cloud_fit';
+import { savedSpeeds, speedScale, speedStrokes } from './raceline_speed';
 import type { ControlOverlay } from './control_view';
 import type { TrajectoryOverlay } from './localization_validation';
 
@@ -21,6 +22,15 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
   const [selected, setSelected] = useState(-1);
   const [draft, setDraft] = useState<Point[] | null>(null);
   const [pointerWorld, setPointerWorld] = useState<Point | null>(null);
+  const race = doc?.lines.raceline;
+  const showRace = referenceLine === 'raceline' || (referenceLine === undefined && visible.raceline !== false);
+  const raceStrokes = useMemo(() => {
+    if (!showRace || !race) return null;
+    const speeds = savedSpeeds(race);
+    if (!speeds) return null;
+    const scale = speedScale(speeds, race.points.length);
+    return scale && speedStrokes(race.points, speeds, scale, !!doc?.closed);
+  }, [showRace, race, doc?.closed]);
   const drag = useRef<{ kind: 'pan' | 'point' | 'click'; index: number; start: Point; origin: Point; moved: boolean; points: Point[] } | null>(null);
   const project = useCallback((point: readonly number[]): Point => [size.width / 2 + (point[0] - view.x) * view.scale, size.height / 2 - (point[1] - view.y) * view.scale], [size, view]);
   const world = (x: number, y: number): Point => [(x - size.width / 2) / view.scale + view.x, -(y - size.height / 2) / view.scale + view.y];
@@ -103,7 +113,7 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
       const stride = Math.max(1, Math.ceil(cloud.points.length / 60000));
       for (let i = 0; i < cloud.points.length; i += stride) { const [x, y] = project(cloud.points[i]); ctx.fillRect(x, y, 1.5, 1.5); }
     }
-    const path = (points: Point[], color: string, width: number, dashed = false, close = false) => {
+    const path = (points: Point[], color: string | CanvasGradient, width: number, dashed = false, close = false) => {
       if (!points.length) return;
       ctx.beginPath(); points.forEach((p, i) => { const [x, y] = project(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
       if (close && points.length > 2) ctx.closePath(); ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dashed ? [5, 5] : []); ctx.stroke(); ctx.setLineDash([]);
@@ -112,12 +122,26 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
       for (const side of ['left', 'right'] as const) path(target === side && draft ? draft : doc[side], COLORS[side], 2, false, doc.closed);
       if (referenceLine) {
         const line = doc.lines[referenceLine];
-        if (line) path(line.points, '#538ee4', 2.5, false, doc.closed);
+        if (line && !raceStrokes) path(line.points, '#538ee4', 2.5, false, doc.closed);
       } else if (referenceLine === undefined) {
-        for (const [kind, line] of Object.entries(doc.lines)) if (visible[kind] !== false)
+        for (const [kind, line] of Object.entries(doc.lines)) if (visible[kind] !== false && !(kind === 'raceline' && raceStrokes))
           path(line.points, COLORS[kind as keyof typeof COLORS] || '#538ee4', 2.5, false, doc.closed);
       }
       if (referenceLine === undefined && visible.custom !== false) path(target === 'custom' && draft ? draft : doc.custom, COLORS.custom, 2, true, doc.closed);
+      if (raceStrokes) {
+        ctx.save();
+        ctx.lineCap = ctx.lineJoin = 'round';
+        for (const { points, color, stops } of raceStrokes) {
+          if (stops) {
+            const gradient = ctx.createLinearGradient(...project(points[0]), ...project(points[1]));
+            for (const stop of stops) gradient.addColorStop(stop.offset, stop.color);
+            path(points, gradient, 3.5);
+          } else {
+            path(points, color, 3.5);
+          }
+        }
+        ctx.restore();
+      }
       if (onChange && mode !== 'pan') (draft || doc[target]).forEach((p, i) => {
         const [x, y] = project(p); ctx.beginPath(); ctx.arc(x, y, i === selected ? 6.5 : 4, 0, Math.PI * 2);
         ctx.fillStyle = i === selected ? COLORS[target] : '#fff'; ctx.fill(); ctx.strokeStyle = COLORS[target]; ctx.lineWidth = 2; ctx.stroke();
@@ -173,7 +197,7 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
     const scaleWidth = Math.max(1, Math.floor(90 / view.scale / step)) * step * view.scale;
     ctx.strokeStyle = '#65796d'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(24, size.height - 31); ctx.lineTo(24 + scaleWidth, size.height - 31); ctx.stroke();
     ctx.fillStyle = '#65796d'; ctx.font = '11px ui-monospace, monospace'; ctx.fillText(`${(scaleWidth / view.scale).toFixed(step < 1 ? 1 : 0)} m`, 24, size.height - 40);
-  }, [doc, cloud, view, size, target, mode, selected, draft, visible, pose, project, onChange, trail, overlay, selectedGap, referenceLine, forwardPath, controlTarget]);
+  }, [doc, cloud, view, size, target, mode, selected, draft, visible, pose, project, onChange, trail, overlay, selectedGap, referenceLine, raceStrokes, forwardPath, controlTarget]);
   const pointAt = (e: React.PointerEvent | React.WheelEvent): Point => { const rect = canvas.current!.getBoundingClientRect(); return [e.clientX - rect.left, e.clientY - rect.top]; };
   function zoomBy(factor: number) {
     manualView.current = true;

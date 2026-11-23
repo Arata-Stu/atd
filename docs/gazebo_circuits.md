@@ -88,6 +88,16 @@ atd build --packages-up-to atd_bringup
 atd gazebo closed-loop --course odaiba --map odaiba_1p5 --line centerline --speed 1.5 --laps 2
 ```
 
+Raceline の速度上限を 10 m/s で試す場合は、Web UI「地図とライン」で「速度上限」を 10 にして Raceline を再生成し、Notebook ホストから次を実行する。
+
+```bash
+atd gazebo closed-loop --course odaiba --map gazebo --line raceline --speed 10 --laps 2 --rviz
+```
+
+各地点の制御目標は、保存したラインの目標速度と `--speed` の小さい方になる。カーブの横加速度や前後の加減速制限によって、保存した目標速度は 10 m/s より低くなることがある。
+
+模擬車両の全開時の速度は既定で 3.2 m/s。`--speed` がこれを超えると、その値に合わせて全開時の速度と模擬スロットル FF 表を設定する。走行上限だけを変えて同じ車両で比較するときは、両方の試行に同じ `--full-throttle-speed`（例 `--full-throttle-speed 10`）を付ける。全開時の速度は各試行の `closed_loop.host.json` に `full_throttle_speed_mps` として保存する。
+
 同じモデルの VGL engine が複数ある場合、現在の GPU・TensorRT に適合すれば、地図の `vgl.json` の `runtime_model_dir` に記録された build を使う。別の適合する build で比較するときは、`--engine-dir` に結果ディレクトリからの相対パスを渡す。
 
 走行中に RViz で追従を確認するには、Notebook のデスクトップ端末で `atd dev` を起動しておく。地図 ID が `gazebo` の場合は、別のホスト端末で次を実行する。

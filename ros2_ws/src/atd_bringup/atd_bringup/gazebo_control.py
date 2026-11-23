@@ -3,7 +3,7 @@ import json
 import math
 from pathlib import Path
 
-from atd_control.bicycle import FULL_SPEED_MPS, STEERING_LIMIT, WHEELBASE_M
+from atd_control.bicycle import FULL_SPEED_MPS, STEERING_LIMIT, WHEELBASE_M, resolve_full_throttle_speed
 from atd_control.simulation import FORWARD_SPAN_RAW, NEUTRAL_RAW, simulation_feedforward
 from atd_control.core import LookaheadConfig, STANDSTILL_MPS, forward_control_speed, pure_pursuit
 from atd_control.speed import FeedforwardTable, PIDConfig, SpeedController
@@ -21,13 +21,20 @@ def default_min_lookahead(line):
     return .65 if line == 'raceline' else LookaheadConfig().min_lookahead_m
 
 
-def simulation_table(path=''):
+def simulation_table(path='', full_throttle_speed_mps=FULL_SPEED_MPS):
     if not path:
-        return simulation_feedforward()
+        return simulation_feedforward(full_throttle_speed_mps)
     table = FeedforwardTable.from_document(json.loads(Path(path).read_text(encoding='utf-8')))
     if table.direction != 1 or min(table.raw) < NEUTRAL_RAW or max(table.raw) > NEUTRAL_RAW + FORWARD_SPAN_RAW:
         raise ValueError('選んだ FF 表は Gazebo の前進 CH2 範囲 992〜1792 に対応していません')
     return table
+
+
+def validate_speed_cap(max_speed, full_throttle_speed_mps, table):
+    resolve_full_throttle_speed(max_speed, full_throttle_speed_mps)
+    if not table.speeds[0] <= max_speed <= table.speeds[-1]:
+        raise ValueError(f'速度上限 {max_speed:g} m/s が FF 表の範囲 {table.speeds[0]:g}〜'
+                         f'{table.speeds[-1]:g} m/s の外です')
 
 
 def timestamp(msg):
@@ -40,9 +47,9 @@ def tracking_id(msg):
 
 class GazeboController:
     """1つの計画と同一観測の自己位置から1回だけ PID を進める。全時刻は /clock。"""
-    def __init__(self, route, line, max_speed, table, *, lookahead=None, pid=PIDConfig()):
-        if not table.speeds[0] <= max_speed <= min(FULL_SPEED_MPS, table.speeds[-1]):
-            raise ValueError('速度上限 [m/s] は模擬前進速度域と FF 表の共通範囲で指定してください')
+    def __init__(self, route, line, max_speed, table, *, full_throttle_speed_mps=FULL_SPEED_MPS,
+                 lookahead=None, pid=PIDConfig()):
+        validate_speed_cap(max_speed, full_throttle_speed_mps, table)
         self.route, self.line, self.max_speed = route, line, max_speed
         self.lookahead = lookahead or LookaheadConfig(min_lookahead_m=default_min_lookahead(line))
         self.pid = SpeedController(table, pid)

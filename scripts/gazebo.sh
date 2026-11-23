@@ -21,7 +21,10 @@ usage() {
   serve       /clock・ステレオ画像・CameraInfo・固定 TF を配信（既定 Ctrl+C まで）
   --course ID         コースを選択（既定 odaiba、--circuit ID も使用可）
   --speed m/s         RC スケールの走行速度（シミュレーション時間）。省略時はコース既定
-                      closed-loop では制御目標の速度上限（既定 1.5 m/s）
+                      closed-loop では保存した走行ラインの目標速度にかける上限（0.2 m/s 以上、既定 1.5）
+  --full-throttle-speed m/s
+                      closed-loop の全開時のモデル速度。省略時は 3.2 m/s と --speed の大きい方を使用
+                      同じ車両モデルで比較する場合は、各試行の --speed 以上の共通値を指定
   --map ID            closed-loop で使う cuVSLAM・VGL・速度付き HDMap の地図ID（省略で選択）
   --line 種類         closed-loop の raceline / centerline / custom（省略で保存済みラインから選択）
   --engine-dir 相対パス  closed-loop の VGL engine を明示する場合の results からの相対パス
@@ -61,6 +64,7 @@ dry_run=false
 circuit=odaiba
 dds=shm
 speed=
+full_throttle_speed=
 laps=
 duration=
 resolution=640x480
@@ -83,13 +87,14 @@ while (( $# )); do
         --speed)
             [[ "$action" != prepare && -n "${2:-}" ]] || fail "走行時に --speed と速度（m/s）を指定してください"
             speed="$2"; shift 2 ;;
-        --map|--line|--engine-dir|--min-lookahead)
+        --map|--line|--engine-dir|--min-lookahead|--full-throttle-speed)
             [[ "$action" = closed-loop && -n "${2:-}" ]] || fail "$1 は closed-loop で値を指定してください"
             case "$1" in
                 --map) map_id="$2" ;;
                 --line) line="$2" ;;
                 --engine-dir) engine_dir="$2" ;;
                 --min-lookahead) min_lookahead="$2" ;;
+                --full-throttle-speed) full_throttle_speed="$2" ;;
             esac
             shift 2 ;;
         --rviz|--no-rviz)
@@ -287,6 +292,7 @@ run_mode() {
             --profile "$profile" --container "$map_container")
         if [[ "$mode" = closed-loop ]]; then
             job+=(--map "$map_id" --line "$line" --speed "$speed")
+            if [[ -n "$full_throttle_speed" ]]; then job+=(--full-throttle-speed "$full_throttle_speed"); fi
             if $rviz; then job+=(--rviz); fi
             if [[ -n "$engine_dir" ]]; then job+=(--engine-dir "$engine_dir"); fi
             if [[ -n "$min_lookahead" ]]; then job+=(--min-lookahead "$min_lookahead"); fi

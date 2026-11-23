@@ -16,8 +16,8 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from atd_bringup.gazebo_control import default_min_lookahead, simulation_table
-from atd_control.bicycle import FULL_SPEED_MPS
+from atd_bringup.gazebo_control import default_min_lookahead, simulation_table, validate_speed_cap
+from atd_control.bicycle import resolve_full_throttle_speed
 from atd_control.core import LookaheadConfig
 from atd_control.speed import PIDConfig
 from atd_localization.assets import map_metadata, verified_hdmap
@@ -59,10 +59,11 @@ def setup(context):
     ref = ReferenceLine.from_document(json.loads(hdmap), line)
     if not ref.closed:
         raise ValueError('周回評価には選択した保存地図上の閉じた走行ラインが必要です')
-    table = simulation_table(arg('feedforward_path'))
     cap = float(arg('max_speed_mps'))
-    if not table.speeds[0] <= cap <= min(FULL_SPEED_MPS, table.speeds[-1]):
-        raise ValueError('速度上限が Gazebo の模擬速度域または FF 表の範囲外です')
+    model_arg = arg('full_throttle_speed_mps')
+    full_speed = resolve_full_throttle_speed(cap, float(model_arg) if model_arg else None)
+    table = simulation_table(arg('feedforward_path'), full_speed)
+    validate_speed_cap(cap, full_speed, table)
     if min(ref.speeds) < table.speeds[0]:
         raise ValueError('走行ラインの最低速度が選択した前進 FF 表の範囲を下回っています')
     lateral_args = {k: arg(k) for k in asdict(LookaheadConfig())}
@@ -80,7 +81,8 @@ def setup(context):
                   allow_sparse_tf='true')
     control = {k: ParameterValue(metadata[k], value_type=str) for k in ('map_id', 'map_sha256', 'hdmap_sha256')}
     control.update(line=ParameterValue(line, value_type=str), feedforward_path=ParameterValue(arg('feedforward_path'),
-                   value_type=str), max_speed_mps=cap, use_sim_time=True, **asdict(lateral),
+                   value_type=str), max_speed_mps=cap, full_throttle_speed_mps=full_speed,
+                   use_sim_time=True, **asdict(lateral),
                    **{'speed_' + k: v for k, v in asdict(pid).items()})
     actions = [
         include('atd_localization', 'localization.launch.py',
@@ -114,7 +116,7 @@ def setup(context):
 
 def generate_launch_description():
     defaults = dict(line='raceline', results_root='/data/results', engine_dir='', feedforward_path='', run_dir='',
-                    max_speed_mps='1.5', **asdict(LookaheadConfig()),
+                    max_speed_mps='1.5', full_throttle_speed_mps='', **asdict(LookaheadConfig()),
                     **{'speed_' + k: v for k, v in asdict(PIDConfig()).items()})
     defaults['min_lookahead_m'] = ''
     return LaunchDescription([

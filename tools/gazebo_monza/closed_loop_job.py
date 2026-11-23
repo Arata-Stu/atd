@@ -1,7 +1,6 @@
 """Notebook 上の Gazebo と保存地図を読む Isaac ROS スタックを1試行として管理する。"""
 import argparse
 import json
-import math
 import os
 from pathlib import Path
 import re
@@ -16,6 +15,8 @@ from map_job import INSIDE, ISAAC, PROJECT, check_isaac_mounts, read_json, wait_
 from sensor_profile import RESOLUTIONS
 
 sys.path.insert(0, str(PROJECT / 'ros2_ws/src/atd_planning'))
+sys.path.insert(0, str(PROJECT / 'ros2_ws/src/atd_control'))
+from atd_control.bicycle import resolve_full_throttle_speed
 from atd_planning.core import LINE_KEYS, ReferenceLine
 
 
@@ -197,8 +198,7 @@ def supervise(args, gazebo_command, ros_command):
 
 
 def host(args):
-    if not math.isfinite(args.speed) or not .2 <= args.speed <= 3.2:
-        raise ValueError('シミュレーションの速度上限は 0.2〜3.2 m/s で指定してください')
+    full_speed = resolve_full_throttle_speed(args.speed, args.full_throttle_speed)
     if args.engine_dir and (Path(args.engine_dir).is_absolute() or '..' in Path(args.engine_dir).parts):
         raise ValueError('--engine-dir は results からの相対パスを指定してください')
     results = args.results.resolve()
@@ -207,8 +207,10 @@ def host(args):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         raise ValueError('Gazebo 起動コマンドを指定してください')
+    command = [*command, '--full-throttle-speed', str(full_speed)]
     launch = ['ros2', 'launch', 'atd_bringup', 'gazebo_closed_loop.launch.py',
               f'map_id:={args.map}', f'line:={args.line}', f'max_speed_mps:={args.speed}',
+              f'full_throttle_speed_mps:={full_speed}',
               f'rviz:={str(args.rviz).lower()}', f'run_dir:={remote}']
     if args.engine_dir:
         launch.append('engine_dir:=' + args.engine_dir)
@@ -225,7 +227,8 @@ def host(args):
         print(shlex.join(ros))
         return 0
     session = dict(map_id=args.map, line=args.line, circuit=args.circuit, ros_domain_id=int(args.domain),
-                   max_speed_mps=args.speed, engine_dir=args.engine_dir, min_lookahead_override_m=args.min_lookahead,
+                   max_speed_mps=args.speed, full_throttle_speed_mps=full_speed, engine_dir=args.engine_dir,
+                   min_lookahead_override_m=args.min_lookahead,
                    rviz=args.rviz, started=time.time())
     try:
         check_isaac_mounts(results)
@@ -265,6 +268,7 @@ def main():
     launch.add_argument('--min-lookahead', type=float)
     launch.add_argument('--rviz', action='store_true')
     launch.add_argument('--speed', required=True, type=float)
+    launch.add_argument('--full-throttle-speed', type=float)
     launch.add_argument('--dry-run', action='store_true')
     launch.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()

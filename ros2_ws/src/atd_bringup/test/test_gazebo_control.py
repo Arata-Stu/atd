@@ -13,6 +13,7 @@ for package in ('atd_bringup', 'atd_control', 'atd_mapping', 'atd_planning'):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / package))
 
 from atd_bringup.gazebo_control import COMMAND_TTL_NS, GazeboController, default_min_lookahead, simulation_table
+from atd_control.bicycle import Bicycle, SPEED_TAU_S, STEERING_TAU_S, resolve_full_throttle_speed
 
 
 ROUTE = ('odaiba', 'a' * 64, 'b' * 64)
@@ -176,6 +177,35 @@ def test_requires_standstill_and_forward_table():
     assert run(c, START + 10_000_000) is not None
     with pytest.raises(ValueError):
         GazeboController(ROUTE, 'raceline', 4., simulation_table())
+
+
+@pytest.mark.parametrize(('cap', 'model', 'expected'), [(1.5, None, 3.2), (10., None, 10.), (8., 12., 12.),
+                                                        (.2, .2, .2)])
+def test_speed_cap_changes_motor_and_synthetic_feedforward_together(cap, model, expected):
+    full_speed = resolve_full_throttle_speed(cap, model)
+    assert full_speed == expected
+    table = simulation_table(full_throttle_speed_mps=full_speed)
+    controller = GazeboController(ROUTE, 'raceline', cap, table, full_throttle_speed_mps=full_speed)
+    vehicle = Bicycle(0., 0., 0., full_throttle_speed_mps=full_speed)
+    for frame in range(5000):
+        now = START + frame * 20_000_000
+        _, _, vehicle.throttle_setpoint = run(controller, now, speed=vehicle.speed, target=cap + 1)
+        vehicle.advance(.02, {'speed_tau_s': SPEED_TAU_S, 'steering_tau_s': STEERING_TAU_S})
+    assert controller.observation['target_speed_mps'] == cap
+    assert vehicle.speed == pytest.approx(cap, abs=.01)
+    assert vehicle.throttle_setpoint == pytest.approx(cap / full_speed, abs=.01)
+
+
+@pytest.mark.parametrize(('cap', 'model'), [(10., 9.), (0., 3.2), (math.nan, None),
+                                            (math.inf, None), (1.5, math.nan), (1.5, math.inf)])
+def test_invalid_model_or_requested_speed_is_rejected(cap, model):
+    with pytest.raises(ValueError):
+        resolve_full_throttle_speed(cap, model)
+
+
+def test_custom_table_bounds_still_apply_to_a_faster_model():
+    with pytest.raises(ValueError, match='FF 表'):
+        GazeboController(ROUTE, 'raceline', 10., simulation_table(), full_throttle_speed_mps=12.)
 
 
 @pytest.mark.parametrize('counts', [(0, 1), (1, 0), (2, 1), (1, 2)])

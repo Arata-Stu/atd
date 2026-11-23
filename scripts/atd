@@ -82,7 +82,7 @@ usage() {
     atd web prepare
     atd gazebo
     atd gazebo bag --course odaiba --speed 3 --laps 2
-    atd gazebo closed-loop --rviz
+    atd gazebo closed-loop --line raceline --speed 10 --rviz
     atd gazebo video --route lap
     atd gazebo serve
     atd bringup gazebo
@@ -156,7 +156,7 @@ gazebo_from_menu() {
     [[ "$circuit" != back ]] || return 0
     local -a args=("$action" --route lap --circuit "$circuit")
     if [[ "$action" = closed-loop ]]; then
-        printf '速度上限 [m/s]（Enter で 1.5、q で戻る）> ' >&2
+        printf '走行ラインの目標速度上限 [m/s]（例 10、Enter で 1.5、q で戻る）> ' >&2
     else
         printf '走行速度 [RC m/s]（Enter でコース既定、q で戻る）> ' >&2
     fi

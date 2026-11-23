@@ -52,6 +52,8 @@ class ClosedLoopJobTests(unittest.TestCase):
                 self.assertEqual(gazebo[gazebo.index(key)+1], expected)
             self.assertNotIn('--speed', gazebo)
             self.assertIn('max_speed_mps:=1.25', stack)
+            self.assertEqual(gazebo[gazebo.index('--full-throttle-speed') + 1], '3.2')
+            self.assertIn('full_throttle_speed_mps:=3.2', stack)
             self.assertIn('line:=centerline', stack)
             self.assertIn('rviz:=false', stack)
             self.assertIn('map_id:=odaiba_1p5', stack)
@@ -59,6 +61,14 @@ class ClosedLoopJobTests(unittest.TestCase):
             self.assertIn('run_dir:=' + stack[stack.index('--output') + 1], stack)
             self.assertNotIn('autonomous.launch.py', stack)
             self.assertIn('--ipc=host', gazebo)
+            for speed, override, expected in [('10', [], '10.0'), ('5', ['--full-throttle-speed', '10'], '10.0')]:
+                with self.subTest(speed=speed, override=override):
+                    preview = subprocess.check_output([*cmd, '--speed', speed, *override], env=env, text=True)
+                    gazebo, stack = [shlex.split(s) for s in preview.splitlines() if s.startswith('docker ')]
+                    self.assertEqual(gazebo[gazebo.index('--full-throttle-speed') + 1], expected)
+                    self.assertNotIn('--speed', gazebo)
+                    self.assertIn('max_speed_mps:=' + str(float(speed)), stack)
+                    self.assertIn('full_throttle_speed_mps:=' + expected, stack)
             for option, setting in [('--rviz', 'true'), ('--no-rviz', 'false')]:
                 with self.subTest(option=option):
                     preview = subprocess.check_output([*cmd, option], env=env, text=True)
@@ -68,7 +78,8 @@ class ClosedLoopJobTests(unittest.TestCase):
                     self.assertNotEqual(subprocess.run([*cmd[:2], 'bag', '--dry-run', option],
                                                        env=env, capture_output=True).returncode, 0)
             for extra in [('--resolution', '640x480'), ('--duration', '5'), ('--line', 'custom'),
-                          ('--map', '../bad'), ('--engine-dir', '../../bad'), ('--speed', '5')]:
+                          ('--map', '../bad'), ('--engine-dir', '../../bad'), ('--speed', '.1'),
+                          ('--full-throttle-speed', '1'), ('--full-throttle-speed', 'nan')]:
                 with self.subTest(extra=extra):
                     self.assertNotEqual(subprocess.run([*cmd, *extra], env=env, capture_output=True).returncode, 0)
             self.assertFalse((root / 'runs').exists())

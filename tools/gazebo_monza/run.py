@@ -339,7 +339,8 @@ def run(args, report):
                         laps=args.laps or 1, repeat=not (finite_run or closed_loop), circuit=args.circuit, route=args.route,
                         wait_for_capture=(lap_video or finite_serve or mode in ("map", "bag")),
                         record_ground_truth=mode == "bag", resolution=args.resolution,
-                        camera_hz=args.camera_hz, imu_hz=imu_hz, command_driven=closed_loop)
+                        camera_hz=args.camera_hz, imu_hz=imu_hz, command_driven=closed_loop,
+                        full_throttle_speed_mps=args.full_throttle_speed if closed_loop else None)
     trajectory = scene["trajectory"]
     total_seconds = trajectory["total_travel_seconds"]
     duration = total_seconds if finite_run else args.duration
@@ -348,7 +349,10 @@ def run(args, report):
                   lap_duration_s=trajectory["travel_seconds"],
                   total_travel_seconds=total_seconds)
     if closed_loop:
-        print(f"{args.circuit} / {args.route}  操舵・スロットル指令で {trajectory['laps']}周を評価", flush=True)
+        full_speed = scene["actuation"]["full_throttle_speed_mps"]
+        report["full_throttle_speed_mps"] = full_speed
+        print(f"{args.circuit} / {args.route}  操舵・スロットル指令で {trajectory['laps']}周を評価"
+              f"  車両モデルの全開時 {full_speed:g} m/s", flush=True)
     elif finite_run:
         schedule = f"{trajectory['laps']}周  走行時間 {duration:.2f} シミュレーション秒"
     else:
@@ -507,6 +511,7 @@ def main():
     parser.add_argument("--route", choices=("lap",), default="lap")
     parser.add_argument("--duration", type=float)
     parser.add_argument("--speed", type=float, help="RC スケールの走行速度（m/s、シミュレーション時刻）")
+    parser.add_argument("--full-throttle-speed", type=float, help="closed-loop の車両モデルの全開時速度（m/s）")
     parser.add_argument("--laps", type=int, help="走行する周回数（正の整数）")
     parser.add_argument("--wait-for-stereo", action="store_true")
     parser.add_argument("--camera-height", type=float, default=.12)
@@ -520,6 +525,8 @@ def main():
             parser.error("closed-loop の速度は制御指令から決まります。周回数は --laps で指定してください")
         if args.laps is None:
             args.laps = 2
+    elif args.full_throttle_speed is not None:
+        parser.error("--full-throttle-speed は closed-loop で指定してください")
     if (args.mode == "bag") != (args.bag_output is not None):
         parser.error("--bag-output は --mode bag で指定してください")
     if args.laps is not None:

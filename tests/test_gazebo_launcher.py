@@ -183,6 +183,7 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
                  ("bag", "--camera-hz", "45"), ("run", "--camera-hz"), ("prepare", "--camera-hz", "30"),
                  ("prepare", "--imu", "400"), ("prepare", "--speed", "2"), ("video", "--speed", "nan"),
                  ("bag", "--speed", "-1"), ("video", "--speed", "1e500"),
+                 ("bag", "--full-throttle-speed", "10"), ("serve", "--full-throttle-speed", "10"),
                  ("map", "--laps", "0"), ("video", "--laps", "1.2"), ("bag", "--laps"),
                  ("run", "--duration", "2", "--speed", "1"), ("serve", "--route", "chicane", "--laps", "1"),
                  ("benchmark", "--laps", "2"), ("diagnose", "--laps", "2"), ("video", "--course", "../spa")]

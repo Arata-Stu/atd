@@ -136,7 +136,8 @@ def cameras(link, height, pitch, circuit, far, width, image_height, camera_hz):
 
 def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
           circuit="odaiba", route=None, wait_for_capture=False, speed_mps=None, laps=1, record_ground_truth=False,
-          resolution="640x480", imu_hz=0, camera_hz=DEFAULT_CAMERA_HZ, command_driven=False):
+          resolution="640x480", imu_hz=0, camera_hz=DEFAULT_CAMERA_HZ, command_driven=False,
+          full_throttle_speed_mps=None):
     if resolution not in RESOLUTIONS:
         raise ValueError("unsupported stereo resolution: " + str(resolution))
     if type(camera_hz) is not int or camera_hz not in CAMERA_RATES:
@@ -164,8 +165,15 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     if command_driven:
         if travel_seconds is not None or speed_mps is not None or repeat or wait_for_capture:
             raise ValueError("指令走行の速度と姿勢は制御入力から決まります")
+        from closed_loop_motion import FULL_SPEED_MPS
+        if full_throttle_speed_mps is None:
+            full_throttle_speed_mps = FULL_SPEED_MPS
+        elif not isfinite(full_throttle_speed_mps) or full_throttle_speed_mps < .2:
+            raise ValueError("全開時の車速には 0.2 m/s 以上の有限値を指定してください")
         total_seconds = None
     else:
+        if full_throttle_speed_mps is not None:
+            raise ValueError("全開時の車速は closed-loop で指定してください")
         travel_seconds, speed_mps = circuits.route_timing(circuit, route, length, travel_seconds, speed_mps)
         try:
             total_seconds = travel_seconds * laps
@@ -201,6 +209,7 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
         scene["course_evaluation"] = {"frame": "gazebo_world", **source, "footprint": FOOTPRINT.copy()}
         scene["actuation"] = {"topic": "/atd/gazebo/actuators",
                               "spawn_x_y_yaw": points[0][1:], "model": "rear_axle_kinematic_bicycle",
+                              "full_throttle_speed_mps": full_throttle_speed_mps,
                               "drive_timeout_s": 0.30, "trace_interval_s": 0.05}
     elif record_ground_truth:
         scene["trajectory"]["trace_interval_s"] = min(.05, travel_seconds / 120)

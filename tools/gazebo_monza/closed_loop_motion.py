@@ -7,7 +7,7 @@ import sys
 
 # The Gazebo image mounts the checkout, independently of the Isaac ROS overlay.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros2_ws/src/atd_control"))
-from atd_control.bicycle import Bicycle, SPEED_TAU_S, STEERING_LIMIT, STEERING_TAU_S
+from atd_control.bicycle import Bicycle, FULL_SPEED_MPS, SPEED_TAU_S, STEERING_LIMIT, STEERING_TAU_S
 from rig_imu import ImuPublisher
 from sensor_profile import REAR_AXLE_HEIGHT_M
 
@@ -16,8 +16,8 @@ ACTUATOR_RESPONSE = {"steering_tau_s": STEERING_TAU_S, "speed_tau_s": SPEED_TAU_
 
 
 class CommandPlant:
-    def __init__(self, spawn, timeout_s):
-        self.vehicle = Bicycle(*spawn)
+    def __init__(self, spawn, timeout_s, *, full_throttle_speed_mps=FULL_SPEED_MPS):
+        self.vehicle = Bicycle(*spawn, full_throttle_speed_mps=full_throttle_speed_mps)
         self.timeout_ns = round(timeout_s * 1e9)
         self.state = "waiting"
         self.reason = ""
@@ -78,7 +78,8 @@ class ClosedLoopMotion:
         scene_file = Path(sdf.get_string("scene_file"))
         scene = json.loads(scene_file.read_text())
         drive = scene["actuation"]
-        self.plant = CommandPlant(drive["spawn_x_y_yaw"], drive["drive_timeout_s"])
+        self.plant = CommandPlant(drive["spawn_x_y_yaw"], drive["drive_timeout_s"],
+                                  full_throttle_speed_mps=drive.get("full_throttle_speed_mps", FULL_SPEED_MPS))
         self.model = Model(entity)
         self.link = Link(self.model.canonical_link(ecm))
         self.pose_type = Pose3d

@@ -12,6 +12,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
 from atd_bringup.gazebo_control import GazeboController, default_min_lookahead, simulation_table
+from atd_control.bicycle import resolve_full_throttle_speed
 from atd_control.core import LookaheadConfig
 from atd_control.speed import PIDConfig
 
@@ -24,12 +25,13 @@ class GazeboControlNode(Node):
         route = tuple(self.declare_parameter(k, '').value for k in ('map_id', 'map_sha256', 'hdmap_sha256'))
         line = self.declare_parameter('line', 'raceline').value
         speed = self.declare_parameter('max_speed_mps', 1.5).value
-        table = simulation_table(self.declare_parameter('feedforward_path', '').value)
+        full_speed = self.declare_parameter('full_throttle_speed_mps', resolve_full_throttle_speed(speed)).value
+        table = simulation_table(self.declare_parameter('feedforward_path', '').value, full_speed)
         defaults = LookaheadConfig(min_lookahead_m=default_min_lookahead(line))
         lookahead = {k: self.declare_parameter(k, v).value for k, v in asdict(defaults).items()}
         pid = {k: self.declare_parameter('speed_' + k, v).value for k, v in asdict(PIDConfig()).items()}
-        self.controller = GazeboController(route, line, speed, table, lookahead=LookaheadConfig(**lookahead),
-                                           pid=PIDConfig(**pid))
+        self.controller = GazeboController(route, line, speed, table, full_throttle_speed_mps=full_speed,
+                                          lookahead=LookaheadConfig(**lookahead), pid=PIDConfig(**pid))
         self.actuators = self.create_publisher(JointState, '/atd/gazebo/actuators', 1)
         status_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.status = self.create_publisher(String, '/atd/gazebo/control_state', status_qos)

@@ -90,8 +90,10 @@ class CommandMotionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(world, "odaiba_track"):
             base = Path(tmp)
             normal = world.build(base/"bag")
-            scene = world.build(base/"drive", command_driven=True, laps=2)
-            geometry = json.loads((base/"drive/scene.json").read_text())["course_evaluation"]
+            scene = world.build(base/"drive", command_driven=True, laps=2, full_throttle_speed_mps=10.)
+            saved = json.loads((base/"drive/scene.json").read_text())
+            self.assertEqual(saved["actuation"]["full_throttle_speed_mps"], 10.)
+            geometry = saved["course_evaluation"]
             self.assertEqual(geometry["frame"], "gazebo_world")
             self.assertEqual(len(geometry["left"]), len(scene["trajectory"]["samples_s_x_y_yaw"]) - 1)
             self.assertEqual(len(geometry["left"]), len(geometry["right"]))
@@ -106,6 +108,14 @@ class CommandMotionTests(unittest.TestCase):
             self.assertEqual(len(rig.findall("link/sensor")), 2)
             with self.assertRaises(ValueError):
                 world.build(base/"invalid", command_driven=True, speed_mps=1.)
+
+    def test_full_throttle_speed_is_reachable_with_fresh_gazebo_commands(self):
+        plant = CommandPlant((0., 0., 0.), .3, full_throttle_speed_mps=10.)
+        for tick in range(1, 2001):
+            now = tick * 10**7
+            plant.receive(now, now, JOINTS, (0., 1., 1.))
+            plant.advance(now, .01)
+        self.assertAlmostEqual(plant.vehicle.speed, 10., places=6)
 
     def test_live_gt_uses_measured_link_pose_and_trace_sim_time(self):
         with tempfile.TemporaryDirectory() as tmp:

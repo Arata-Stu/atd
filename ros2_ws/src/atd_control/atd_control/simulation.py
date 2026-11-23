@@ -31,9 +31,14 @@ NEUTRAL_RAW = 992
 FORWARD_SPAN_RAW = 800
 
 
-def simulation_feedforward():
-    """2D と Gazebo の同じ前進車両モデルに対応する模擬 FF 表。"""
-    return FeedforwardTable('simulation', '', (.2, 1.6, 3.2), (1042, 1392, 1792), 1)
+def simulation_feedforward(full_throttle_speed_mps=FULL_SPEED_MPS):
+    """模擬車両の定常速度とスロットルの比例関係から、前進用 FF 表を作る。"""
+    if not math.isfinite(full_throttle_speed_mps) or full_throttle_speed_mps <= 0:
+        raise ValueError('模擬車両の全開時速度は正の有限値 [m/s] を指定してください')
+    low_speed = min(.2, full_throttle_speed_mps / 4)
+    low_raw = NEUTRAL_RAW + FORWARD_SPAN_RAW * (low_speed / full_throttle_speed_mps)
+    return FeedforwardTable('simulation', '', (low_speed, full_throttle_speed_mps / 2, full_throttle_speed_mps),
+                            (low_raw, NEUTRAL_RAW + FORWARD_SPAN_RAW / 2, NEUTRAL_RAW + FORWARD_SPAN_RAW), 1)
 
 
 def validate_settings(overrides):

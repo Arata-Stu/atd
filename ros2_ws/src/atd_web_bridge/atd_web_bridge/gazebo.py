@@ -1,0 +1,48 @@
+"""Gazebo の制御出力をシミュレーション時刻で保持する。"""
+from collections import deque
+import math
+from threading import Lock
+import time
+
+
+class GazeboDriveWindow:
+    def __init__(self, freshness_s):
+        self.freshness_s = freshness_s
+        self.lock = Lock()
+        self.history = deque(maxlen=1500)
+        self.gid = None
+        self.received = 0.
+
+    def receive(self, data, gid):
+        if not isinstance(data, dict) or not gid or type(data.get('stamp_ns')) is not int or data['stamp_ns'] < 0:
+            return
+        if data.get('state') not in ('waiting', 'waiting_observation', 'driving', 'stopped'):
+            return
+        if not all(isinstance(data.get(key), str) for key in ('line', 'map_id', 'reason')):
+            return
+        row = {key: data[key] for key in ('line', 'map_id', 'state', 'reason')}
+        stamp = data['stamp_ns'] / 1e9
+        row['stamp_s'] = stamp
+        for key, source in [('target_mps', 'target_speed_mps'), ('estimated_mps', 'estimated_speed_mps'),
+                            ('steering_rad', 'steering_rad'), ('throttle', 'throttle')]:
+            value = data.get(source) if row['state'] == 'driving' else None
+            if row['state'] == 'driving' and (type(value) not in (int, float) or not math.isfinite(value)):
+                return
+            row[key] = value
+        with self.lock:
+            if gid != self.gid or self.history and stamp < self.history[-1]['stamp_s']:
+                self.history.clear()
+            if self.history and stamp == self.history[-1]['stamp_s']:
+                self.history.pop()
+            while self.history and stamp - self.history[0]['stamp_s'] > 15.:
+                self.history.popleft()
+            self.gid, self.received = gid, time.monotonic()
+            self.history.append(row)
+
+    def snapshot(self, now_s, gid):
+        with self.lock:
+            rows = ([row for row in self.history if -.05 <= now_s - row['stamp_s'] <= 15.]
+                    if gid and gid == self.gid else [])
+            current = rows[-1] if rows and now_s - rows[-1]['stamp_s'] <= self.freshness_s and (
+                time.monotonic() - self.received <= self.freshness_s) else None
+            return dict(now_s=now_s, current=current, history=rows)

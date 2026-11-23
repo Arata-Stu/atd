@@ -3,13 +3,20 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from .jetson_bridge import BridgeUnavailable, request as bridge_request
+from .jetson_bridge import BridgeUnavailable, gazebo_request, request as bridge_request
 
 router = APIRouter()
 
 
 def call(request: Request, path: str, method: str = 'GET', body: dict | None = None):
+    target = request.query_params.get('target', 'jetson')
+    if target not in ('jetson', 'gazebo'):
+        raise HTTPException(status_code=422, detail='観測先は jetson または gazebo を選んでください')
+    if target == 'gazebo' and path not in ('/live/status', '/live/parameters'):
+        raise HTTPException(status_code=422, detail='この操作は Gazebo に対応していません')
     try:
+        if target == 'gazebo':
+            return gazebo_request(path, method, body)
         return bridge_request(request.app.state.store.connection(), path, method, body)
     except BridgeUnavailable as exc:
         if method == 'GET' and path == '/esc/status':

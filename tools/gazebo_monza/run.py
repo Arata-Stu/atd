@@ -325,7 +325,7 @@ def run(args, report):
     scene_dir = out / "scene"
     closed_loop = mode == "closed-loop"
     lap_video = mode == "video"
-    finite_serve = mode == "serve" and args.laps is not None
+    finite_serve = mode == "serve" and args.laps not in (None, 0)
     finite_run = mode in ("video", "map", "bag") or finite_serve
     width, height = RESOLUTIONS[args.resolution]
     imu_hz = IMU_MODES[args.imu]
@@ -336,7 +336,8 @@ def run(args, report):
         lap_bag.check_destination(args.bag_output)
     scene = world.build(scene_dir, height=args.camera_height, pitch_deg=args.camera_pitch_deg,
                         travel_seconds=args.duration if finite_run else None, speed_mps=args.speed,
-                        laps=args.laps or 1, repeat=not (finite_run or closed_loop), circuit=args.circuit, route=args.route,
+                        laps=1 if args.laps is None else args.laps, repeat=not (finite_run or closed_loop),
+                        circuit=args.circuit, route=args.route,
                         wait_for_capture=(lap_video or finite_serve or mode in ("map", "bag")),
                         record_ground_truth=mode == "bag", resolution=args.resolution,
                         camera_hz=args.camera_hz, imu_hz=imu_hz, command_driven=closed_loop,
@@ -351,7 +352,8 @@ def run(args, report):
     if closed_loop:
         full_speed = scene["actuation"]["full_throttle_speed_mps"]
         report["full_throttle_speed_mps"] = full_speed
-        print(f"{args.circuit} / {args.route}  操舵・スロットル指令で {trajectory['laps']}周を評価"
+        goal = f"{trajectory['laps']}周" if trajectory["laps"] else "無制限周回（Ctrl+C で結果を保存）"
+        print(f"{args.circuit} / {args.route}  操舵・スロットル指令で {goal}を評価"
               f"  車両モデルの全開時 {full_speed:g} m/s", flush=True)
     elif finite_run:
         schedule = f"{trajectory['laps']}周  走行時間 {duration:.2f} シミュレーション秒"
@@ -512,7 +514,7 @@ def main():
     parser.add_argument("--duration", type=float)
     parser.add_argument("--speed", type=float, help="RC スケールの走行速度（m/s、シミュレーション時刻）")
     parser.add_argument("--full-throttle-speed", type=float, help="closed-loop の車両モデルの全開時速度（m/s）")
-    parser.add_argument("--laps", type=int, help="走行する周回数（正の整数）")
+    parser.add_argument("--laps", type=int, help="走行する周回数（closed-loop / serve では 0 で無制限）")
     parser.add_argument("--wait-for-stereo", action="store_true")
     parser.add_argument("--camera-height", type=float, default=.12)
     parser.add_argument("--camera-pitch-deg", type=float, default=0)
@@ -530,10 +532,12 @@ def main():
     if (args.mode == "bag") != (args.bag_output is not None):
         parser.error("--bag-output は --mode bag で指定してください")
     if args.laps is not None:
-        if args.laps < 1:
-            parser.error("--laps は1以上の整数を指定してください")
+        if args.laps < 0:
+            parser.error("--laps は0以上の整数を指定してください")
         if args.mode in ("benchmark", "diagnose"):
             parser.error("実時間計測の benchmark / diagnose では --duration で計測秒数を指定してください")
+        if args.laps == 0 and args.mode not in ("closed-loop", "serve"):
+            parser.error(f"{args.mode} は走行完了後に保存するため、--laps に1以上の整数を指定してください")
     if args.wait_for_stereo and args.mode != "serve":
         parser.error("--wait-for-stereo requires --mode serve")
     if args.mode == "serve" and args.duration is not None:
@@ -569,7 +573,7 @@ def main():
             report["status"] = "complete" if result == 0 else "below_target"
     except KeyboardInterrupt:
         report.update(status="stopped")
-        result = 0 if args.mode == "serve" and args.laps is None else 130
+        result = 0 if args.mode == "serve" and args.laps in (None, 0) else 130
     except (OSError, ValueError, RuntimeError, TimeoutError, subprocess.SubprocessError) as exc:
         report.update(status="error", error=str(exc))
         result = 1

@@ -10,9 +10,11 @@ import './replay_errors.css';
 import './closed_loop.css';
 
 function label(run:GazeboRun) {
+  const status = statuses[run.status] ?? run.status;
+  if (run.laps_requested === 0) return status + ' · ' + (run.laps_completed ?? '—') + ' 周（無制限）';
   const laps = run.laps_completed === null && run.laps_requested === null ? '' :
     ' · '+(run.laps_completed ?? '—')+'/'+(run.laps_requested ?? '—')+' 周';
-  return (statuses[run.status] ?? run.status) + laps;
+  return status + laps;
 }
 
 function RunTimeline({data}: {data:ClosedLoopDetail}) {
@@ -88,7 +90,7 @@ function Result({data}: {data:ClosedLoopDetail}) {
   const {run} = data;
   return <>
     <div className="cl-summary"><strong>{label(run)}</strong><span>地図 {run.map_id ?? '未記録'}</span>
-      <span>選択ライン {run.line ?? '未記録'}</span>{run.max_speed_mps!==null && <span>速度上限 {run.max_speed_mps.toFixed(2)} m/s</span>}
+      <span>選択ライン {run.line ?? '未記録'}</span>{run.max_speed_mps!==null && <span>起動時の速度上限 {run.max_speed_mps.toFixed(2)} m/s</span>}
       {run.reason && <p>{run.reason}</p>}
     </div>
     {data.warnings.length>0 && <details className="cl-warnings">

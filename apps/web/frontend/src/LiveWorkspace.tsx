@@ -9,6 +9,7 @@ import { ControlReadout, LiveControlConfig } from './ControlReadout';
 import { controlOverlay, liveControlIssue } from './control_view';
 import { PlanningMetrics } from './PlanningMetrics';
 import { AutoDrivePanel } from './AutoDrivePanel';
+import { GazeboDrivePanel } from './GazeboDrivePanel';
 import { LiveSpeed } from './LiveSpeed';
 import { MapCanvas } from './MapCanvas';
 import { ReferenceLineLegend } from './SpeedLegend';
@@ -26,13 +27,30 @@ function SpeedPlot({ samples, label, unit }: { samples: Sample[]; label: string;
   const line = samples.map((p, index) => `${!index || p.time - samples[index - 1].time > 5 ? 'M' : 'L'}${pad + (p.time - (last - span)) / span * (width - pad - 16)},${height - pad - (p.value - min) / (max - min) * (height - pad - 18)}`).join(' ');
   return <div className="speed-plot"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`受信した${label}の時系列。横軸は測定時刻の秒、縦軸は${unit}。`}>{[0, .5, 1].map(p => <g key={p}><line x1={pad} y1={height - pad - p * (height - pad - 18)} x2={width - 16} y2={height - pad - p * (height - pad - 18)} stroke="#e0e6e3"/><text x="2" y={height - pad - p * (height - pad - 18) + 4} fontSize="11" fill="#87958d">{(min + p * (max - min)).toFixed(1)}</text></g>)}<text x={width - 35} y={height - 6} fontSize="11" fill="#87958d">秒</text><text x={pad} y={height - 6} fontSize="11" fill="#87958d">−{span.toFixed(0)}</text><text x={width - 55} y={height - 6} fontSize="11" fill="#87958d">0</text><path d={line} fill="none" stroke="#16876b" strokeWidth="2.5" strokeLinejoin="round"/></svg>{!samples.length && <span className="chart-empty">{label}データの受信を待っています</span>}</div>;
 }
-export function LiveWorkspace({notify, capture, onCapture}: {
+type Target = 'jetson' | 'gazebo';
+interface LiveProps {
   notify: (message: string, error?: boolean) => void; capture: boolean; onCapture: (capture: boolean) => void;
+}
+interface ParameterSnapshot { items: Parameter[]; identity: { instance_id: string } }
+
+export function LiveWorkspace(props: LiveProps) {
+  const [target, setTarget] = useState<Target>(() => localStorage.getItem('atd.live.target') === 'gazebo' ? 'gazebo' : 'jetson');
+  return <LiveSession key={target} {...props} target={target} selectTarget={next => {
+    localStorage.setItem('atd.live.target', next);
+    setTarget(next);
+  }}/>;
+}
+
+function LiveSession({notify, capture, onCapture, target, selectTarget}: LiveProps & {
+  target: Target; selectTarget: (next: Target) => void;
 }) {
+  const gazebo = target === 'gazebo';
+  const source = gazebo ? 'Gazebo' : 'Jetson';
   const [status, setStatus] = useState<LiveStatus | null>(null), [error, setError] = useState(''), [enabled, setEnabled] = useState(true);
   const [requestTiming, setRequestTiming] = useState<{startedAt: number; receivedAtMs: number; roundTripMs: number} | null>(null);
   const [maps, setMaps] = useState<MapDocument[]>([]), [mapId, setMapId] = useState(''), [reference, setReference] = useState<MapReference | null>(null), [cloud, setCloud] = useState<Cloud | null>(null);
   const [samples, setSamples] = useState<Sample[]>([]), [node, setNode] = useState(''), [parameters, setParameters] = useState<Parameter[]>([]), [drafts, setDrafts] = useState<Record<string, string>>({}), [busy, setBusy] = useState(false);
+  const [parameterInstance, setParameterInstance] = useState('');
   const [angularSamples, setAngularSamples] = useState<Sample[]>([]), [plotMetric, setPlotMetric] = useState<'linear' | 'angular'>('linear');
   const [expired, setExpired] = useState(false), [planExpired, setPlanExpired] = useState(false);
   const [controlExpired, setControlExpired] = useState(false), [speedExpired, setSpeedExpired] = useState(false);
@@ -57,12 +75,12 @@ export function LiveWorkspace({notify, capture, onCapture}: {
       let delay = 750;
       try {
         const start = performance.now();
-        const value = await api<LiveStatus>('live/status');
+        const value = await api<LiveStatus>('live/status?target=' + target);
         if (cancelled) return;
         const elapsed = performance.now() - start;
         setRequestTiming({startedAt: start, receivedAtMs: Date.now(), roundTripMs: elapsed});
         setStatus(value); setError('');
-        if (value.auto_drive?.publishers === 1) delay = 100;
+        if (value.gazebo || value.auto_drive?.publishers === 1) delay = 100;
         clearTimeout(expiry); clearTimeout(planExpiry); clearTimeout(controlExpiry); clearTimeout(speedExpiry);
         const expireAfter = (seconds: number | undefined, set: (expired: boolean) => void) => {
           const ms = (seconds ?? 0) * 1000 - elapsed;
@@ -101,7 +119,7 @@ export function LiveWorkspace({notify, capture, onCapture}: {
       if (!cancelled) timer = setTimeout(poll, delay);
     }
     void poll(); return () => { cancelled = true; clearTimeout(timer); clearTimeout(expiry); clearTimeout(planExpiry); clearTimeout(controlExpiry); clearTimeout(speedExpiry); };
-  }, [enabled]);
+  }, [enabled, target]);
   useEffect(() => {
     let cancelled = false;
     setReference(null); setMapError('');
@@ -121,10 +139,36 @@ export function LiveWorkspace({notify, capture, onCapture}: {
       .catch(() => { /* The Raceline overlay can also be used without a point cloud. */ });
     return () => { cancelled = true; };
   }, [selectedId, deployment, visualMap, mapReload, capture]);
+  function showParameters(snapshot: ParameterSnapshot) {
+    setParameterInstance(snapshot.identity.instance_id);
+    setParameters(snapshot.items);
+    setDrafts(Object.fromEntries(snapshot.items.map(p => [p.name, typeof p.value === 'string' ? p.value : JSON.stringify(p.value)])));
+  }
   async function loadParameters() {
     if (!node) return; setBusy(true);
-    try { const result = await api<{ items: Parameter[] }>('live/parameters?node=' + encodeURIComponent(node)); setParameters(result.items); setDrafts(Object.fromEntries(result.items.map(p => [p.name, typeof p.value === 'string' ? p.value : JSON.stringify(p.value)]))); }
+    try {
+      showParameters(await api<ParameterSnapshot>('live/parameters?target=' + target + '&node=' + encodeURIComponent(node)));
+    }
     catch (e) { notify((e as Error).message, true); } finally { setBusy(false); }
+  }
+  const allowApply = enabled && status?.connected && parameterInstance === status.identity?.instance_id;
+  async function applyParameter(parameter: Parameter) {
+    if (!allowApply) return;
+    setBusy(true);
+    try {
+      const text = drafts[parameter.name];
+      const value = typeof parameter.value === 'string' ? text : JSON.parse(text);
+      const result = await api<ParameterSnapshot & {applied: boolean}>('live/parameters?target=' + target,
+        {node, instance_id:parameterInstance, values:{[parameter.name]:value}});
+      if (result.identity.instance_id !== parameterInstance) {
+        setParameters([]); setParameterInstance('');
+        throw new Error('接続先が切り替わりました。現在値を再取得してください。');
+      }
+      showParameters(result);
+      if (result.applied !== true) throw new Error(`${parameter.name} の読戻し値と指定値が一致しません`);
+      notify(`${parameter.name} を ${source} に適用しました`);
+    } catch (e) { notify((e as Error).message, true); }
+    finally { setBusy(false); }
   }
   const loc = status?.localization;
   const current = enabled && status?.connected && !expired && (!loc || (!loc.stale && loc.state === 'tracking'));
@@ -143,6 +187,8 @@ export function LiveWorkspace({notify, capture, onCapture}: {
   const controlFrame = !controlIssue ? control : null;
   const displayedLine = selectedLine || 'raceline';
   const autoActive = (status?.auto_drive?.publishers ?? 0) > 0;
+  const captureMap = capture ? <CaptureMap status={status} reference={doc ? reference : null} trail={trail}
+    enabled={enabled} expired={expired} planExpired={planExpired} error={mapError} reload={() => setMapReload(n => n + 1)}/> : undefined;
   function togglePolling() {
     if (!enabled) setStatus(null);
     setTrail([]);
@@ -150,39 +196,42 @@ export function LiveWorkspace({notify, capture, onCapture}: {
   }
   return <div className={capture ? 'live-capture' : 'content-page live-page'}>
     <div className="page-intro"><h2>{capture ? '録画用表示' : 'ライブ観測'}</h2><div className="button-row">
+      <label>観測先 <select aria-label="ライブ観測の接続先" value={target} disabled={busy}
+        onChange={event => selectTarget(event.target.value as Target)}>
+        <option value="jetson">Jetson（SSH）</option><option value="gazebo">Gazebo（Notebook）</option>
+      </select></label>
       <span className={'connection-indicator ' + (enabled && status?.connected ? 'online' : '')}><i/>
         {!enabled ? '表示を一時停止' : status?.connected ? '観測接続中' : '未接続'}</span>
       <button className="button" onClick={togglePolling}>{enabled ? '表示を一時停止' : '表示を再開'}</button>
       <button className="button" onClick={() => onCapture(!capture)}>{capture ? '通常表示に戻る' : '録画用表示'}</button>
     </div></div>
-    {enabled && (error || (!status?.connected && status)) && <div className="inline-note"><Icon name="info" size={17}/><span>{error || availabilityText(status?.availability) || 'Jetsonの観測接続を確認してください。「データ転送」の接続設定を共用します。'}</span></div>}
+    {enabled && (error || (!status?.connected && status)) && <div className="inline-note"><Icon name="info" size={17}/><span>{error || status?.message || availabilityText(status?.availability) || (gazebo ? 'Notebook で atd gazebo closed-loop --web を起動してください。' : 'Jetson の観測接続を確認してください。「データ転送」の接続設定を共用します。')}</span></div>}
+    {gazebo ? <GazeboDrivePanel data={status?.gazebo} enabled={enabled} captureMap={captureMap}/> :
     <AutoDrivePanel data={status?.auto_drive} connected={!!status?.connected} enabled={enabled}
       requestStartedAt={requestTiming?.startedAt ?? 0} capture={capture} receivedAtMs={requestTiming?.receivedAtMs}
       roundTripMs={requestTiming?.roundTripMs}
-      captureMap={capture ? <CaptureMap status={status} reference={doc ? reference : null}
-        trail={trail} enabled={enabled} expired={expired} planExpired={planExpired}
-        error={mapError} reload={() => setMapReload(n => n + 1)}/> : undefined}/>
+      captureMap={captureMap}/>}
     {!capture && <>
     <div className="telemetry-grid"><div className="metric-card"><span>車速</span><strong>{freshVelocity ? freshVelocity.linear_mps.toFixed(2) : '—'}<small>m/s</small></strong><span className="metric-caption">{freshVelocity ? `受信 ${freshVelocity.age_s?.toFixed(1) ?? '—'} 秒前` : '新しい速度データなし'}</span></div><div className="metric-card"><span>自己位置 X / Y</span><strong className="coordinate-value">{freshPose ? `${freshPose.x.toFixed(2)} / ${freshPose.y.toFixed(2)}` : '— / —'}<small>m</small></strong><span className="metric-caption">{freshPose?.frame || '座標系未受信'}</span></div><div className="metric-card"><span>姿勢角</span><strong>{freshPose ? (freshPose.yaw * 180 / Math.PI).toFixed(1) : '—'}<small>°</small></strong><span className="metric-caption">{freshPose ? `${freshPose.frame} 座標系のYaw` : '座標系未受信'}</span></div><div className="metric-card"><span>自己位置の追跡状態</span><strong aria-live="polite">{tracking}</strong><span className="metric-caption">{loc ? loc.map_id : '地図 ID 未受信'}</span></div></div>
-    <div className="live-columns"><section className="content-card live-map"><div className="card-heading"><h3>{selectedLine ? LINE_NAMES[selectedLine] + ' の前方軌道' : '走行ラインと自己位置'}</h3><select aria-label="表示する地図" value={mapId} onChange={e => setMapId(e.target.value)}><option value="">Jetson の地図を表示{loc?.map_id ? ' · ' + loc.map_id : ''}</option>{maps.map(map => <option value={map.id} key={map.id}>{map.title || map.id}</option>)}</select></div><div className="live-planning" aria-label="ライブ走行計画"><PlanningMetrics frame={planFrame}
+    <div className="live-columns"><section className="content-card live-map"><div className="card-heading"><h3>{selectedLine ? LINE_NAMES[selectedLine] + ' の前方軌道' : '走行ラインと自己位置'}</h3><select aria-label="表示する地図" value={mapId} onChange={e => setMapId(e.target.value)}><option value="">{source} の地図を表示{loc?.map_id ? ' · ' + loc.map_id : ''}</option>{maps.map(map => <option value={map.id} key={map.id}>{map.title || map.id}</option>)}</select></div><div className="live-planning" aria-label="ライブ走行計画"><PlanningMetrics frame={planFrame}
           reason={planningIssue || (!doc ? 'Notebook の地図と照合しています。' : '')}/>
-        <ControlReadout frame={controlFrame} issue={controlIssue}>
+        {!gazebo && <ControlReadout frame={controlFrame} issue={controlIssue}>
           {controlFrame?.config && <LiveControlConfig config={controlFrame.config}/>}
-        </ControlReadout></div>
+        </ControlReadout>}</div>
       <MapCanvas doc={doc} controlTarget={controlOverlay(controlFrame, controlFrame?.vehicle_pose)} cloud={doc ? cloud : null} referenceLine={displayedLine} forwardPath={planFrame?.trajectory}
         pose={planFrame?.vehicle_pose || mapPose} trail={mapPose ? trail : []}/>
       <div className="planning-legend">
         <ReferenceLineLegend raceline={displayedLine === 'raceline' ? doc?.lines.raceline : undefined}>
           <span><i/>{LINE_NAMES[displayedLine]}</span>
         </ReferenceLineLegend>
-        <span><i className="plan-path"/>前方軌道</span><span><i className="control-target"/>追従点</span><span><i className="plan-trail"/>実走軌跡</span><span>矢印は車両の向き</span>
+        <span><i className="plan-path"/>前方軌道</span>{!gazebo && <span><i className="control-target"/>追従点</span>}<span><i className="plan-trail"/>実走軌跡</span><span>矢印は車両の向き</span>
       </div>
       {(issue || mapError) && <div className="inline-note" role="status"><span>{mapError ? `Notebook の地図「${selectedId}」を確認してください。${mapError}` : issue}</span>
         <button className="button small" onClick={() => setMapReload(n => n + 1)}>地図を再読込</button></div>}
       {doc && !doc.lines[displayedLine]?.points?.length && <p className="inline-note">この地図には {LINE_NAMES[displayedLine]} が保存されていません。</p>}
       {loc && tracking !== '追跡中' && <p className="small-note">{expired ? '新しい状態の受信を待っています。' : loc.reason}</p>}</section>
-    <section className="content-card parameter-card"><div className="card-heading"><h3>パラメータ調整</h3><Icon name="settings" size={18}/></div><div className="parameter-body"><Field label="対象ノード"><select value={node} onChange={e => { setNode(e.target.value); setParameters([]); }}><option value="">ノードを選択</option>{status?.parameter_nodes?.map(name => <option key={name} value={name}>{name}</option>)}</select></Field><button className="button full" disabled={!node || busy} onClick={() => void loadParameters()}><Icon name="refresh" size={15}/>現在値を取得</button>{!parameters.length && <p className="small-note">変更を許可されたパラメータだけを操作できます。値は明示的に適用します。</p>}<div className="parameter-list">{parameters.map(parameter => <div className="parameter-item" key={parameter.name}><div><strong>{parameter.name}</strong>{(parameter.read_only || !parameter.allowed) && <Tag>{parameter.read_only ? '読取専用' : '変更対象外'}</Tag>}</div>{parameter.description && <p>{parameter.description}</p>}<div className="parameter-input"><input aria-label={parameter.name} disabled={parameter.read_only || !parameter.allowed || busy} value={drafts[parameter.name] ?? ''} onChange={e => setDrafts({ ...drafts, [parameter.name]: e.target.value })}/><button className="button small" disabled={parameter.read_only || !parameter.allowed || busy || drafts[parameter.name] === (typeof parameter.value === 'string' ? parameter.value : JSON.stringify(parameter.value))} onClick={async () => { setBusy(true); try { const text = drafts[parameter.name]; const value = typeof parameter.value === 'string' ? text : JSON.parse(text); await api('live/parameters', { node, values: { [parameter.name]: value } }); await loadParameters(); notify(`${parameter.name} を適用しました`); } catch (e) { notify((e as Error).message, true); } finally { setBusy(false); } }}>適用</button></div></div>)}</div></div></section></div>
-    {!autoActive && <LiveSpeed status={status} expired={speedExpired || expired || planExpired} enabled={enabled}/>}
+    <section className="content-card parameter-card"><div className="card-heading"><h3>パラメータ調整</h3><Icon name="settings" size={18}/></div><div className="parameter-body"><Field label="対象ノード"><select value={node} disabled={busy} onChange={e => { setNode(e.target.value); setParameters([]); setParameterInstance(''); }}><option value="">ノードを選択</option>{status?.parameter_nodes?.map(name => <option key={name} value={name}>{name}</option>)}</select></Field><button className="button full" disabled={!node || busy || !enabled || !status?.connected} onClick={() => void loadParameters()}><Icon name="refresh" size={15}/>現在値を取得</button>{!parameters.length && <p className="small-note">変更を許可されたパラメータだけを操作できます。値は明示的に適用します。</p>}<div className="parameter-list">{parameters.map(parameter => <div className="parameter-item" key={parameter.name}><div><strong>{parameter.name}</strong>{(parameter.read_only || !parameter.allowed) && <Tag>{parameter.read_only ? '読取専用' : '変更対象外'}</Tag>}</div>{parameter.description && <p>{parameter.description}</p>}<div className="parameter-input"><input aria-label={parameter.name} disabled={!allowApply || parameter.read_only || !parameter.allowed || busy} value={drafts[parameter.name] ?? ''} onChange={e => setDrafts({ ...drafts, [parameter.name]: e.target.value })}/><button className="button small" disabled={!allowApply || parameter.read_only || !parameter.allowed || busy || drafts[parameter.name] === (typeof parameter.value === 'string' ? parameter.value : JSON.stringify(parameter.value))} onClick={() => void applyParameter(parameter)}>適用</button></div></div>)}</div></div></section></div>
+    {!gazebo && !autoActive && <LiveSpeed status={status} expired={speedExpired || expired || planExpired} enabled={enabled}/>}
     <section className="content-card"><div className="card-heading"><div className="button-row"><h3>走行データの時系列</h3><select className="plot-selector" aria-label="時系列に表示する値" value={plotMetric} onChange={e => setPlotMetric(e.target.value as 'linear' | 'angular')}><option value="linear">車速 [m/s]</option><option value="angular">角速度 [rad/s]</option></select></div><button className="button quiet small" onClick={() => { setSamples([]); setAngularSamples([]); }}>履歴をクリア</button></div><SpeedPlot samples={plotMetric === 'linear' ? samples : angularSamples} label={plotMetric === 'linear' ? '車速' : '角速度'} unit={plotMetric === 'linear' ? 'm/s' : 'rad/s'}/></section>
     </>}
   </div>;

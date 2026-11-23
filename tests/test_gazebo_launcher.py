@@ -184,7 +184,9 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
                  ("prepare", "--imu", "400"), ("prepare", "--speed", "2"), ("video", "--speed", "nan"),
                  ("bag", "--speed", "-1"), ("video", "--speed", "1e500"),
                  ("bag", "--full-throttle-speed", "10"), ("serve", "--full-throttle-speed", "10"),
-                 ("map", "--laps", "0"), ("video", "--laps", "1.2"), ("bag", "--laps"),
+                 ("map", "--laps", "0"), ("video", "--laps", "0"), ("bag", "--laps", "0"),
+                 ("run", "--laps", "0"), ("closed-loop", "--laps", "-1"), ("serve", "--web"),
+                 ("video", "--laps", "1.2"), ("bag", "--laps"),
                  ("run", "--duration", "2", "--speed", "1"), ("serve", "--route", "chicane", "--laps", "1"),
                  ("benchmark", "--laps", "2"), ("diagnose", "--laps", "2"), ("video", "--course", "../spa")]
         for mode, *settings in cases:
@@ -196,6 +198,12 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
                                       text=True)
         self.assertIn("--duration 10", out)
         self.assertIn("--speed 3", out)
+
+    def test_explicit_zero_laps_reaches_streaming_mode(self):
+        out = subprocess.check_output(["bash", str(ROOT / "scripts/gazebo.sh"), "serve",
+                                       "--laps", "0", "--dry-run"], text=True)
+        args = shlex.split(next(line for line in out.splitlines() if line.startswith("docker ")))
+        self.assertEqual(args[args.index("--laps") + 1], "0")
 
     def test_server_uses_same_ipc_as_isaac_ros(self):
         shell = """

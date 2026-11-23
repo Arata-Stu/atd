@@ -176,3 +176,32 @@ class CommandMotionTests(unittest.TestCase):
             self.assertEqual(run.main(), 0)
             args = child.call_args.args[0]
             self.assertEqual((args.laps, args.duration, args.speed), (2, None, None))
+
+    def test_endurance_saves_completed_laps_and_partial_distance_on_manual_stop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            def start(children, stereo, course, check_stop, imu_hz):
+                scene = json.loads((out / "scene/scene.json").read_text())
+                self.assertEqual(scene["trajectory"]["laps"], 0)
+                self.assertIsNone(scene["trajectory"]["total_travel_seconds"])
+                samples = scene["trajectory"]["samples_s_x_y_yaw"][:-1:2]
+                with (out / "scene/rig_motion.jsonl").open("w") as trace:
+                    for index, (_, x, y, yaw) in enumerate(samples * 3 + samples[:12]):
+                        row = dict(sim_time_s=1. + index * .1, x_m=x, y_m=y, yaw_rad=yaw,
+                                   actuator_state="driving", first_active_ns=10**9)
+                        trace.write(json.dumps(row) + "\n")
+            def stop_after_trace(_):
+                (out / "closed_loop.cancel").write_text("ユーザーが走行を中断しました\n")
+
+            argv = ["run.py", "--mode", "closed-loop", "--output", tmp, "--laps", "0"]
+            with patch.object(sys, "argv", argv), patch.object(world, "odaiba_track"), \
+                    patch.object(run.shutil, "which", return_value=None), patch.object(run.subprocess, "Popen"), \
+                    patch.object(run, "check_children"), patch.object(run, "stop_group"), \
+                    patch.object(run, "start_stream", side_effect=start), patch.object(run.time, "sleep", stop_after_trace):
+                self.assertEqual(run.main(), 0)
+            result = json.loads((out / "closed_loop.result.json").read_text())
+            self.assertEqual(json.loads((out / "run.json").read_text())["closed_loop"], result)
+            self.assertEqual(result["status"], "stopped")
+            self.assertEqual((result["laps_completed"], result["laps_requested"]), (3, 0))
+            self.assertEqual(len(result["lap_times_s"]), 3)
+            self.assertGreater(result["finish_sim_s"] - result["started_sim_s"], sum(result["lap_times_s"]))

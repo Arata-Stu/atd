@@ -1,4 +1,5 @@
 """Notebook API forwarding contract; no SSH, ROS or Bluetooth I/O."""
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -81,3 +82,43 @@ def test_live_auto_read_only_snapshot_and_disconnect(client):
         assert client.post('/api/live/status', json={'throttle': 1}).status_code == 405
     assert offline['connected'] is False and offline['auto_drive'] is None
     assert [call.args[1:] for call in bridge.call_args_list] == [('/live/status', 'GET', None)] * 2
+
+
+def test_gazebo_live_status_and_parameters_use_local_bridge_without_ssh(client):
+    with patch('atd_api.jetson_bridge.http.client.HTTPConnection') as connection, \
+            patch('atd_api.live_input.bridge_request') as ssh:
+        bridge = connection.return_value
+
+        def reply(_limit):
+            headers = bridge.request.call_args.kwargs['headers']
+            return json.dumps({'identity': {'environment': 'gazebo', 'instance_id': 'run1',
+                               'schema': 'atd.web_bridge.v1'}, 'request_id': headers['X-ATD-Request'],
+                               'data': {'ok': True}}).encode()
+
+        bridge.getresponse.return_value.read.side_effect = reply
+        for endpoint in ('live/status', 'live/parameters?node=/atd_gazebo_control'):
+            url = '/api/' + endpoint + ('&' if '?' in endpoint else '?') + 'target=gazebo'
+            assert client.get(url).json()['connected'] is True
+        body = {'instance_id': 'run1', 'node': '/atd_gazebo_control', 'values': {'lookahead_time_s': .35}}
+        assert client.post('/api/live/parameters?target=gazebo', json=body).json()['ok']
+        assert json.loads(bridge.request.call_args.kwargs['body']) == {**body, 'operation': 'set'}
+        assert bridge.request.call_args.args == ('POST', '/live/parameters')
+        connection.assert_called_with('127.0.0.1', 8791, timeout=7)
+        assert client.post('/api/esc/prepare?target=gazebo', json={}).status_code == 422
+        assert client.get('/api/live/status?target=other').status_code == 422
+        ssh.assert_not_called()
+
+
+def test_gazebo_rejects_other_bridge_identity_and_never_falls_back_to_jetson(client):
+    with patch('atd_api.jetson_bridge.http.client.HTTPConnection') as connection, \
+            patch('atd_api.live_input.bridge_request') as ssh:
+        bridge = connection.return_value
+        def other_identity(_limit):
+            nonce = bridge.request.call_args.kwargs['headers']['X-ATD-Request']
+            return json.dumps(dict(identity=dict(schema='atd.web_bridge.v1', instance_id='other',
+                                   environment='jetson'), request_id=nonce, data={})).encode()
+        bridge.getresponse.return_value.read.side_effect = other_identity
+        assert client.get('/api/live/status?target=gazebo').json()['connected'] is False
+        bridge.request.side_effect = ConnectionRefusedError()
+        assert '--web' in client.get('/api/live/status?target=gazebo').json()['message']
+        ssh.assert_not_called()

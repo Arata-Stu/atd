@@ -30,7 +30,9 @@ usage() {
   --engine-dir 相対パス  closed-loop の VGL engine を明示する場合の results からの相対パス
   --min-lookahead m   closed-loop の Pure Pursuit 最短先読み距離を指定
   --rviz / --no-rviz  closed-loop の走行ライン・GT・推定軌跡・cuVSLAM の特徴点を RViz で表示するか選択（既定 OFF）
-  --laps N            全周を N 周走行（正の整数）。run では動画が対象。serve は指定周回で終了
+  --web               closed-loop を Notebook の Web UI「ライブ」から観測・調整する
+  --laps N            全周を N 周走行。closed-loop と serve は 0 で無制限（Ctrl+C で終了）
+                      動画・bag・地図作成は1以上。run では動画が対象
   --duration 秒       video・bag・map は1周の走行時間（--speed と排他）
                       benchmark・diagnose は実時間の計測時間（--speed と併用可）
   --route lap         全周を走行（既定）。連続配信では同方向に周回
@@ -75,6 +77,7 @@ line=
 engine_dir=
 min_lookahead=
 rviz=false
+web=false
 if [[ "$action" = closed-loop ]]; then resolution=; camera_hz=30; fi
 sim_args=()
 while (( $# )); do
@@ -101,9 +104,14 @@ while (( $# )); do
             [[ "$action" = closed-loop ]] || fail "$1 は closed-loop で指定してください"
             if [[ "$1" = --rviz ]]; then rviz=true; else rviz=false; fi
             shift ;;
+        --web)
+            [[ "$action" = closed-loop ]] || fail "$1 は closed-loop で指定してください"
+            web=true; shift ;;
         --laps)
             case "$action" in run|video|bag|map|closed-loop|serve) ;; *) fail "--laps は走行周回のある操作で指定してください" ;; esac
-            [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || fail "--laps は1以上の整数で指定してください"
+            [[ "${2:-}" =~ ^(0|[1-9][0-9]*)$ ]] || fail "--laps は0以上の整数で指定してください"
+            [[ "$2" != 0 || "$action" = closed-loop || "$action" = serve ]] ||
+                fail "$action の --laps は1以上です。無制限の耐久走行は closed-loop、連続配信は serve を使ってください"
             laps="$2"; shift 2 ;;
         --wait-for-stereo)
             [[ "$action" = serve ]] || fail "$1 は serve で指定してください"
@@ -294,9 +302,15 @@ run_mode() {
             job+=(--map "$map_id" --line "$line" --speed "$speed")
             if [[ -n "$full_throttle_speed" ]]; then job+=(--full-throttle-speed "$full_throttle_speed"); fi
             if $rviz; then job+=(--rviz); fi
+            if $web; then
+                job+=(--web)
+                printf 'Web UI「ライブ」で観測先 Gazebo を選択  http://127.0.0.1:8766/#live\n'
+            fi
             if [[ -n "$engine_dir" ]]; then job+=(--engine-dir "$engine_dir"); fi
             if [[ -n "$min_lookahead" ]]; then job+=(--min-lookahead "$min_lookahead"); fi
-            printf '地図 %s / %s　速度上限 %s m/s　%s 周　ステレオ %s @ %s Hz\n' "$map_id" "$line" "$speed" "$laps" "$resolution" "$camera_hz"
+            local lap_label="${laps} 周"
+            if [[ "$laps" = 0 ]]; then lap_label='周回無制限（Ctrl+C で終了）'; fi
+            printf '地図 %s / %s　速度上限 %s m/s　%s　ステレオ %s @ %s Hz\n' "$map_id" "$line" "$speed" "$lap_label" "$resolution" "$camera_hz"
         fi
         if $dry_run; then job+=(--dry-run); fi
         exec "${job[@]}" -- "${command[@]}"

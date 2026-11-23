@@ -67,6 +67,7 @@ class RunContractTests(unittest.TestCase):
     def test_speed_course_laps_and_measurement_duration_have_distinct_meanings(self):
         cases = [("video", ["--course", "odaiba", "--speed", "3.5", "--laps", "2"], ("odaiba", "lap", 3.5, 2, None)),
                  ("serve", ["--laps", "1"], ("odaiba", "lap", None, 1, None)),
+                 ("serve", ["--laps", "0"], ("odaiba", "lap", None, 0, None)),
                  ("diagnose", ["--speed", "1", "--duration", "4"], ("odaiba", "lap", 1., None, 4.))]
         for mode, flags, expected in cases:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, \
@@ -76,7 +77,9 @@ class RunContractTests(unittest.TestCase):
                 args, _ = simulate.call_args.args
                 self.assertEqual((args.circuit, args.route, args.speed, args.laps, args.duration), expected)
         invalid = [("video", ["--speed", "nan"]), ("serve", ["--speed", "-2"]),
-                   ("video", ["--laps", "2", "--route", "chicane"]), ("serve", ["--laps", "0"]),
+                   ("video", ["--laps", "2", "--route", "chicane"]), ("serve", ["--laps", "-1"]),
+                   ("video", ["--laps", "0"]), ("map", ["--laps", "0"]),
+                   ("bag", ["--laps", "0", "--bag-output", "unused"]),
                    ("map", ["--speed", "1", "--duration", "2"]), ("benchmark", ["--laps", "2"])]
         for mode, flags in invalid:
             with self.subTest(mode=mode, flags=flags), tempfile.TemporaryDirectory() as tmp, \

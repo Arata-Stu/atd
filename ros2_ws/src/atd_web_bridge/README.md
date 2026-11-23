@@ -1,6 +1,8 @@
 # atd_web_bridge
 
-Jetson 内だけで DDS に参加し、位置・速度・Jetson 接続 Joy・Pico の USB 受信状態・入力の役割設定を loopback HTTP へ提供する。Notebook の共通 Web backend が SSH（鍵・known_hosts厳格）で Jetson の標準 Python/urllib を起動してアクセスする。Notebook は車載 DDS に参加せず、Jetson でブラウザを起動しない。HTTP は Python 標準ライブラリ、ROS service 仲介は rclpy。これは低頻度の監視・設定用であり、画像の大容量経路やリアルタイム制御を担わないため Python node を用いる。
+実車では Jetson 内で DDS に参加し、位置・速度・Jetson 接続 Joy・Pico の USB 受信状態・入力の役割設定を loopback HTTP へ提供する。Notebook の共通 Web backend が SSH（鍵・known_hosts厳格）で Jetson の標準 Python/urllib を起動してアクセスする。HTTP は Python 標準ライブラリ、ROS service 仲介は rclpy。
+
+Notebook の `atd gazebo closed-loop --web` は、Gazebo の ROS ドメインに同じ bridge を起動する。Web UI のライブ画面で Gazebo を選ぶと、Notebook 内の `127.0.0.1:8791` を通じて自己位置・計画と直近15秒の目標速度・推定速度・指令舵角・スロットルを監視できる。パラメータの変更は起動中の `/atd_gazebo_control` に反映する。速度上限は起動時の `--speed` まで、最大先読みは起動時の前方軌道長まで変更できる。速度上限または PID ゲインを変更すると速度 PID の履歴をリセットする。
 
 node は `/atd_web_bridge`、executable は `web_bridge`。CMake / ament_cmake_auto / ament_cmake_python で install する。
 

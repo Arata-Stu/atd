@@ -84,6 +84,25 @@ class ClosedLoopJobTests(unittest.TestCase):
                     self.assertNotEqual(subprocess.run([*cmd, *extra], env=env, capture_output=True).returncode, 0)
             self.assertFalse((root / 'runs').exists())
 
+    def test_host_recognizes_saved_endurance_result_after_interrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            argv = ['closed_loop_job.py', 'host', '--output', tmp, '--results', tmp,
+                    '--circuit', 'odaiba', '--domain', '74', '--container', 'fixture',
+                    '--profile', '/test.xml', '--map', 'test', '--line', 'centerline',
+                    '--speed', '1.5', '--web', '--', 'gazebo', '--laps', '0']
+
+            def interrupt(_args, _command, _ros):
+                (out / 'closed_loop.result.json').write_text(json.dumps(dict(status='stopped', laps_completed=3)))
+                raise KeyboardInterrupt
+
+            with patch.object(sys, 'argv', argv), patch.object(job, 'check_isaac_mounts'), \
+                    patch.object(job.signal, 'signal'), patch.object(job, 'supervise', side_effect=interrupt):
+                self.assertEqual(job.main(), 0)
+            session = json.loads((out / 'closed_loop.host.json').read_text())
+            self.assertEqual(session['status'], 'stopped')
+            self.assertTrue(session['web'])
+
     def test_result_or_early_exit_cancels_both_children(self):
         for outcome in ('completed', 'off_course', 'early', 'interrupted'):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as tmp:

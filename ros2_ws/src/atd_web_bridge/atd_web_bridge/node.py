@@ -31,6 +31,7 @@ from .planning import live_plan, observation as planning_observation
 from .control import live_control, observation as control_observation
 from .speed_control import SpeedWindow
 from .drive_monitor import drive_monitor, joy_sample, publisher_gid, receive_feedback
+from .gazebo import GazeboDriveWindow
 from .core import Cache, ProfileStore, TeleopProfileStore, PropoProfileStore, VehicleProfileStore, prepare_parameter_value
 
 
@@ -69,7 +70,8 @@ class BridgeNode(Node):
         from rclpy.qos import QoSProfile, ReliabilityPolicy
         super().__init__('atd_web_bridge')
         fixed = ParameterDescriptor(read_only=True)
-        defaults = {'port': 8790, 'freshness_s': 2.5, 'esc_trials_enabled': False,
+        defaults = {'port': 8790, 'environment': 'jetson', 'freshness_s': 2.5, 'esc_trials_enabled': False,
+            'gazebo_control_topic': '/atd/gazebo/control_state',
             'localization_topic': '/localization/status',
             'planning_topic': '/planning/status',
             'control_topic': '/control/status',
@@ -96,6 +98,23 @@ class BridgeNode(Node):
                 or any(not isinstance(name, str) for name in v) for k, v in self.allowed.items()):
             raise ValueError('parameter_allowlist_json must map nodes to parameter-name lists')
         self.cache = Cache(self.settings['freshness_s'])
+        environment = self.settings['environment']
+        if environment not in ('jetson', 'gazebo') or environment == 'gazebo' and not self.get_parameter('use_sim_time').value:
+            raise ValueError('Gazebo 接続にはシミュレーション時計が必要です。environment は jetson / gazebo で指定してください')
+        self.operation_lock = threading.RLock()
+        self.identity = {'schema': 'atd.web_bridge.v1', 'instance_id': uuid.uuid4().hex,
+                         'environment': environment,
+                         'hostname': socket.gethostname(), 'node': self.get_fully_qualified_name(), 'pid': os.getpid()}
+        self.parameter_clients = {}
+        self.subscriptions_ = []
+        self.subscribe(LocalizationStatus, 'localization_topic',
+                       lambda m: self.cache.put('localization', observation(m)))
+        self.subscribe(PlanningStatus, 'planning_topic',
+                       lambda m: self.cache.put('planning', planning_observation(m)))
+        if environment == 'gazebo':
+            self.gazebo_window = GazeboDriveWindow(self.settings['freshness_s'])
+            self.subscribe(String, 'gazebo_control_topic', self.receive_gazebo)
+            return
         self.speed_window = SpeedWindow(self.cache)
         self.auto_drive = AutoDriveWindow()
         self.esc_trials = TrialStore()
@@ -103,14 +122,6 @@ class BridgeNode(Node):
         self.teleop_profiles = TeleopProfileStore(self.settings['teleop_profile_path'])
         self.propo_profiles = PropoProfileStore(self.settings['rc_profile_path'])
         self.vehicle_profiles = VehicleProfileStore(self.settings['vehicle_profile_path'])
-        self.operation_lock = threading.RLock()
-        self.identity = {'schema': 'atd.web_bridge.v1', 'instance_id': uuid.uuid4().hex,
-                         'hostname': socket.gethostname(), 'node': self.get_fully_qualified_name(), 'pid': os.getpid()}
-        self.subscriptions_ = []
-        self.subscribe(LocalizationStatus, 'localization_topic',
-                       lambda m: self.cache.put('localization', observation(m)))
-        self.subscribe(PlanningStatus, 'planning_topic',
-                       lambda m: self.cache.put('planning', planning_observation(m)))
         self.subscribe(ControlStatus, 'control_topic',
                        lambda m: self.cache.put('control', control_observation(m)))
         self.subscribe(SpeedControlStatus, 'speed_control_topic', self.speed_window.receive)
@@ -141,7 +152,6 @@ class BridgeNode(Node):
         self.propo_clients = {
             'configure': self.create_client(SetBool, self.settings['rc_node'] + '/configure'),
             'reload': self.create_client(Trigger, self.settings['rc_node'] + '/reload_profile')}
-        self.parameter_clients = {}
 
     def subscribe(self, kind, setting, callback, qos=qos_profile_sensor_data):
         self.subscriptions_.append(self.create_subscription(kind, self.settings[setting], callback, qos))
@@ -313,8 +323,10 @@ class BridgeNode(Node):
 
     def nodes(self):
         prefix = self.settings['parameter_node_prefix']
-        return sorted(set((namespace.rstrip('/') + '/' + name) for name, namespace in self.get_node_names_and_namespaces()
-                          if (namespace.rstrip('/') + '/' + name).startswith(prefix)))
+        names = [namespace.rstrip('/') + '/' + name for name, namespace in self.get_node_names_and_namespaces()]
+        if self.identity.get('environment') == 'gazebo':
+            return ['/atd_gazebo_control'] if names.count('/atd_gazebo_control') == 1 else []
+        return sorted({name for name in names if name.startswith(prefix)})
 
     def client(self, node):
         if node not in self.nodes():
@@ -388,8 +400,21 @@ class BridgeNode(Node):
             data = None
         self.auto_drive.receive(data, gid, time.time_ns(), time.monotonic_ns())
 
+    def receive_gazebo(self, message, info):
+        try:
+            data = json.loads(message.data) if len(message.data) <= 16384 else None
+        except (ValueError, RecursionError):
+            return
+        self.gazebo_window.receive(data, publisher_gid(info))
+
     def dispatch(self, path, method, body):
         with self.operation_lock:
+            simulation = self.identity.get('environment') == 'gazebo'
+            if simulation:
+                if (path, method) not in (('/live/status', 'GET'), ('/live/parameters', 'POST')):
+                    raise ValueError('Gazebo bridge はライブ表示とシミュレーターのパラメータに対応します')
+                if path == '/live/parameters' and 'values' in body and body.get('instance_id') != self.identity['instance_id']:
+                    raise ValueError('Gazebo の試行が切り替わりました。再接続して設定を取得してください')
             if path.startswith(('/teleop/', '/propo/', '/vehicle/')) and method in ('PUT', 'POST'):
                 if type(body.get('instance_id')) is not str or body['instance_id'] != self.identity['instance_id']:
                     raise ValueError('Jetson bridge の接続先が変更されています。状態と設定を再取得してください')
@@ -397,6 +422,11 @@ class BridgeNode(Node):
                 now = self.get_clock().now().nanoseconds * 1e-9
                 live = live_observations(self.cache, self.count_publishers(self.settings['localization_topic']), now)
                 plan = live_plan(self.cache, self.count_publishers(self.settings['planning_topic']), live['localization'], now)
+                if simulation:
+                    gid = self.observation_gid('gazebo_control_topic', '/atd_gazebo_control')
+                    return {**live, 'planning': plan, 'gazebo': self.gazebo_window.snapshot(now, gid),
+                            'parameter_nodes': self.nodes(), 'topics': [self.settings[k] for k in
+                            ('localization_topic', 'planning_topic', 'gazebo_control_topic')]}
                 count, gid = self.observation_source('auto_drive_topic', '/atd_auto_drive')
                 return {**live, 'planning': plan,
                         'auto_drive': self.auto_drive.current(gid, time.time_ns(), time.monotonic_ns(), count),

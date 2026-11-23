@@ -28,7 +28,7 @@ export const runKey = (run: GazeboRun) => run.circuit + '/' + run.id;
 export const statuses: Record<string,string> = {
   completed: '完走', off_course: '境界接触', command_timeout: '指令タイムアウト', control_stopped: '制御停止',
   no_progress: '進行停止', invalid_trace: '記録異常', cancelled: '中断', interrupted: '中断',
-  running: '走行中', error: 'エラー', failed: '失敗', unknown: '状態不明',
+  running: '走行中', stopped: '手動終了', error: 'エラー', failed: '失敗', unknown: '状態不明',
 };
 
 function lowerBound<T extends Timed>(rows: T[], t: number) {

@@ -83,6 +83,7 @@ usage() {
     atd gazebo
     atd gazebo bag --course odaiba --speed 3 --laps 2
     atd gazebo closed-loop --line raceline --speed 10 --rviz
+    atd gazebo closed-loop --line centerline --laps 0 --web
     atd gazebo video --route lap
     atd gazebo serve
     atd bringup gazebo
@@ -131,7 +132,7 @@ choose() {
 }
 
 gazebo_from_menu() {
-    local title="$1" action catalog circuit speed laps resolution camera_hz imu rviz
+    local title="$1" action catalog circuit speed laps resolution camera_hz imu display
     shift
     action="$(choose "$title" bag 'ステレオ rosbag を記録' map '走行中に cuVSLAM 地図を作成' \
         closed-loop '保存地図で自己位置推定・計画・制御して自動走行' \
@@ -167,15 +168,23 @@ gazebo_from_menu() {
         local default_laps='1周'
         if [[ "$action" = serve ]]; then default_laps='連続配信'; fi
         if [[ "$action" = closed-loop ]]; then default_laps='2周'; fi
-        printf '周回数（Enter で%s、q で戻る）> ' "$default_laps" >&2
+        local unlimited=''
+        if [[ "$action" = closed-loop || "$action" = serve ]]; then unlimited='、0 で無制限'; fi
+        printf '周回数（Enter で%s%s、q で戻る）> ' "$default_laps" "$unlimited" >&2
         IFS= read -r laps || return 0
         [[ "$laps" != q ]] || return 0
         if [[ -n "$laps" ]]; then args+=(--laps "$laps"); fi
     fi
     if [[ "$action" = closed-loop ]]; then
         camera_hz="$(choose "$title / カメラの撮影レート" 30 'Hz（既定）' 60 'Hz' 90 'Hz')" || return 0
-        rviz="$(choose "$title / RViz" off '画面を開かずに評価（既定）' on '走行ライン・GT・推定軌跡・特徴点を表示')" || return 0
-        if [[ "$rviz" = on ]]; then args+=(--rviz); fi
+        display="$(choose "$title / 走行中の表示" off '画面を開かずに評価（既定）' \
+            rviz 'RViz で走行ライン・GT・推定軌跡・特徴点を表示' web 'Web UI でライブ表示・設定変更' \
+            both 'RViz と Web UI を併用')" || return 0
+        case "$display" in
+            rviz) args+=(--rviz) ;;
+            web) args+=(--web) ;;
+            both) args+=(--rviz --web) ;;
+        esac
         "$@" "${args[@]}" --camera-hz "$camera_hz"
         return
     fi

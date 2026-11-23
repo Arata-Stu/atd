@@ -1,6 +1,7 @@
-"""SSH-only adapter to the Jetson-local HTTP/ROS bridge; never joins DDS."""
+"""HTTP adapters for the Jetson (via SSH) and Notebook Gazebo bridges."""
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import shlex
@@ -10,6 +11,26 @@ import uuid
 
 class BridgeUnavailable(RuntimeError):
     pass
+
+
+def gazebo_request(path: str, method: str, body: dict | None = None) -> dict:
+    if (method, path) not in {('GET', '/live/status'), ('POST', '/live/parameters')}:
+        raise BridgeUnavailable('Gazebo に対応していない操作です')
+    nonce = uuid.uuid4().hex
+    # Fixed loopback socket: no SSH, proxy, redirects or browser-supplied address.
+    bridge = http.client.HTTPConnection('127.0.0.1', 8791, timeout=7)
+    try:
+        bridge.request(method, path, body=json.dumps(body).encode() if body is not None else None,
+                       headers={'Content-Type': 'application/json', 'X-ATD-Request': nonce})
+        response = bridge.getresponse()
+        raw = response.read(2097153)
+        if len(raw) > 2097152:
+            raise BridgeUnavailable('Gazebo bridge の応答が大きすぎます')
+        return bridge_response(raw, nonce, 'Gazebo', environment='gazebo')
+    except (OSError, http.client.HTTPException) as exc:
+        raise BridgeUnavailable('Gazebo bridge に接続できません。Notebook で atd gazebo closed-loop --web を起動してください') from exc
+    finally:
+        bridge.close()
 
 
 # The remote host needs only the Python standard library, not this repository.
@@ -76,15 +97,21 @@ def request(connection: dict, path: str, method: str = 'GET', body: dict | None 
         raise BridgeUnavailable('Jetson bridge に接続できません。操作は自動再送しません') from exc
     if result.returncode:
         raise BridgeUnavailable('SSH / Jetson bridge 接続失敗: ' + result.stderr[-600:])
+    return bridge_response(result.stdout, nonce, 'Jetson')
+
+
+def bridge_response(raw: str | bytes, nonce: str, label: str, *, environment: str | None = None) -> dict:
     try:
-        value = json.loads(result.stdout)
+        value = json.loads(raw)
         identity = value['identity']
-        if identity.get('schema') != 'atd.web_bridge.v1' or not identity.get('instance_id') or value.get('request_id') != nonce:
+        if (not isinstance(identity, dict) or identity.get('schema') != 'atd.web_bridge.v1'
+                or not identity.get('instance_id') or value.get('request_id') != nonce
+                or (environment is not None and identity.get('environment') != environment)):
             raise ValueError('identity mismatch')
     except (ValueError, KeyError, TypeError) as exc:
-        raise BridgeUnavailable('Jetson bridge の応答・識別情報が一致しません') from exc
+        raise BridgeUnavailable(f'{label} bridge の応答・識別情報が一致しません') from exc
     if value.get('error'):
         raise BridgeUnavailable(value['error'])
     if not isinstance(value.get('data'), dict):
-        raise BridgeUnavailable('Jetson bridge の応答データが不正です')
+        raise BridgeUnavailable(f'{label} bridge の応答データが不正です')
     return {**value['data'], 'identity': identity, 'connected': True}

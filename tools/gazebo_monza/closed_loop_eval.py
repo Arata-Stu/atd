@@ -14,8 +14,8 @@ FOOTPRINT = dict(vehicle_length=.35, vehicle_width=.19, rear_axle_to_rear=.1065,
 
 class CourseEvaluation:
     def __init__(self, boundaries, samples, requested_laps):
-        if type(requested_laps) is not int or requested_laps < 1:
-            raise ValueError('周回数には正の整数を指定してください')
+        if type(requested_laps) is not int or requested_laps < 0:
+            raise ValueError('周回数には0以上の整数を指定してください（0は無制限）')
         self.left, self.right = boundaries['left'], boundaries['right']
         self.footprint = boundaries.get('footprint', FOOTPRINT)
         if len(self.left) != len(self.right) or len(samples) != len(self.left) + 1:

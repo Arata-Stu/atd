@@ -16,7 +16,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from atd_bringup.gazebo_control import default_min_lookahead, simulation_table, validate_speed_cap
+from atd_bringup.gazebo_control import TUNABLE_PARAMETERS, default_min_lookahead, simulation_table, validate_speed_cap
 from atd_control.bicycle import resolve_full_throttle_speed
 from atd_control.core import LookaheadConfig
 from atd_control.speed import PIDConfig
@@ -111,6 +111,13 @@ def setup(context):
                             on_exit=[Shutdown(reason='Gazebo の解析ログ記録が終了しました')]))
     if arg('rviz') == 'true':
         actions.extend(rviz_nodes(root, key, line, ref))
+    if arg('web') == 'true':
+        allowed = json.dumps({'/atd_gazebo_control': TUNABLE_PARAMETERS})
+        actions.append(Node(package='atd_web_bridge', executable='web_bridge', output='screen',
+                            parameters=[dict(use_sim_time=True, environment='gazebo', port=8791,
+                                             parameter_node_prefix='/atd_gazebo_control',
+                                             parameter_allowlist_json=ParameterValue(allowed, value_type=str))],
+                            on_exit=[Shutdown(reason='Gazebo の Web bridge が終了しました')]))
     return actions
 
 
@@ -122,6 +129,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('map_id'),
         DeclareLaunchArgument('rviz', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('web', default_value='false', choices=['true', 'false']),
         *(DeclareLaunchArgument(k, default_value=str(v)) for k, v in defaults.items()),
         OpaqueFunction(function=setup),
     ])

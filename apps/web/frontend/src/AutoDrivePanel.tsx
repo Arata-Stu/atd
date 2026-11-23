@@ -31,20 +31,27 @@ function AutoPlot({data, axis, last}: {data: AutoObservation; axis: PlotAxis; la
   const pwmRange = Math.min(500, Math.ceil((deviation + 10) / 50) * 50);
   const high = speed ? Math.ceil(maxSpeed * 2) / 2 : 1500 + pwmRange;
   const low = speed ? (values.some(v => v < 0) ? -high : 0) : 1500 - pwmRange;
+  return <LiveTrace name={axis.name} unit={axis.unit} labels={axis.labels} lines={lines} end={end}
+    low={low} high={high} last={last} stopTime={data.last_stop?.stamp_s}/>;
+}
+
+export function LiveTrace({name, unit, labels, lines, end, low, high, last, stopTime}: {
+  name: string; unit: string; labels: string[]; lines: [number,number][][][];
+  end: number; low: number; high: number; last: boolean; stopTime?: number;
+}) {
   const y = (v: number) => 4 + 92 * (high-v) / (high-low);
   const x = (t: number) => 1000 * (1 - (end-t) / AUTO_HISTORY_S);
-  const stopTime = data.last_stop?.stamp_s;
   return <figure className="auto-trace">
-    <figcaption><strong>{axis.name} <small>[{axis.unit}]</small></strong>
-      {axis.labels.map((label, i) => <span className={'auto-key auto-key-' + i} key={label}>{label}</span>)}
+    <figcaption><strong>{name} <small>[{unit}]</small></strong>
+      {labels.map((label, i) => <span className={'auto-key auto-key-' + i} key={label}>{label}</span>)}
     </figcaption>
     <div className="auto-trace-grid">
-      <div className="auto-ticks-y">{[high,(high+low)/2,low].map(t => <span key={t}>{speed ? Number(t.toFixed(2)) : t}</span>)}</div>
+      <div className="auto-ticks-y">{[high,(high+low)/2,low].map(t => <span key={t}>{Number(t.toFixed(2))}</span>)}</div>
       <div className="auto-trace-area">
-        <svg viewBox="0 0 1000 100" preserveAspectRatio="none" role="img" aria-label={axis.name + 'の直近15秒の折れ線グラフ'}>
+        <svg viewBox="0 0 1000 100" preserveAspectRatio="none" role="img" aria-label={name + 'の直近15秒の折れ線グラフ'}>
           {[4,50,96].map(h => <line key={h} x1={0} x2={1000} y1={h} y2={h} className="auto-gridline"/>)}
           {[0,1000/3,2000/3,1000].map(w => <line key={w} x1={w} x2={w} y1={4} y2={96} className="auto-gridline"/>)}
-          {[1,0].map(i => <g className={'auto-line auto-line-' + i} key={i}>
+          {lines.map((_,i)=>i).reverse().map(i => <g className={'auto-line auto-line-' + i} key={i}>
             {lines[i].map((segment, k) => segment.length === 1
               ? <line key={k} x1={x(segment[0][0])} x2={x(segment[0][0])+.3} y1={y(segment[0][1])} y2={y(segment[0][1])}/>
               : <polyline key={k} points={segment.map(([t,v]) => x(t).toFixed(2) + ',' + y(v).toFixed(2)).join(' ')}/>)}
@@ -52,7 +59,7 @@ function AutoPlot({data, axis, last}: {data: AutoObservation; axis: PlotAxis; la
           {stopTime !== undefined && stopTime >= end - AUTO_HISTORY_S && stopTime <= end &&
             <line className="auto-stop-line" x1={x(stopTime)} x2={x(stopTime)} y1={0} y2={100}><title>停止要求 {clockText(stopTime)}</title></line>}
         </svg>
-        {!points.length && <span className="auto-trace-empty">この区間は未観測</span>}
+        {!lines.some(series => series.length) && <span className="auto-trace-empty">この区間は未観測</span>}
       </div>
       {last && <div className="auto-ticks-x"><span>−15 s</span><span>−10 s</span><span>−5 s</span><span>0 s</span></div>}
     </div>

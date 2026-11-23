@@ -1,4 +1,4 @@
-"""Follow post-physics Gazebo observations and score a finite closed-loop run."""
+"""Follow post-physics Gazebo observations and score a closed-loop run."""
 import json
 import time
 
@@ -53,6 +53,8 @@ class Trial:
             self.previous_distance = self.evaluator.distance
         gate = len(self.evaluator.lap_times), self.evaluator.next_gate
         if self.last_gate_s is None or gate != self.last_gate:
+            if self.evaluator.requested_laps == 0 and gate[0] > self.last_gate[0]:
+                print(f"耐久走行 {gate[0]}周完了  ラップタイム {self.evaluator.lap_times[-1]:.2f} 秒", flush=True)
             self.last_gate, self.last_gate_s = gate, t
         if t - self.last_progress_s >= 30.:
             return self.evaluator.report("no_progress", t, "30シミュレーション秒で5 cmの移動を観測できません")
@@ -101,7 +103,8 @@ def run_trial(children, out, scene, report, start_stream, wait_for, check_childr
                         raise TimeoutError("90実時間秒にわたりGazeboの車体姿勢が届きません")
                     time.sleep(.05)
     except (KeyboardInterrupt, InterruptedError) as exc:
-        result = evaluator.report("cancelled", trial.last_sim_s, str(exc) or "割り込み")
+        status = "stopped" if evaluator.requested_laps == 0 else "cancelled"
+        result = evaluator.report(status, trial.last_sim_s, str(exc) or "ユーザーが走行を中断しました")
     except (OSError, RuntimeError, ValueError) as exc:
         result = evaluator.report("error", trial.last_sim_s, str(exc))
     report["closed_loop"] = result
@@ -109,6 +112,7 @@ def run_trial(children, out, scene, report, start_stream, wait_for, check_childr
     pending = target.with_suffix(".tmp")
     pending.write_text(json.dumps(result, allow_nan=False, indent=2, ensure_ascii=False) + "\n")
     pending.replace(target)
-    print(f"閉ループ走行 {result['status']}  {result['laps_completed']}/{result['laps_requested']} 周  "
+    target_laps = result["laps_requested"] or "無制限"
+    print(f"閉ループ走行 {result['status']}  {result['laps_completed']}/{target_laps} 周  "
           f"{result['reason']}", flush=True)
-    return 0 if result["status"] == "completed" else 1
+    return 0 if result["status"] in ("completed", "stopped") else 1

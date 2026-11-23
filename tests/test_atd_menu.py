@@ -202,14 +202,16 @@ exit 130
         (self.scripts / 'gazebo.sh').write_text(
             f'#!/bin/bash\nif [[ "$1" = list ]]; then exec bash {script} list; fi\n'
             f'exec bash {script} "$@" --dry-run > "$MENU_TEST_CALLS"\n')
-        for rviz, enabled in [('off', 'false'), ('on', 'true')]:
-            self.menu('gazebo', picks=['closed-loop', 'odaiba', '30', rviz, fixture.name, 'centerline'],
-                      keys=b'1.25\n2\n', ATD_RESULT_DIR=str(self.root))
+        for display, enabled, laps in [('off', 'false', 2), ('rviz', 'true', 2),
+                                       ('web', 'false', 0), ('both', 'true', 0)]:
+            self.menu('gazebo', picks=['closed-loop', 'odaiba', '30', display, fixture.name, 'centerline'],
+                      keys=f'1.25\n{laps}\n'.encode(), ATD_RESULT_DIR=str(self.root))
             result = self.calls.read_text()
             self.assertIn('map_id:=odaiba_saved line:=centerline max_speed_mps:=1.25', result)
             self.assertIn(f'rviz:={enabled}', result)
+            self.assertEqual('web:=true' in result, display in ('web', 'both'))
             self.assertIn('--mode closed-loop', result)
-            self.assertIn('--resolution 1280x720 --camera-hz 30 --imu off --laps 2', result)
+            self.assertIn(f'--resolution 1280x720 --camera-hz 30 --imu off --laps {laps}', result)
         self.assertNotIn('bringup\t', self.invoke('--list', MENU_TEST_OS='Darwin').stdout)
 
     def test_replay_menu_and_notebook_launcher(self):

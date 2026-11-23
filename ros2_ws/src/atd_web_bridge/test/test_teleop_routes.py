@@ -222,6 +222,7 @@ class ManualMonitorTests(unittest.TestCase):
     def setUp(self):
         bridge = load_bridge_module()
         self.node = object.__new__(bridge.BridgeNode)
+        self.node.identity = {'environment': 'jetson', 'instance_id': 'test_bridge'}
         self.node.cache = Cache()
         self.node.operation_lock = threading.RLock()
         self.node.settings = dict(teleop_node='/atd_teleop_node', teleop_command_topic='/teleop/command',

@@ -29,9 +29,9 @@ export function usablePlan(plan: PlanFrame | null | undefined): plan is PlanFram
 }
 
 export function livePlanIssue(status: LiveStatus | null, timedOut: boolean) {
-  if (!status?.connected) return 'Jetson への接続を待っています。';
+  if (!status?.connected) return '観測先への接続を待っています。';
   const plan = status.planning;
-  if (!plan) return 'Jetson の計画をまだ受信していません。';
+  if (!plan) return '走行計画の受信を待っています。';
   const loc = status.localization;
   if (!plan.valid && !plan.stale) return plan.reason || '計画が無効です。';
   if (!loc || loc.stale || loc.state !== 'tracking') return '自己位置の追跡待ちです。';

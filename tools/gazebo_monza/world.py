@@ -148,8 +148,10 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     # motion grid, and the 900 Hz pose samples used to derive the optional IMU.
     physics_hz = lcm(900 if imu_hz else 90, camera_hz)
     physics_step_s = (1_000_000_000 // physics_hz) / 1_000_000_000
-    if type(laps) is not int or laps < 1:
-        raise ValueError("laps must be a positive integer")
+    if type(laps) is not int or laps < 0:
+        raise ValueError("laps must be a non-negative integer")
+    if laps == 0 and not command_driven:
+        repeat = True
     route = circuits.resolve_route(circuit, route)
     if laps > 1 and repeat:
         raise ValueError("multiple laps require a finite full-circuit run")
@@ -190,7 +192,7 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                        "reference": "Rear axle in local map, metres and radians; axes in geography.axes",
                        "samples_s_x_y_yaw": points, "end_s_m": length, "speed_mps": speed_mps,
                        "travel_seconds": travel_seconds, "repeat": repeat,
-                       "laps": None if repeat else laps,
+                       "laps": None if repeat and laps != 0 else laps,
                        "total_travel_seconds": None if repeat else total_seconds},
         "camera": {"height_above_floor_m": height, "pitch_down_deg": pitch_deg,
                    "far_clip_m": far,
@@ -267,7 +269,7 @@ if __name__ == "__main__":
     timing = parser.add_mutually_exclusive_group()
     timing.add_argument("--travel-seconds", type=float, help="Simulation seconds per pass")
     timing.add_argument("--speed", type=float, help="Speed along the mapped route in RC metres per simulation second")
-    parser.add_argument("--laps", type=int, help="Drive this many complete forward laps")
+    parser.add_argument("--laps", type=int, help="Drive this many complete forward laps (0 to keep lapping)")
     parser.add_argument("--repeat", action="store_true", help="Continue lapping forwards")
     args = parser.parse_args()
     if args.laps is not None and args.repeat:

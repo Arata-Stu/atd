@@ -130,6 +130,20 @@ grep -nE 'Trying to localize in map|Successfully localized at|Failed to localize
 
 `Trying to localize in map` に照合先のパス、`Successfully localized at` に cuVSLAM が求めた初期位置が出る。モニターが成功診断を受け取った行と、制御が最初に `driving` を出した行には、同じ追跡区間を特定する `session`・`epoch` とそれぞれの画像時刻（ns）が残る。
 
+### 耐久走行を Web UI で観測・調整する
+
+地図 ID が `gazebo` の場合、Notebook ホストで次を実行する。TUI では `closed-loop` を選び、周回数に `0`、走行中の表示に `web` を指定する。`--web --rviz` の併用もできる。
+
+```bash
+atd gazebo closed-loop --course odaiba --map gazebo --line centerline --speed 1.5 --laps 0 --web
+```
+
+計時線を通過するたびに完了周回数とラップタイムを記録する。手動で終了するには Gazebo を起動した端末で Ctrl+C を押す。結果に完了周回数、ラップタイム、最後の観測までの走行距離が残る。境界接触・追跡喪失などでも試行は終了する。走行ログの容量は走行時間とともに増える。センサー連続配信だけを試すときは `atd gazebo serve --course odaiba --laps 0` を使う。
+
+Web UI 更新時は Notebook の Isaac ROS コンテナで `atd-web prepare` を一度実行し、`atd-web` を起動する。「ライブ」の観測先で **Gazebo（Notebook）** を選ぶと、同じ Notebook 上の bridge から自己位置と走行ライン、目標・推定速度、操舵角指令、スロットル指令を確認できる。折れ線の時間軸はシミュレーション秒。走行中にブラウザを閉じても計測は続く。[ライブ画面](http://127.0.0.1:8766/#live)
+
+「パラメータ調整」で `/atd_gazebo_control` を選び、「現在値を取得」して変更した値を適用する。実行中の速度上限は起動時の `--speed` まで変更できる。Pure Pursuit の先読み距離・先読み時間や速度 PID も試せる。変更はその試行に適用され、`closed_loop.ros.log` に変更値とシミュレーション時刻が残る。
+
 ### 走行後に接触直前を確認する
 
 Notebook の Web UI で「走行評価 → Gazebo 閉ループ」を開き、該当する Raceline の走行結果を選ぶ。境界に達した走行では接触直前のグラフとコース図を同じ時刻で確認できる。[Gazebo 閉ループの結果画面](http://127.0.0.1:8766/#closed-loop)

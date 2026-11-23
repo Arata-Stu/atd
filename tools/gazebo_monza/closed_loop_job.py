@@ -163,7 +163,7 @@ def supervise(args, gazebo_command, ros_command):
                     if report.get('reason'):
                         reason += f"（{report['reason']}）"
                     print(reason, result, flush=True)
-                    return 0 if report['status'] == 'completed' else 1
+                    return 0 if report['status'] in ('completed', 'stopped') else 1
                 gazebo_code, ros_code = gazebo.poll(), ros.poll()
                 if gazebo_code is not None or ros_code is not None:
                     if result.is_file():
@@ -214,6 +214,8 @@ def host(args):
               f'rviz:={str(args.rviz).lower()}', f'run_dir:={remote}']
     if args.engine_dir:
         launch.append('engine_dir:=' + args.engine_dir)
+    if args.web:
+        launch.append('web:=true')
     if args.min_lookahead is not None:
         if not 0 < args.min_lookahead <= 1.5:
             raise ValueError('最短先読み距離は 0 より大きく、最大先読み距離 1.5 m 以下を指定してください')
@@ -229,7 +231,7 @@ def host(args):
     session = dict(map_id=args.map, line=args.line, circuit=args.circuit, ros_domain_id=int(args.domain),
                    max_speed_mps=args.speed, full_throttle_speed_mps=full_speed, engine_dir=args.engine_dir,
                    min_lookahead_override_m=args.min_lookahead,
-                   rviz=args.rviz, started=time.time())
+                   rviz=args.rviz, web=args.web, started=time.time())
     try:
         check_isaac_mounts(results)
         signal.signal(signal.SIGTERM, signal.default_int_handler)
@@ -238,6 +240,11 @@ def host(args):
         return code
     except KeyboardInterrupt:
         session['status'] = 'interrupted'
+        result = out / 'closed_loop.result.json'
+        if result.is_file() and read_json(result)['status'] == 'stopped':
+            session['status'] = 'stopped'
+            print('耐久走行の結果を保存しました。', result, flush=True)
+            return 0
         raise
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         session.update(status='error', reason=str(error))
@@ -267,6 +274,7 @@ def main():
     launch.add_argument('--engine-dir')
     launch.add_argument('--min-lookahead', type=float)
     launch.add_argument('--rviz', action='store_true')
+    launch.add_argument('--web', action='store_true')
     launch.add_argument('--speed', required=True, type=float)
     launch.add_argument('--full-throttle-speed', type=float)
     launch.add_argument('--dry-run', action='store_true')

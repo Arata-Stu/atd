@@ -24,7 +24,7 @@ export function CaptureMap({status, reference, trail, enabled, expired, planExpi
   const mapLabel = doc?.title && doc.title !== mapId ? `${doc.title} (${mapId})` : mapId;
   let issue = mismatch || error;
   if (!issue && enabled && status?.connected) {
-    if (!loc) issue = 'Jetson の自己位置情報を待っています。';
+    if (!loc) issue = '自己位置情報の受信を待っています。';
     else if (!doc) issue = 'Notebook の保存地図を照合中です。';
     else if (expired || loc.stale) issue = '新しい自己位置の受信を待っています。';
     else if (loc.state !== 'tracking') issue = loc.reason;
@@ -45,7 +45,7 @@ export function CaptureMap({status, reference, trail, enabled, expired, planExpi
       {!!pose && <><span><i className="plan-trail"/>実走軌跡</span><span>矢印は車両の向き</span></>}
     </div>}
     {pose && loc && <p className="capture-map-meta">X {pose.x.toFixed(2)} m · Y {pose.y.toFixed(2)} m ·
-      向き {(pose.yaw * 180 / Math.PI).toFixed(1)}° · 観測 {clockText(loc.stamp)}</p>}
+      向き {(pose.yaw * 180 / Math.PI).toFixed(1)}° · 観測 {status?.identity?.environment === 'gazebo' ? loc.stamp.toFixed(3) + ' s' : clockText(loc.stamp)}</p>}
     {issue && <div className="capture-map-issue" role="status">{issue}
       {(error || mismatch) && <button className="button small" onClick={reload}>地図を再読込</button>}</div>}
   </section>;

@@ -23,7 +23,9 @@ atd-build --packages-up-to atd_control atd_vehicle_calibration atd_web_bridge
 atd-web
 ```
 
-通常起動は準備済みの環境・画面を使い、依存の取得やビルドを行わない。インターネット接続は不要。ライブ監視とデータ転送には Notebook と Jetson の間の接続が必要になる。
+通常起動は準備済みの環境・画面を使い、依存の取得やビルドを行わない。インターネット接続は不要。実車のライブ監視とデータ転送には Notebook と Jetson の間の接続が必要になる。
+
+Gazebo の閉ループ走行は Notebook だけでライブ観測できる。`atd gazebo closed-loop --web` をホストで起動し、「ライブ」の観測先を「Gazebo（Notebook）」に切り替える。Notebook API は同じマシンの `127.0.0.1:8791` に接続する。走行中の速度・操舵・スロットルをグラフで確認し、「パラメータ調整」から模擬車両に設定を適用できる。[耐久走行の手順](../../docs/gazebo_circuits.md#耐久走行を-web-ui-で観測調整する)
 
 ```bash
 # Notebook の Docker 内

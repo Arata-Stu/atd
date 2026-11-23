@@ -84,6 +84,24 @@ def test_stamp_matching_ackermann_and_real_pid():
     assert c.pid.last['i_raw'] > 0 and c.pid.last['d_raw'] < 0
 
 
+def test_runtime_tuning_updates_real_commands_without_rearming_or_partial_changes():
+    c = gate()
+    _, angle, throttle = run(c, y=.1)
+    before = c.pid
+    with pytest.raises(ValueError, match='前方軌道'):
+        c.apply_tuning(dict(max_lookahead_m=20., speed_kp=0.))
+    assert c.pid is before and c.lookahead.max_lookahead_m == 1.5
+    with pytest.raises(ValueError, match='起動時'):
+        c.apply_tuning(dict(max_speed_mps=2.))
+    c.apply_tuning(dict(max_speed_mps=.8, min_lookahead_m=.9, speed_kp=0.))
+    _, updated_angle, updated_throttle = run(c, START + 33_333_333, y=.1)
+    assert c.observation['target_speed_mps'] == .8 and 0 < updated_throttle < throttle
+    assert abs(updated_angle) < abs(angle)
+    c.inhibit('lost')
+    c.apply_tuning(dict(max_speed_mps=1.5))
+    assert c.state == 'stopped' and run(c, START + 100_000_000) is None
+
+
 def test_clock_trailing_frame_buffers_and_never_drives_on_misaligned_stamps():
     c = gate()
     loc, plan = inputs()
@@ -282,6 +300,11 @@ def test_ros_actuator_goes_neutral_when_the_planner_disconnects():
         wait(lambda: commands and commands[-1].position[-1] == 1.)
         assert commands[-1].name == ['steering', 'throttle', 'enable']
         assert commands[-1].header.stamp == tick.clock and commands[-1].position[1] > 0.
+        assert not controller.set_parameters_atomically([
+            Parameter('max_speed_mps', value=.8), Parameter('max_lookahead_m', value=20.)]).successful
+        assert controller.controller.max_speed == controller.get_parameter('max_speed_mps').value == 1.5
+        assert controller.set_parameters_atomically([Parameter('max_speed_mps', value=.8)]).successful
+        assert controller.controller.max_speed == controller.get_parameter('max_speed_mps').value == .8
         driver.destroy_publisher(plans)
         wait(lambda: controller.observers[1].get_publisher_count() == 0)
         tick.clock.nanosec = 100_000_000

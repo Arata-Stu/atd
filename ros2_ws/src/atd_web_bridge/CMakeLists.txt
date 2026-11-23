@@ -14,6 +14,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(recording_launch test/test_recording_launch.py)
   ament_add_pytest_test(auto_drive_monitor test/test_auto_drive_window.py
     APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
+  ament_add_pytest_test(gazebo_monitor test/test_gazebo_bridge.py
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/../atd_joy:${CMAKE_CURRENT_SOURCE_DIR}/../atd_teleop:${CMAKE_CURRENT_SOURCE_DIR}/../atd_rc_input:${CMAKE_CURRENT_SOURCE_DIR}/../atd_vehicle_description)
   ament_add_pytest_test(bridge_localization test/test_localization.py
     APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/../atd_joy:${CMAKE_CURRENT_SOURCE_DIR}/../atd_teleop:${CMAKE_CURRENT_SOURCE_DIR}/../atd_rc_input:${CMAKE_CURRENT_SOURCE_DIR}/../atd_vehicle_description)
   ament_add_pytest_test(bridge_core test/test_core.py

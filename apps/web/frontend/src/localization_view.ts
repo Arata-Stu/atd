@@ -22,10 +22,10 @@ export function trackingPose(status: LiveStatus | null) {
 }
 
 export function mapIssue(loc: Localization, ref: MapReference): string {
-  if (loc.map_id !== ref.document.id) return 'Jetson が使用している地図と表示中の地図が異なります。';
+  if (loc.map_id !== ref.document.id) return '走行中の地図と表示中の地図が異なります。';
   if (ref.document.frame !== 'map' || !ref.map_sha256 || ref.map_sha256 !== loc.map_sha256)
-    return 'Jetson と Notebook の自己位置推定用地図が一致しません。';
+    return '走行中の自己位置推定用地図と Notebook の地図が一致しません。';
   if (!ref.hdmap_sha256 || ref.hdmap_sha256 !== loc.hdmap_sha256)
-    return 'Jetson と Notebook の HDMap が異なります。転送した走行ラインの版を確認してください。';
+    return '走行中の HDMap と Notebook の HDMap が異なります。走行ラインの版を確認してください。';
   return '';
 }

@@ -1,19 +1,22 @@
 """保存地図上の観測と計画を照合し、Gazebo の仮想アクチュエータだけを駆動する。"""
 import json
 import math
+from dataclasses import asdict
 from pathlib import Path
 
 from atd_control.bicycle import FULL_SPEED_MPS, STEERING_LIMIT, WHEELBASE_M, resolve_full_throttle_speed
 from atd_control.simulation import FORWARD_SPAN_RAW, NEUTRAL_RAW, simulation_feedforward
 from atd_control.core import LookaheadConfig, STANDSTILL_MPS, forward_control_speed, pure_pursuit
 from atd_control.speed import FeedforwardTable, PIDConfig, SpeedController
-from atd_planning.core import yaw_from_quaternion
+from atd_planning.core import DEFAULT_HORIZON_M, yaw_from_quaternion
 
 
 # The Gazebo plant consumes the image timestamp and independently expires it after 0.30 sim s.
 COMMAND_TTL_NS = 250_000_000
 # Covers valid 90 Hz observations even if the other stream or /clock arrives later.
 MAX_PENDING_FRAMES = 32
+TUNABLE_PARAMETERS = ('max_speed_mps', *asdict(LookaheadConfig()),
+                      *('speed_' + key for key in asdict(PIDConfig())))
 
 
 def default_min_lookahead(line):
@@ -52,12 +55,38 @@ class GazeboController:
         validate_speed_cap(max_speed, full_throttle_speed_mps, table)
         self.route, self.line, self.max_speed = route, line, max_speed
         self.lookahead = lookahead or LookaheadConfig(min_lookahead_m=default_min_lookahead(line))
+        self.launch_speed_cap = max_speed
+        self.full_throttle_speed = full_throttle_speed_mps
+        self.horizon = max(DEFAULT_HORIZON_M, self.lookahead.max_lookahead_m)
         self.pid = SpeedController(table, pid)
         self.locations, self.plans = {}, {}
         self.observation = None
         self.session = None
         self.state, self.reason = 'waiting', '保存地図での自己位置推定と走行指令を待っています'
         self.stamp = self.expires = self.clock_ns = 0
+
+    def tuning(self, updates):
+        """候補をまとめて検査し、走行中の状態は採用されるまで変更しない。"""
+        if updates.keys() - set(TUNABLE_PARAMETERS):
+            raise ValueError('Gazebo の走行中に変更できない設定です')
+        speed = updates.get('max_speed_mps', self.max_speed)
+        validate_speed_cap(speed, self.full_throttle_speed, self.pid.table)
+        if speed > self.launch_speed_cap:
+            raise ValueError(f'起動時の速度上限 {self.launch_speed_cap:g} m/s を超えています')
+        lookahead = LookaheadConfig(**{k: updates.get(k, v) for k, v in asdict(self.lookahead).items()})
+        if lookahead.max_lookahead_m > self.horizon:
+            raise ValueError(f'最大先読みは計画の前方軌道長 {self.horizon:g} m 以内です')
+        pid = PIDConfig(**{k: updates.get('speed_' + k, v) for k, v in asdict(self.pid.config).items()})
+        return speed, lookahead, pid
+
+    def apply_tuning(self, updates):
+        speed, lookahead, pid = self.tuning(updates)
+        if (speed, lookahead, pid) == (self.max_speed, self.lookahead, self.pid.config):
+            return False
+        if speed != self.max_speed or pid != self.pid.config:
+            self.pid = SpeedController(self.pid.table, pid)
+        self.max_speed, self.lookahead = speed, lookahead
+        return True
 
     def inhibit(self, reason):
         if self.state != 'stopped':

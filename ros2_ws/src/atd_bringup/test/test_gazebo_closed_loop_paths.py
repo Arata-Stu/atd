@@ -1,8 +1,11 @@
+import importlib.util
 import math
+from pathlib import Path
+import runpy
 from types import SimpleNamespace as Msg
 import unittest
 
-from atd_bringup.gazebo_closed_loop_paths import ClosedLoopPaths
+from atd_bringup.gazebo_closed_loop_paths import ClosedLoopPaths, lookahead_remaining_ns
 
 
 def message(stamp, x, y, yaw, frame):
@@ -93,3 +96,69 @@ class ClosedLoopPathTests(unittest.TestCase):
         self.assertEqual(paths.gt.current[0], 3)
         self.assertAlmostEqual(paths.gt.current[1][0], 9.)
         self.assertFalse(paths.gt.points or paths.estimate.points)
+
+
+class LookaheadTests(unittest.TestCase):
+    stamp = 2_000_000_000
+    identity = ('course', 'm', 'h')
+    segment = ('session', 1)
+
+    def sample(self):
+        msg = estimate(self.stamp, 4., -1.)
+        msg.target = Msg(x=3.7, y=-1.4, z=0.)
+        msg.line, msg.controller, msg.valid = 'raceline', 'pure_pursuit', True
+        msg.validity_s = .25
+        return msg
+
+    def test_expires_by_source_stamp_on_simulation_clock(self):
+        msg = self.sample()
+
+        def remaining(now):
+            return lookahead_remaining_ns(msg, now, self.identity, 'raceline', self.segment)
+
+        self.assertEqual(remaining(self.stamp), 250_000_000)
+        self.assertEqual(remaining(self.stamp + 240_000_000), 10_000_000)
+        self.assertEqual(remaining(self.stamp + 250_000_000), 0)
+        self.assertEqual(remaining(self.stamp - 1_000_000_000), 0)
+        msg.validity_s = .04
+        self.assertEqual(remaining(self.stamp + 50_000_000), 0)
+
+    def test_wrong_source_lost_tracking_and_invalid_geometry_hide_target(self):
+        for change in (
+            {'valid': False}, {'controller': 'other'}, {'line': 'centerline'}, {'map_id': 'another'},
+            {'map_sha256': 'new'}, {'hdmap_sha256': 'new'}, {'session_id': 'earlier'}, {'epoch': 0},
+            {'validity_s': 0.}, {'validity_s': math.nan}, {'target': Msg(x=0., y=math.inf, z=0.)},
+        ):
+            with self.subTest(change=change):
+                msg = self.sample()
+                for name, value in change.items():
+                    setattr(msg, name, value)
+                self.assertEqual(lookahead_remaining_ns(msg, self.stamp, self.identity, 'raceline', self.segment), 0)
+        msg = self.sample()
+        self.assertEqual(lookahead_remaining_ns(msg, self.stamp, self.identity, 'raceline', None), 0)
+        msg.header.frame_id = 'gazebo_world'
+        self.assertEqual(lookahead_remaining_ns(msg, self.stamp, self.identity, 'raceline', self.segment), 0)
+
+    @unittest.skipUnless(importlib.util.find_spec('rclpy'), 'ROS 2 の生成メッセージが必要')
+    def test_rviz_receives_actual_target_and_origin_and_can_delete_both(self):
+        from atd_interfaces.msg import ControlStatus
+        from visualization_msgs.msg import Marker
+
+        executable = Path(__file__).resolve().parents[1] / 'scripts/gazebo_closed_loop_paths'
+        markers = runpy.run_path(str(executable))['lookahead_markers']
+        msg = ControlStatus()
+        msg.header.frame_id, msg.header.stamp.sec = 'map', 2
+        msg.pose.position.x, msg.pose.position.y = 4., -1.
+        msg.target.x, msg.target.y = 3.7, -1.4
+        shown = markers(msg, 90_000_000).markers
+        self.assertEqual(len(shown), 2)
+        self.assertTrue(all(m.action == Marker.ADD and m.header == msg.header for m in shown))
+        sphere, = (m for m in shown if m.type == Marker.SPHERE)
+        segment, = (m for m in shown if m.type == Marker.LINE_STRIP)
+        self.assertEqual((sphere.pose.position.x, sphere.pose.position.y), (3.7, -1.4))
+        self.assertEqual([(p.x, p.y) for p in segment.points], [(4., -1.), (3.7, -1.4)])
+        for marker in shown:
+            self.assertEqual((marker.lifetime.sec, marker.lifetime.nanosec), (0, 90_000_000))
+        hidden = markers(None, 0).markers
+        self.assertTrue(all(m.action == Marker.DELETE for m in hidden))
+        self.assertEqual({(m.ns, m.id) for m in shown}, {(m.ns, m.id) for m in hidden})

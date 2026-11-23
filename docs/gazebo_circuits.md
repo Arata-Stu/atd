@@ -112,6 +112,8 @@ atd gazebo closed-loop --course odaiba --line raceline --speed 1.5 --laps 2 --rv
 
 矢印は GT と推定それぞれの最新の位置と向きを表す。水色の矩形は、GT の後輪軸を基準に置いた接触判定用の車体外形。更新時刻が異なる場合、その時間差も矢印の間隔に含まれる。追跡を失うと推定矢印が消える。RViz は試行終了時に閉じる。画面なしで評価するときは `--rviz` を省略する。
 
+車両前方にある紫の球が、その操舵計算で Pure Pursuit が選んだ先読み点。紫の線は、計算に使った推定後輪軸の位置から先読み点までを結ぶ。RViz の「Displays → Pure Pursuit lookahead」で表示を切り替えられる（既定はオン）。初期位置合わせを待っている間や、追跡を失って制御指令が無効になったときは、先読み点と線が消える。
+
 `--rviz` では「SLAM landmarks (live)」が走行中の SLAM の特徴点（青灰色）、「Map used for localization」が保存地図との位置合わせに使われた点群（紫）を表示する。紫の点は cuVSLAM が `/visual_slam/vis/localizer_map_cloud` に配信したときに見える。照合の成否は試行のログで確認できる。[NVIDIA の可視化トピック一覧](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_cuvslam/index.html#ros-topics-published)
 
 同じ計時線から Raceline を試すときは `--line raceline` に切り替える。シミュレーションでの Pure Pursuit の最短先読み距離は Centerline・Customline が0.35 m、Raceline が0.65 m。同梱のお台場の Raceline は計時線中央から約0.49 mずれており、停止時にも先読み円とラインが交わるようにした。編集したラインに合わせて `--min-lookahead` で上書きできる。

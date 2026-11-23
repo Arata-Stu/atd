@@ -140,6 +140,12 @@ class CompositionTests(unittest.TestCase):
             for name in ('landmarks_cloud', 'localizer_map_cloud'):
                 cloud = topics.pop('/visual_slam/vis/' + name)
                 self.assertEqual((cloud['Reliability Policy'], cloud['Durability Policy']), ('Best Effort', 'Volatile'))
+            lookahead = next(d for d in manager['Displays'] if d['Name'] == 'Pure Pursuit lookahead')
+            self.assertTrue(lookahead['Enabled'])
+            self.assertEqual(lookahead['Class'], 'rviz_default_plugins/MarkerArray')
+            self.assertEqual(lookahead['Topic'], topics.pop('/atd/gazebo/lookahead_markers'))
+            self.assertEqual((lookahead['Topic']['Reliability Policy'], lookahead['Topic']['Durability Policy']),
+                             ('Reliable', 'Volatile'))
             self.assertEqual(set(topics), {'/atd/gazebo/' + name for name in
                              ('reference_path', 'ground_truth_path', 'estimated_path', 'current_poses')})
             for topic in topics.values():

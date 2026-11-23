@@ -88,6 +88,14 @@ Visualization Manager:
         Depth: 1
         Reliability Policy: Reliable
         Durability Policy: Transient Local
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Pure Pursuit lookahead
+      Enabled: true
+      Topic:
+        Value: /atd/gazebo/lookahead_markers
+        Depth: 1
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
   Tools:
     - Class: rviz_default_plugins/Interact
     - Class: rviz_default_plugins/MoveCamera

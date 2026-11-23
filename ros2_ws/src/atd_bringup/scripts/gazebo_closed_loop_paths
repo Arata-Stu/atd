@@ -4,8 +4,8 @@ import json
 import math
 
 import rclpy
-from atd_bringup.gazebo_closed_loop_paths import ClosedLoopPaths
-from atd_interfaces.msg import LocalizationStatus
+from atd_bringup.gazebo_closed_loop_paths import ClosedLoopPaths, lookahead_remaining_ns
+from atd_interfaces.msg import ControlStatus, LocalizationStatus
 from atd_localization.assets import map_metadata, verified_hdmap
 from atd_planning.core import ReferenceLine, yaw_from_quaternion
 from geometry_msgs.msg import Point, PoseStamped
@@ -63,6 +63,29 @@ def footprint_marker(pose, dimensions):
     return marker
 
 
+def lookahead_markers(msg, remaining_ns):
+    target = Marker(ns='Pure Pursuit', id=0, type=Marker.SPHERE)
+    link = Marker(ns='Pure Pursuit', id=1, type=Marker.LINE_STRIP)
+    markers = MarkerArray(markers=[target, link])
+    if not remaining_ns:
+        for marker in markers.markers:
+            marker.header.frame_id = 'map'
+            marker.action = Marker.DELETE
+        return markers
+    for marker in markers.markers:
+        marker.header = msg.header
+        marker.pose.orientation.w = 1.
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = (.77, .30, 1., 1.)
+        marker.lifetime.sec, marker.lifetime.nanosec = divmod(remaining_ns, 1_000_000_000)
+    # 走行ライン・姿勢矢印より上に置く。XY は操舵計算が使った map 座標のまま描く。
+    p = msg.pose.position
+    target.pose.position = Point(x=msg.target.x, y=msg.target.y, z=.35)
+    target.scale.x = target.scale.y = target.scale.z = .30
+    link.scale.x = .06
+    link.points = [Point(x=p.x, y=p.y, z=.35), target.pose.position]
+    return markers
+
+
 class ClosedLoopViewer(Node):
     def __init__(self):
         super().__init__('atd_gazebo_closed_loop_paths')
@@ -76,7 +99,8 @@ class ClosedLoopViewer(Node):
         identity = {key: metadata[key] for key in ('map_id', 'map_sha256', 'hdmap_sha256')}
         self.paths = ClosedLoopPaths(tuple(identity.values()), map_pose, history_size=8192 if rviz else 0)
         self.create_subscription(PoseStamped, '/atd/gazebo/ground_truth_pose', self.world_pose, qos_profile_sensor_data)
-        self.create_subscription(LocalizationStatus, '/localization/status', self.paths.localization, 10)
+        self.create_subscription(LocalizationStatus, '/localization/status',
+                                 self.localization if rviz else self.paths.localization, 10)
         if stream and self.footprint:
             self.live_metadata = dict(identity, stream_id=stream, footprint=self.footprint)
             self.last_live_pose = None
@@ -92,6 +116,10 @@ class ClosedLoopViewer(Node):
         self.gt = self.create_publisher(Path, '/atd/gazebo/ground_truth_path', qos)
         self.estimate = self.create_publisher(Path, '/atd/gazebo/estimated_path', qos)
         self.markers = self.create_publisher(MarkerArray, '/atd/gazebo/current_poses', qos)
+        self.selection = selection
+        self.pursuit_sample = self.drawn_pursuit = None
+        self.lookahead = self.create_publisher(MarkerArray, '/atd/gazebo/lookahead_markers', 1)
+        self.create_subscription(ControlStatus, '/atd/gazebo/pursuit_status', self.pursuit, 1)
         points, _ = line.preview(0., line.length)
         self.reference.publish(Path(header=Header(frame_id='map'), poses=[
             map_pose(0, (x, y, 0.), (0., 0., 0., 1.)) for x, y in points]))
@@ -102,6 +130,24 @@ class ClosedLoopViewer(Node):
             self.paths.world_pose(msg)
         except ValueError as exc:
             self.get_logger().warning(str(exc), throttle_duration_sec=5.)
+
+    def localization(self, msg):
+        self.paths.localization(msg)
+        if self.paths.segment is None:
+            self.pursuit_sample = None
+        self.publish_lookahead()
+
+    def pursuit(self, msg):
+        self.pursuit_sample = msg if msg.valid else None
+        self.publish_lookahead()
+
+    def publish_lookahead(self):
+        ns = lookahead_remaining_ns(self.pursuit_sample, self.get_clock().now().nanoseconds,
+                                    self.paths.identity, self.selection, self.paths.segment)
+        sample = self.pursuit_sample if ns else None
+        if sample is not self.drawn_pursuit:
+            self.lookahead.publish(lookahead_markers(sample, ns))
+            self.drawn_pursuit = sample
 
     def publish_live(self):
         sample = self.paths.gt.current
@@ -114,6 +160,7 @@ class ClosedLoopViewer(Node):
         self.live_gt.publish(String(data=json.dumps(row, allow_nan=False)))
 
     def publish(self):
+        self.publish_lookahead()
         header = Header(frame_id='map', stamp=self.get_clock().now().to_msg())
         for history, publisher in ((self.paths.gt, self.gt), (self.paths.estimate, self.estimate)):
             if history.changed:

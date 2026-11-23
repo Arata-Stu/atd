@@ -41,6 +41,14 @@ test('fresh rejection explains why even with an immediate expiry; stale old reas
   assert.notEqual(livePlanIssue({...live,planning:{...planning,stale:true}},true),planning.reason);
 });
 
+test('Gazebo の計画途絶中も、現在の制御状態と地図が一致すれば走行ラインを重ねる', () => {
+  const current = {map_id: 'course', line: 'centerline'};
+  const snapshot = {connected: true, identity: {environment: 'gazebo'}, gazebo: {ground_truth: id, current}};
+  assert.deepEqual(captureRoute(snapshot, true), {line: 'centerline', plan: null, issue: ''});
+  assert.equal(captureRoute({...snapshot, gazebo: {...snapshot.gazebo, current: {...current, map_id:'other'}}}, true).line, null);
+  assert.equal(captureRoute({...snapshot, identity:{environment:'jetson'}}, false).line, null);
+});
+
 test('missing or invalid samples never supply a path; stopped and signed speed are valid',()=>{
   assert.ok(usablePlan({...frame, target_speed_mps:0, trajectory:[[5,0]]}));
   for(const value of [{vehicle_pose:null},{vehicle_pose:{x:1,y:1,yaw:NaN}},{target_speed_mps:null},

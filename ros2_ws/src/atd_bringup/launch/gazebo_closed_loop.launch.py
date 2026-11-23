@@ -4,7 +4,9 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 import yaml
 
@@ -24,7 +26,7 @@ from atd_localization.assets import map_metadata, verified_hdmap
 from atd_planning.core import DEFAULT_HORIZON_M, ReferenceLine
 
 
-def rviz_nodes(root, key, line, reference):
+def rviz_node(reference):
     if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
         raise ValueError('RViz の画面出力先がありません。Notebook のデスクトップ端末で atd dev を起動してください')
     preset = Path(get_package_share_directory('atd_bringup')) / 'config/gazebo_closed_loop.rviz'
@@ -39,14 +41,8 @@ def rviz_nodes(root, key, line, reference):
     atexit.register(work.cleanup)
     actual = Path(work.name) / preset.name
     actual.write_text(yaml.safe_dump(config, sort_keys=False))
-    params = {k: ParameterValue(v, value_type=str) for k, v in
-              [('results_root', root), ('map_id', key), ('line', line)]}
-    return [
-        Node(package='atd_bringup', executable='gazebo_closed_loop_paths', output='screen',
-             parameters=[dict(params, use_sim_time=True)]),
-        Node(package='rviz2', executable='rviz2', arguments=['-d', str(actual)], output='screen',
-             parameters=[{'use_sim_time': True}]),
-    ]
+    return Node(package='rviz2', executable='rviz2', arguments=['-d', str(actual)], output='screen',
+                parameters=[{'use_sim_time': True}])
 
 
 def setup(context):
@@ -109,12 +105,30 @@ def setup(context):
         actions.append(Node(package='atd_bringup', executable='gazebo_closed_loop_log', output='screen',
                             arguments=[str(directory)], parameters=[{'use_sim_time': True}],
                             on_exit=[Shutdown(reason='Gazebo の解析ログ記録が終了しました')]))
-    if arg('rviz') == 'true':
-        actions.extend(rviz_nodes(root, key, line, ref))
-    if arg('web') == 'true':
+    rviz, web = arg('rviz') == 'true', arg('web') == 'true'
+    if rviz or web:
+        # The Gazebo job writes the collision geometry before it signals gazebo.ready.
+        footprint = None
+        if arg('run_dir'):
+            scene_path = Path(arg('run_dir')) / 'scene/scene.json'
+            if scene_path.is_file():
+                scene = json.loads(scene_path.read_text())
+                footprint = scene.get('course_evaluation', {}).get('footprint')
+            if not footprint:
+                print(f'車体外形の表示に必要な衝突判定寸法が見つかりません ({scene_path})', file=sys.stderr)
+        stream_id = uuid4().hex if web and footprint else ''
+        params = {k: ParameterValue(v, value_type=str) for k, v in
+                  [('results_root', root), ('map_id', key), ('line', line),
+                   ('footprint_json', json.dumps(footprint)), ('gt_stream_id', stream_id)]}
+        actions.append(Node(package='atd_bringup', executable='gazebo_closed_loop_paths', output='screen',
+                            parameters=[dict(params, use_sim_time=True, rviz=rviz)]))
+    if rviz:
+        actions.append(rviz_node(ref))
+    if web:
         allowed = json.dumps({'/atd_gazebo_control': TUNABLE_PARAMETERS})
         actions.append(Node(package='atd_web_bridge', executable='web_bridge', output='screen',
                             parameters=[dict(use_sim_time=True, environment='gazebo', port=8791,
+                                             gazebo_gt_stream_id=ParameterValue(stream_id, value_type=str),
                                              control_topic='/atd/gazebo/pursuit_status',
                                              parameter_node_prefix='/atd_gazebo_control',
                                              parameter_allowlist_json=ParameterValue(allowed, value_type=str))],

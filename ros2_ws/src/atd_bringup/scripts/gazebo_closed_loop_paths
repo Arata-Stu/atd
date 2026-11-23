@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""閉ループ走行の保存ライン・正解・自己位置を RViz に配信する。"""
+"""閉ループ走行の正解姿勢と車体外形を RViz・Web の観測用に配信する。"""
 import json
 import math
 
@@ -13,7 +13,7 @@ from nav_msgs.msg import Path
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
 from visualization_msgs.msg import Marker, MarkerArray
 
 
@@ -44,17 +44,48 @@ def arrow(name, pose, length, width, lift, color):
     return marker
 
 
+def footprint_marker(pose, dimensions):
+    marker = Marker(ns='Gazebo GT footprint', id=0, type=Marker.LINE_STRIP)
+    marker.header.frame_id = 'map'
+    if pose is None or not dimensions:
+        marker.action = Marker.DELETE
+        return marker
+    rear = dimensions['rear_axle_to_rear']
+    margin = dimensions['margin']
+    front = dimensions['vehicle_length'] - rear + margin
+    back = -rear - margin
+    half = dimensions['vehicle_width'] / 2 + margin
+    marker.header, marker.pose = pose.header, pose.pose
+    marker.points = [Point(x=x, y=y, z=.14) for x, y in (
+        (back, -half), (front, -half), (front, half), (back, half), (back, -half))]
+    marker.scale.x = .025
+    marker.color.r, marker.color.g, marker.color.b, marker.color.a = (.1, .95, 1., 1.)
+    return marker
+
+
 class ClosedLoopViewer(Node):
     def __init__(self):
         super().__init__('atd_gazebo_closed_loop_paths')
         root = self.declare_parameter('results_root', '/data/results').value
         map_id = self.declare_parameter('map_id', '').value
         selection = self.declare_parameter('line', 'raceline').value
+        rviz = self.declare_parameter('rviz', True).value
+        stream = self.declare_parameter('gt_stream_id', '').value
+        self.footprint = json.loads(self.declare_parameter('footprint_json', 'null').value)
         metadata = map_metadata(root, map_id)
+        identity = {key: metadata[key] for key in ('map_id', 'map_sha256', 'hdmap_sha256')}
+        self.paths = ClosedLoopPaths(tuple(identity.values()), map_pose, history_size=8192 if rviz else 0)
+        self.create_subscription(PoseStamped, '/atd/gazebo/ground_truth_pose', self.world_pose, qos_profile_sensor_data)
+        self.create_subscription(LocalizationStatus, '/localization/status', self.paths.localization, 10)
+        if stream and self.footprint:
+            self.live_metadata = dict(identity, stream_id=stream, footprint=self.footprint)
+            self.last_live_pose = None
+            self.live_gt = self.create_publisher(String, '/atd/gazebo/aligned_ground_truth', qos_profile_sensor_data)
+            self.create_timer(.1, self.publish_live)
+        if not rviz:
+            return
         document = json.loads(verified_hdmap(root, metadata))
         line = ReferenceLine.from_document(document, selection)
-        identity = tuple(metadata[key] for key in ('map_id', 'map_sha256', 'hdmap_sha256'))
-        self.paths = ClosedLoopPaths(identity, map_pose)
         self.last_arrows = (None, None)
         qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
         self.reference = self.create_publisher(Path, '/atd/gazebo/reference_path', qos)
@@ -64,8 +95,6 @@ class ClosedLoopViewer(Node):
         points, _ = line.preview(0., line.length)
         self.reference.publish(Path(header=Header(frame_id='map'), poses=[
             map_pose(0, (x, y, 0.), (0., 0., 0., 1.)) for x, y in points]))
-        self.create_subscription(PoseStamped, '/atd/gazebo/ground_truth_pose', self.world_pose, qos_profile_sensor_data)
-        self.create_subscription(LocalizationStatus, '/localization/status', self.paths.localization, 10)
         self.create_timer(.2, self.publish)
 
     def world_pose(self, msg):
@@ -73,6 +102,16 @@ class ClosedLoopViewer(Node):
             self.paths.world_pose(msg)
         except ValueError as exc:
             self.get_logger().warning(str(exc), throttle_duration_sec=5.)
+
+    def publish_live(self):
+        sample = self.paths.gt.current
+        if sample is None or sample is self.last_live_pose:
+            return
+        self.last_live_pose = sample
+        p, q, stamp = sample.pose.position, sample.pose.orientation, sample.header.stamp
+        row = dict(self.live_metadata, frame=sample.header.frame_id, stamp_s=stamp.sec + stamp.nanosec * 1e-9,
+                   x=p.x, y=p.y, yaw=yaw_from_quaternion(q.x, q.y, q.z, q.w))
+        self.live_gt.publish(String(data=json.dumps(row, allow_nan=False)))
 
     def publish(self):
         header = Header(frame_id='map', stamp=self.get_clock().now().to_msg())
@@ -85,6 +124,7 @@ class ClosedLoopViewer(Node):
             self.markers.publish(MarkerArray(markers=[
                 arrow('Gazebo GT', poses[0], .8, .18, .10, (.24, .69, 1.)),
                 arrow('Localization', poses[1], .55, .12, .25, (1., .55, .12)),
+                footprint_marker(poses[0], self.footprint),
             ]))
             self.last_arrows = poses
 

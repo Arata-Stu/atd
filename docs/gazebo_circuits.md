@@ -82,7 +82,7 @@ Notebook の Gazebo が計時線で静止した車両から左右の画像を配
 atd build --packages-up-to atd_bringup
 ```
 
-別の端末で、**Ubuntu Notebook ホスト**から起動する。`--speed` はラインに設定した目標速度の上限（m/s）。解像度は保存した VGL 地図から選び、撮影レートは既定で30 Hz。地図とラインを対話的に選ぶ場合は `atd gazebo closed-loop` を使う。
+別の端末で、**Ubuntu Notebook ホスト**から起動する。`--course` は Gazebo のコース名、`--map` は Web UI で保存した地図 ID を指定する。`--speed` はラインに設定した目標速度の上限（m/s）。解像度は保存した VGL 地図から選び、撮影レートは既定で30 Hz。`--map` を省略すると、ほかの引数を保ったまま、指定ライン・解像度に合う地図 ID を一覧から選べる。
 
 ```bash
 atd gazebo closed-loop --course odaiba --map odaiba_1p5 --line centerline --speed 1.5 --laps 2
@@ -91,7 +91,7 @@ atd gazebo closed-loop --course odaiba --map odaiba_1p5 --line centerline --spee
 Raceline の速度上限を 10 m/s で試す場合は、Web UI「地図とライン」で「速度上限」を 10 にして Raceline を再生成し、Notebook ホストから次を実行する。
 
 ```bash
-atd gazebo closed-loop --course odaiba --map gazebo --line raceline --speed 10 --laps 2 --rviz
+atd gazebo closed-loop --course odaiba --line raceline --speed 10 --laps 2 --rviz
 ```
 
 各地点の制御目標は、保存したラインの目標速度と `--speed` の小さい方になる。カーブの横加速度や前後の加減速制限によって、保存した目標速度は 10 m/s より低くなることがある。
@@ -100,17 +100,17 @@ atd gazebo closed-loop --course odaiba --map gazebo --line raceline --speed 10 -
 
 同じモデルの VGL engine が複数ある場合、現在の GPU・TensorRT に適合すれば、地図の `vgl.json` の `runtime_model_dir` に記録された build を使う。別の適合する build で比較するときは、`--engine-dir` に結果ディレクトリからの相対パスを渡す。
 
-走行中に RViz で追従を確認するには、Notebook のデスクトップ端末で `atd dev` を起動しておく。地図 ID が `gazebo` の場合は、別のホスト端末で次を実行する。
+走行中に RViz で追従を確認するには、Notebook のデスクトップ端末で `atd dev` を起動しておく。別のホスト端末で次を実行し、お台場の bag から作った地図を選ぶ。
 
 ```bash
-atd gazebo closed-loop --course odaiba --map gazebo --line raceline --speed 1.5 --laps 2 --rviz
+atd gazebo closed-loop --course odaiba --line raceline --speed 1.5 --laps 2 --rviz
 ```
 
 今の 30 Hz 条件から本番想定の 90 Hz に切り替えるには、同じコマンドに `--camera-hz 90` を加える。追跡中は新しいステレオ観測の時刻で自己位置を更新し、その姿勢を受けて計画、Pure Pursuit、速度 FF＋PID を順に計算する。推定が欠けたフレームでは新しい指令は生成されない。ここでの Hz はシミュレーション時間を基準とする。
 
 上面図の緑が選択した走行ライン、青が Gazebo の後輪軸中心の GT、オレンジが保存地図上の自己位置推定。緑と青を見比べると、模擬車両がラインを外れた区間を追える。GT は最初の有効な推定姿勢と同じ観測時刻で一度だけ地図に合わせるため、青とオレンジで比較できるのは初期位置合わせ後のずれになる。
 
-矢印は GT と推定それぞれの最新の位置と向きを表す。更新時刻が異なる場合、その時間差も矢印の間隔に含まれる。追跡を失うと推定矢印が消える。RViz は試行終了時に閉じる。画面なしで評価するときは `--rviz` を省略する。
+矢印は GT と推定それぞれの最新の位置と向きを表す。水色の矩形は、GT の後輪軸を基準に置いた接触判定用の車体外形。更新時刻が異なる場合、その時間差も矢印の間隔に含まれる。追跡を失うと推定矢印が消える。RViz は試行終了時に閉じる。画面なしで評価するときは `--rviz` を省略する。
 
 `--rviz` では「SLAM landmarks (live)」が走行中の SLAM の特徴点（青灰色）、「Map used for localization」が保存地図との位置合わせに使われた点群（紫）を表示する。紫の点は cuVSLAM が `/visual_slam/vis/localizer_map_cloud` に配信したときに見える。照合の成否は試行のログで確認できる。[NVIDIA の可視化トピック一覧](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_cuvslam/index.html#ros-topics-published)
 
@@ -132,15 +132,17 @@ grep -nE 'Trying to localize in map|Successfully localized at|Failed to localize
 
 ### 耐久走行を Web UI で観測・調整する
 
-地図 ID が `gazebo` の場合、Notebook ホストで次を実行する。TUI では `closed-loop` を選び、周回数に `0`、走行中の表示に `web` を指定する。`--web --rviz` の併用もできる。
+Notebook ホストで次を実行し、使用する地図を選ぶ。TUI では `closed-loop` を選び、周回数に `0`、走行中の表示に `web` を指定する。`--web --rviz` の併用もできる。
 
 ```bash
-atd gazebo closed-loop --course odaiba --map gazebo --line centerline --speed 1.5 --laps 0 --web
+atd gazebo closed-loop --course odaiba --line centerline --speed 1.5 --laps 0 --web
 ```
 
 計時線を通過するたびに完了周回数とラップタイムを記録する。手動で終了するには Gazebo を起動した端末で Ctrl+C を押す。結果に完了周回数、ラップタイム、最後の観測までの走行距離が残る。境界接触・追跡喪失などでも試行は終了する。走行ログの容量は走行時間とともに増える。センサー連続配信だけを試すときは `atd gazebo serve --course odaiba --laps 0` を使う。
 
 Web UI 更新時は Notebook の Isaac ROS コンテナで `atd-web prepare` を一度実行し、`atd-web` を起動する。「ライブ」の観測先で **Gazebo（Notebook）** を選ぶと、同じ Notebook 上の bridge から自己位置と走行ライン、目標・推定速度、操舵角指令、スロットル指令を確認できる。折れ線の時間軸はシミュレーション秒。走行中にブラウザを閉じても計測は続く。[ライブ画面](http://127.0.0.1:8766/#live)
+
+走行地図の「GT 追従」を押すと、走行中の車体の周辺を拡大して追いかける。青枠はその試行の接触判定に使う寸法（既定は全長 0.35 m、全幅 0.19 m）で、緑の矢印が推定姿勢。最初の時刻合わせ以降、GT は Gazebo のシミュレーション時間で最大 10 Hz 更新される。背景は Notebook の保存 HDMap なので、編集した境界とシミュレータの舗装境界が異なる場合がある。接触の判定と距離は走行後の結果画面で確認できる。
 
 走行地図では、紫の丸がその操舵指令を計算した Pure Pursuit の先読み点を示す。後輪軸から先読み点までの直線距離 [m] を地図の凡例に表示する。「詳細・設定」→「パラメータ調整」で `/atd_gazebo_control` を選び、「現在値を取得」して先読み時間を変えると、次の制御計算で選んだ点を地図上で確認できる。速度上限（起動時の `--speed` まで）や速度 PID も調整できる。変更はその試行に適用され、`closed_loop.ros.log` に変更値とシミュレーション時刻が残る。
 

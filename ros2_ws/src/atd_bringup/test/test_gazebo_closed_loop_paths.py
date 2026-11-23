@@ -82,3 +82,14 @@ class ClosedLoopPathTests(unittest.TestCase):
         paths.world_pose(world(1_050_000_000, 99.))
         self.assertEqual(len(paths.gt.points), 1)
         self.assertEqual(paths.gt.current[0], 1_100_000_000)
+
+    def test_headless_keeps_current_gt_without_collecting_rviz_histories(self):
+        paths = ClosedLoopPaths(('course', 'm', 'h'), lambda stamp, p, q: (stamp, p, q), history_size=0)
+        paths.world_pose(world(1, 5.))
+        self.assertIsNone(paths.gt.current)
+        paths.localization(estimate(1, 10., 20.))
+        paths.localization(estimate(2, 0., 0., state='lost'))
+        paths.world_pose(world(3, 6.))
+        self.assertEqual(paths.gt.current[0], 3)
+        self.assertAlmostEqual(paths.gt.current[1][0], 9.)
+        self.assertFalse(paths.gt.points or paths.estimate.points)

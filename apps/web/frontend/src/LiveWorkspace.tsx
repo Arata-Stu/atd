@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, availabilityText } from './api';
 import type { Cloud, LiveStatus, MapDocument, Parameter } from './workspace_types';
 import type { Point } from './types';
-import { mapIssue, streamId, trackingLabels, trackingPose } from './localization_view';
+import { gazeboGroundTruth, mapIssue, streamId, trackingLabels, trackingPose } from './localization_view';
 import type { MapReference } from './localization_view';
 import { captureRoute, LINE_NAMES, livePlanIssue, usablePlan } from './planning_view';
 import { ControlReadout, LiveControlConfig } from './ControlReadout';
@@ -13,7 +13,7 @@ import { GazeboDrivePanel } from './GazeboDrivePanel';
 import { LiveSpeed } from './LiveSpeed';
 import { MapCanvas } from './MapCanvas';
 import { ReferenceLineLegend } from './SpeedLegend';
-import { CaptureMap, LookaheadLegend } from './CaptureMap';
+import { CaptureMap, GazeboGroundTruthLegend, LookaheadLegend } from './CaptureMap';
 import { Field, Icon, Tag } from './workspace_ui';
 
 interface Sample { time: number; value: number }
@@ -56,11 +56,14 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
   const [angularSamples, setAngularSamples] = useState<Sample[]>([]), [plotMetric, setPlotMetric] = useState<'linear' | 'angular'>('linear');
   const [expired, setExpired] = useState(false), [planExpired, setPlanExpired] = useState(false);
   const [controlExpired, setControlExpired] = useState(false), [speedExpired, setSpeedExpired] = useState(false);
+  const [gtExpired, setGtExpired] = useState(true);
   const [mapError, setMapError] = useState(''), [mapReload, setMapReload] = useState(0);
-  const selectedId = (details && mapId) || status?.localization?.map_id || '';
+  const mapIdentity = status?.localization ?? (gazebo && status?.connected && status.identity?.environment === 'gazebo'
+    ? status.gazebo?.ground_truth : null);
+  const selectedId = (details && mapId) || mapIdentity?.map_id || '';
   const doc = reference?.document.id === selectedId ? reference.document : null;
-  const deployment = status?.localization?.hdmap_sha256;
-  const visualMap = status?.localization?.map_sha256;
+  const deployment = mapIdentity?.hdmap_sha256;
+  const visualMap = mapIdentity?.map_sha256;
   const [trail, setTrail] = useState<Point[]>([]);
   const poseStream = useRef('');
   const velocityStream = useRef(''), lastVelocityStamp = useRef<number | null>(null);
@@ -73,6 +76,7 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
   }, [notify, details]);
   useEffect(() => {
     if (!enabled) return; let cancelled = false; let timer: ReturnType<typeof setTimeout>, expiry: ReturnType<typeof setTimeout>, planExpiry: ReturnType<typeof setTimeout> | undefined, controlExpiry: ReturnType<typeof setTimeout> | undefined, speedExpiry: ReturnType<typeof setTimeout> | undefined;
+    let gtExpiry: ReturnType<typeof setTimeout> | undefined;
     async function poll() {
       let delay = 750;
       try {
@@ -96,6 +100,8 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
         planExpiry = expireAfter(value.planning?.remaining_s, setPlanExpired);
         controlExpiry = expireAfter(value.control?.remaining_s, setControlExpired);
         speedExpiry = expireAfter(value.speed_control?.remaining_s, setSpeedExpired);
+        clearTimeout(gtExpiry);
+        if (value.gazebo) gtExpiry = expireAfter(value.gazebo.ground_truth?.remaining_s, setGtExpired);
         const loc = value.localization;
         const remaining = loc ? loc.remaining_s * 1000 - (performance.now() - start) : 2500;
         const timely = Number.isFinite(remaining) && remaining > 0;
@@ -120,7 +126,7 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
       } catch (e) { if (!cancelled) { setError((e as Error).message); setStatus(null); setTrail([]); poseStream.current = ''; } }
       if (!cancelled) timer = setTimeout(poll, delay);
     }
-    void poll(); return () => { cancelled = true; clearTimeout(timer); clearTimeout(expiry); clearTimeout(planExpiry); clearTimeout(controlExpiry); clearTimeout(speedExpiry); };
+    void poll(); return () => { cancelled = true; clearTimeout(timer); clearTimeout(expiry); clearTimeout(planExpiry); clearTimeout(controlExpiry); clearTimeout(speedExpiry); clearTimeout(gtExpiry); };
   }, [enabled, target]);
   useEffect(() => {
     let cancelled = false;
@@ -181,18 +187,19 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
   const tracking = !enabled ? '表示停止' : !status?.connected ? '未接続' : !loc ? '未受信'
     : expired || loc.stale ? '更新途絶' : trackingLabels[loc.state];
   const plan = status?.planning;
-  const selectedLine = plan?.line && LINE_NAMES[plan.line] ? plan.line : null;
+  const route = captureRoute(status, expired || planExpired);
+  const selectedLine = (gazebo && route.line) || (plan?.line && LINE_NAMES[plan.line] ? plan.line : null);
   const planningIssue = !enabled ? '表示を一時停止しています。' : issue || livePlanIssue(status, expired || planExpired);
   const planFrame = !planningIssue && doc && usablePlan(plan) ? plan : null;
   const control = status?.control;
   const controlIssue = planFrame ? liveControlIssue(status, controlExpired) : '有効な走行計画を待っています。';
   const controlFrame = !controlIssue ? control : null;
   const displayedLine = selectedLine || 'raceline';
-  const route = captureRoute(status, expired || planExpired);
   const mapControl = route.plan && route.line === displayedLine &&
     (doc?.lines[displayedLine]?.points?.length ?? 0) >= 2 ? controlFrame : null;
   const autoActive = (status?.auto_drive?.publishers ?? 0) > 0;
-  const captureMap = <CaptureMap status={status} reference={doc ? reference : null} trail={trail}
+  const groundTruth = gazebo ? gazeboGroundTruth(status, doc ? reference : null, !enabled || gtExpired) : undefined;
+  const captureMap = <CaptureMap status={status} reference={doc ? reference : null} trail={trail} groundTruth={groundTruth}
     enabled={enabled} expired={expired} planExpired={planExpired} controlExpired={controlExpired}
     error={mapError} reload={() => setMapReload(n => n + 1)}/>;
   const velocityPlot = <div className="live-velocity-history">
@@ -242,13 +249,15 @@ function LiveSession({notify, capture, onCapture, target, selectTarget}: LivePro
         {!gazebo && <ControlReadout frame={controlFrame} issue={controlIssue}>
           {controlFrame?.config && <LiveControlConfig config={controlFrame.config}/>}
         </ControlReadout>}</div>
-      <MapCanvas doc={doc} controlTarget={controlOverlay(mapControl, mapControl?.vehicle_pose)} cloud={doc ? cloud : null} referenceLine={displayedLine} forwardPath={planFrame?.trajectory}
+      <MapCanvas doc={doc} groundTruth={groundTruth} controlTarget={controlOverlay(mapControl, mapControl?.vehicle_pose)} cloud={doc ? cloud : null} referenceLine={displayedLine} forwardPath={planFrame?.trajectory}
         pose={planFrame?.vehicle_pose || mapPose} trail={mapPose ? trail : []}/>
       <div className="planning-legend">
         <ReferenceLineLegend raceline={displayedLine === 'raceline' ? doc?.lines.raceline : undefined}>
           <span><i/>{LINE_NAMES[displayedLine]}</span>
         </ReferenceLineLegend>
-        <span><i className="plan-path"/>前方軌道</span><LookaheadLegend distance={mapControl?.actual_lookahead_m}/><span><i className="plan-trail"/>実走軌跡</span><span>矢印は車両の向き</span>
+        <span><i className="plan-path"/>前方軌道</span><LookaheadLegend distance={mapControl?.actual_lookahead_m}/>
+        <span><i className="plan-trail"/>{gazebo ? '推定軌跡・姿勢' : '実走軌跡'}</span>
+        {gazebo ? <GazeboGroundTruthLegend truth={groundTruth ?? null}/> : <span>矢印は車両の向き</span>}
       </div>
       {(issue || mapError) && <div className="inline-note" role="status"><span>{mapError ? `Notebook の地図「${selectedId}」を確認してください。${mapError}` : issue}</span>
         <button className="button small" onClick={() => setMapReload(n => n + 1)}>地図を再読込</button></div>}

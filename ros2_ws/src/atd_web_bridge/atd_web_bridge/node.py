@@ -31,7 +31,7 @@ from .planning import live_plan, observation as planning_observation
 from .control import live_control, observation as control_observation
 from .speed_control import SpeedWindow
 from .drive_monitor import drive_monitor, joy_sample, publisher_gid, receive_feedback
-from .gazebo import GazeboDriveWindow
+from .gazebo import GazeboDriveWindow, ground_truth_sample, live_ground_truth
 from .core import Cache, ProfileStore, TeleopProfileStore, PropoProfileStore, VehicleProfileStore, prepare_parameter_value
 
 
@@ -72,6 +72,7 @@ class BridgeNode(Node):
         fixed = ParameterDescriptor(read_only=True)
         defaults = {'port': 8790, 'environment': 'jetson', 'freshness_s': 2.5, 'esc_trials_enabled': False,
             'gazebo_control_topic': '/atd/gazebo/control_state',
+            'gazebo_gt_topic': '/atd/gazebo/aligned_ground_truth', 'gazebo_gt_stream_id': '',
             'localization_topic': '/localization/status',
             'planning_topic': '/planning/status',
             'control_topic': '/control/status',
@@ -116,6 +117,8 @@ class BridgeNode(Node):
         if environment == 'gazebo':
             self.gazebo_window = GazeboDriveWindow(self.settings['freshness_s'])
             self.subscribe(String, 'gazebo_control_topic', self.receive_gazebo)
+            if self.settings['gazebo_gt_stream_id']:
+                self.subscribe(String, 'gazebo_gt_topic', self.receive_gazebo_gt)
             return
         self.speed_window = SpeedWindow(self.cache)
         self.auto_drive = AutoDriveWindow()
@@ -407,6 +410,15 @@ class BridgeNode(Node):
             return
         self.gazebo_window.receive(data, publisher_gid(info))
 
+    def receive_gazebo_gt(self, message, info):
+        try:
+            data = json.loads(message.data) if len(message.data) <= 4096 else None
+        except (ValueError, RecursionError):
+            return
+        sample = ground_truth_sample(data, self.settings['gazebo_gt_stream_id'], publisher_gid(info))
+        if sample:
+            self.cache.put('gazebo_gt', sample)
+
     def dispatch(self, path, method, body):
         with self.operation_lock:
             simulation = self.identity.get('environment') == 'gazebo'
@@ -425,6 +437,9 @@ class BridgeNode(Node):
                 if simulation:
                     gid = self.observation_gid('gazebo_control_topic', '/atd_gazebo_control')
                     snapshot = self.gazebo_window.snapshot(now, gid)
+                    gt_gid = (self.observation_gid('gazebo_gt_topic', '/atd_gazebo_closed_loop_paths')
+                              if self.settings['gazebo_gt_stream_id'] else None)
+                    snapshot['ground_truth'] = live_ground_truth(self.cache, now, gt_gid)
                     control = None
                     if snapshot['current'] and snapshot['current']['state'] == 'driving':
                         count, pursuit_gid = self.observation_source('control_topic', '/atd_gazebo_control')

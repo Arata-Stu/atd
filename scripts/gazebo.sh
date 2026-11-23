@@ -25,7 +25,7 @@ usage() {
   --full-throttle-speed m/s
                       closed-loop の全開時のモデル速度。省略時は 3.2 m/s と --speed の大きい方を使用
                       同じ車両モデルで比較する場合は、各試行の --speed 以上の共通値を指定
-  --map ID            closed-loop で使う cuVSLAM・VGL・速度付き HDMap の地図ID（省略で選択）
+  --map ID            closed-loop の保存地図 ID（省略すると指定ライン・解像度に合う地図から選択）
   --line 種類         closed-loop の raceline / centerline / custom（省略で保存済みラインから選択）
   --engine-dir 相対パス  closed-loop の VGL engine を明示する場合の results からの相対パス
   --min-lookahead m   closed-loop の Pure Pursuit 最短先読み距離を指定

@@ -18,6 +18,10 @@
 .planning-legend i { display:inline-block; width:16px; border-top:3px solid #538ee4; }
 .planning-legend .plan-path,.validation-legend .plan-path { width:16px; border-top:4px solid #a04715; }
 .planning-legend .plan-trail { border-color:#16835e; }
+.planning-legend i.gt-footprint { box-sizing:border-box; width:14px; height:8px; border:1.5px solid #1878a0; border-right-width:3px; background:#1878a022; }
+.map-corner-label .gt-follow { padding:2px 5px; border:1px solid #abbdc4; border-radius:3px; color:#2c606f; background:white; font:inherit; }
+.map-corner-label .gt-follow[aria-pressed="true"] { background:#1878a0; color:white; border-color:#1878a0; }
+.map-corner-label .gt-follow:disabled { opacity:.5; }
 @media(max-width:760px) { .planning-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } .planning-header { align-items:flex-start; } }
 
 .live-map.content-card { height:auto; }

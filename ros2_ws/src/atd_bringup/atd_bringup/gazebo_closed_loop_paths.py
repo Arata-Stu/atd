@@ -10,15 +10,17 @@ from .replay_gt_geometry import Alignment, PlanarPose, Trace
 
 
 class PathHistory:
-    def __init__(self, make_pose):
+    def __init__(self, make_pose, history_size):
         self.make_pose = make_pose
-        self.points = deque(maxlen=8192)
+        self.points = deque(maxlen=history_size)
         self.current = None
         self.last_position = None
         self.changed = False
 
     def add(self, stamp, position, orientation):
         self.current = self.make_pose(stamp, position, orientation)
+        if not self.points.maxlen:
+            return
         if self.last_position is None or math.dist(position, self.last_position) >= .04:
             self.points.append(self.current)
             self.last_position = position
@@ -31,10 +33,10 @@ class PathHistory:
 
 
 class ClosedLoopPaths:
-    def __init__(self, map_identity, make_pose):
+    def __init__(self, map_identity, make_pose, history_size=8192):
         self.identity = map_identity
-        self.gt = PathHistory(make_pose)
-        self.estimate = PathHistory(make_pose)
+        self.gt = PathHistory(make_pose, history_size)
+        self.estimate = PathHistory(make_pose, history_size)
         self.alignment = None
         self.gt_stamp = None
         self.estimate_stamp = None

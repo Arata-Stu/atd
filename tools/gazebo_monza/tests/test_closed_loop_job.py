@@ -17,6 +17,43 @@ import closed_loop_job as job
 
 
 class ClosedLoopJobTests(unittest.TestCase):
+    def test_missing_id_and_missing_hdmap_explain_how_to_select_a_map(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / 'maps/gazebo'
+            cmd = ['bash', str(job.PROJECT / 'scripts/gazebo.sh'), 'closed-loop', '--course', 'odaiba',
+                   '--map', 'gazebo', '--line', 'raceline', '--speed', '1.5', '--laps', '2', '--rviz']
+            for exists, expected in [(False, str(folder)), (True, 'hdmap/map.json')]:
+                with self.subTest(folder_exists=exists):
+                    if exists:
+                        folder.mkdir(parents=True)
+                    result = subprocess.run(cmd, env={**os.environ, 'ATD_RESULT_DIR': tmp},
+                                            capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('地図 ID「gazebo」', result.stderr)
+                    self.assertIn(expected, result.stderr)
+                    self.assertIn('--map を省略', result.stderr)
+            self.assertFalse((Path(tmp) / 'runs').exists())
+
+    def test_picker_filters_by_requested_line_and_resolution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template = json.loads((job.PROJECT / 'samples/odaiba/hdmap/map.json').read_text())
+            for name, line, shape in [('race', 'raceline', [480, 640]), ('center', 'centerline', [480, 640]),
+                                      ('other_resolution', 'raceline', [720, 1280])]:
+                folder = root / 'maps' / name
+                (folder / 'hdmap').mkdir(parents=True)
+                doc = dict(template, id=name, source={'kind': 'nvidia_offline'}, lines={line: template['lines'][line]})
+                (folder / 'hdmap/map.json').write_text(json.dumps(doc))
+                (folder / 'vgl.json').write_text(json.dumps(dict(status='complete', input_shape=[1, 3, *shape])))
+            args = SimpleNamespace(results=root, map=None, line='raceline', resolution='640x480', dry_run=False)
+            with patch.object(job, 'choose', return_value='race') as pick:
+                self.assertEqual(job.select(args), ('race', 'raceline', '640x480'))
+                self.assertEqual(pick.call_args.args[1], ['race'])
+            args.map = 'center'
+            with self.assertRaisesRegex(ValueError, '速度付き raceline がありません'), patch.object(job, 'choose') as pick:
+                job.select(args)
+            pick.assert_not_called()
+
     def test_worker_requires_installed_executable_in_selected_overlay(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)

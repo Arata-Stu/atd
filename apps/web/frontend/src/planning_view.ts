@@ -59,5 +59,12 @@ export function captureRoute(status: LiveStatus | null, timedOut: boolean) {
       return {line: null, plan: null, issue: '自動走行と計画が選択しているラインが異なります。'};
     if (LINE_CHOICES.includes(auto.line)) return {line: auto.line, plan, issue: ''};
   }
+  const sim = status?.identity?.environment === 'gazebo' && status.connected ? status.gazebo : null;
+  const driveMap = loc?.map_id ?? sim?.ground_truth?.map_id;
+  if (sim?.current && driveMap) {
+    if (sim.current.map_id !== driveMap || (plan && plan.line !== sim.current.line))
+      return {line: null, plan: null, issue: 'Gazebo と走行計画の地図またはラインが一致しません。'};
+    if (LINE_CHOICES.includes(sim.current.line)) return {line: sim.current.line, plan, issue: ''};
+  }
   return {line: observedPlan?.line ?? null, plan, issue: ''};
 }

@@ -5,6 +5,8 @@ import { cloudFitCorners } from './map_cloud_fit';
 import { savedSpeeds, speedScale, speedStrokes } from './raceline_speed';
 import type { ControlOverlay } from './control_view';
 import type { TrajectoryOverlay } from './localization_validation';
+import type { GazeboGroundTruth } from './workspace_types';
+import { gtFootprintBounds } from './localization_view';
 
 const COLORS = { left: '#40aa96', right: '#d78d51', custom: '#9c7be2', centerline: '#40aa96', raceline: '#538ee4', customline: '#9c7be2' };
 interface Props {
@@ -12,14 +14,18 @@ interface Props {
   visible?: Record<string, boolean>; onChange?: (target: EditTarget, points: Point[]) => void;
   referenceLine?: LineKind | null; forwardPath?: Point[]; planPose?: {x: number; y: number} | null;
   controlTarget?: ControlOverlay;
+  groundTruth?: GazeboGroundTruth | null;
   overlay?: TrajectoryOverlay; selectedGap?: {index: number} | null; onSelectGap?: (index: number | null) => void;
   pose?: { x?: number; y?: number; yaw?: number } | null; fitKey?: number; autoFit?: boolean; trail?: Point[];
 }
-export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visible = {}, onChange, pose, fitKey = 0, autoFit = false, trail = [], overlay, selectedGap, onSelectGap, referenceLine, forwardPath, planPose, controlTarget }: Props) {
+export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visible = {}, onChange, pose, fitKey = 0, autoFit = false, trail = [], overlay, selectedGap, onSelectGap, referenceLine, forwardPath, planPose, controlTarget, groundTruth }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const manualView = useRef(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const [view, setView] = useState({ x: 0, y: 0, scale: 38 });
+  const [freeView, setView] = useState({ x: 0, y: 0, scale: 38 });
+  const [followScale, setFollowScale] = useState<number | null>(null);
+  const view = useMemo(() => followScale !== null && groundTruth
+    ? {x: groundTruth.x, y: groundTruth.y, scale: followScale} : freeView, [followScale, groundTruth, freeView]);
   const [selected, setSelected] = useState(-1);
   const [draft, setDraft] = useState<Point[] | null>(null);
   const [pointerWorld, setPointerWorld] = useState<Point | null>(null);
@@ -72,6 +78,7 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
   }, []);
   useEffect(() => {
     manualView.current = false;
+    setFollowScale(null);
     setSelected(-1); setDraft(null);
   }, [doc?.id, fitKey, autoFit]);
   // Loading the map can change the canvas dimensions after the first fit.
@@ -189,6 +196,21 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
       ctx.shadowColor = '#2a806755'; ctx.shadowBlur = 12; ctx.fillStyle = '#16835e';
       ctx.beginPath(); ctx.moveTo(13, 0); ctx.lineTo(-9, -8); ctx.lineTo(-5, 0); ctx.lineTo(-9, 8); ctx.closePath(); ctx.fill(); ctx.restore();
     }
+    if (doc && groundTruth) {
+      const {x, y, yaw, footprint} = groundTruth;
+      const bounds = gtFootprintBounds(footprint);
+      const rear = bounds.rear * view.scale, nose = bounds.front * view.scale, halfWidth = bounds.halfWidth * view.scale;
+      const length = nose - rear;
+      ctx.save(); ctx.translate(...project([x, y])); ctx.rotate(-yaw);
+      ctx.fillStyle = '#1878a033'; ctx.fillRect(rear, -halfWidth, length, 2 * halfWidth);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 3.5;
+      ctx.strokeRect(rear, -halfWidth, length, 2 * halfWidth);
+      ctx.strokeStyle = '#1878a0'; ctx.lineWidth = 1.8;
+      ctx.strokeRect(rear, -halfWidth, length, 2 * halfWidth);
+      // 車体は実寸。全周表示でも進行方向が読めるよう、前端の外側に短い青い印を添える。
+      ctx.beginPath(); ctx.moveTo(nose + 1, -3); ctx.lineTo(nose + 5, 0); ctx.lineTo(nose + 1, 3);
+      ctx.stroke(); ctx.restore();
+    }
     // 全周表示で先読み点が車両矢印に重なっても、輪郭を確認できるようにする。
     if (doc && controlTarget) {
       const [x, y] = project(controlTarget.target);
@@ -200,11 +222,13 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
     const scaleWidth = Math.max(1, Math.floor(90 / view.scale / step)) * step * view.scale;
     ctx.strokeStyle = '#65796d'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(24, size.height - 31); ctx.lineTo(24 + scaleWidth, size.height - 31); ctx.stroke();
     ctx.fillStyle = '#65796d'; ctx.font = '11px ui-monospace, monospace'; ctx.fillText(`${(scaleWidth / view.scale).toFixed(step < 1 ? 1 : 0)} m`, 24, size.height - 40);
-  }, [doc, cloud, view, size, target, mode, selected, draft, visible, pose, project, onChange, trail, overlay, selectedGap, referenceLine, raceStrokes, forwardPath, planPose, controlTarget]);
+  }, [doc, cloud, view, size, target, mode, selected, draft, visible, pose, project, onChange, trail, overlay, selectedGap, referenceLine, raceStrokes, forwardPath, planPose, controlTarget, groundTruth]);
   const pointAt = (e: React.PointerEvent | React.WheelEvent): Point => { const rect = canvas.current!.getBoundingClientRect(); return [e.clientX - rect.left, e.clientY - rect.top]; };
   function zoomBy(factor: number) {
     manualView.current = true;
-    setView(v => ({ ...v, scale: Math.min(800, Math.max(.5, v.scale * factor)) }));
+    const scale = Math.min(800, Math.max(.5, view.scale * factor));
+    if (followScale !== null && groundTruth) setFollowScale(scale);
+    else setView({...view, scale});
   }
   return <div className="map-surface">
     <canvas ref={canvas} tabIndex={0} aria-label={onChange ? '地図編集キャンバス。点をクリックして選択、Deleteで削除。右ドラッグで移動、ホイールで拡大縮小。' : '地図閲覧キャンバス。右ドラッグで移動、ホイールで拡大縮小。'} style={{ cursor: mode === 'pan' ? 'grab' : mode === 'add' ? 'crosshair' : 'default' }}
@@ -213,6 +237,7 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
         manualView.current = true;
         const [x, y] = pointAt(e), at = world(x, y);
         const scale = Math.min(800, Math.max(.5, view.scale * Math.exp(-e.deltaY * .001)));
+        if (followScale !== null && groundTruth) { setFollowScale(scale); return; }
         setView({ scale, x: at[0] - (x - size.width / 2) / scale, y: at[1] + (y - size.height / 2) / scale });
       }}
       onPointerDown={e => {
@@ -226,7 +251,8 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
         active.moved ||= Math.hypot(at[0] - active.start[0], at[1] - active.start[1]) > 3;
         if (active.kind === 'pan') {
           manualView.current = true;
-          setView(v => ({ ...v, x: active.origin[0] - (at[0] - active.start[0]) / v.scale, y: active.origin[1] + (at[1] - active.start[1]) / v.scale }));
+          setFollowScale(null);
+          setView({scale: view.scale, x: active.origin[0] - (at[0] - active.start[0]) / view.scale, y: active.origin[1] + (at[1] - active.start[1]) / view.scale});
         }
         if (active.kind === 'point') { active.points[active.index] = world(...at); setDraft([...active.points]); }
       }}
@@ -248,9 +274,13 @@ export function MapCanvas({ doc, cloud, target = 'left', mode = 'select', visibl
       onPointerCancel={() => { drag.current = null; setDraft(null); }}
       onKeyDown={e => { if ((e.key === 'Delete' || e.key === 'Backspace') && selected >= 0 && doc && onChange) { e.preventDefault(); onChange(target, doc[target].filter((_, i) => i !== selected)); setSelected(-1); } }}
     />
-    <div className="map-corner-label"><span className="dot"/> {doc?.frame || 'map'} <span>座標 / m</span></div>
+    <div className="map-corner-label"><span className="dot"/> {doc?.frame || 'map'} <span>座標 / m</span>
+      {groundTruth !== undefined && <button type="button" className="gt-follow" disabled={!groundTruth && followScale === null}
+        aria-pressed={followScale !== null} title="Gazebo の車体周辺を拡大して追従"
+        onClick={() => setFollowScale(followScale === null ? Math.max(38, Math.min(size.width, size.height) / 4) : null)}>GT 追従</button>}
+    </div>
     <div className="canvas-controls">
-      <button title="全体を表示" aria-label="全体を表示" onClick={() => { manualView.current = false; onSelectGap?.(null); fit(); }}><Icon name="expand"/></button>
+      <button title="全体を表示" aria-label="全体を表示" onClick={() => { setFollowScale(null); manualView.current = false; onSelectGap?.(null); fit(); }}><Icon name="expand"/></button>
       <button aria-label="拡大" onClick={() => zoomBy(1.4)}>＋</button>
       <button aria-label="縮小" onClick={() => zoomBy(1 / 1.4)}>−</button>
     </div>

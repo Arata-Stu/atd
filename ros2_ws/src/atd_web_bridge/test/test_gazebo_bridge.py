@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from atd_web_bridge.core import Cache
-from atd_web_bridge.gazebo import GazeboDriveWindow
+from atd_web_bridge.gazebo import GazeboDriveWindow, ground_truth_sample, live_ground_truth
 from test_propo_routes import load_bridge_module
 
 
@@ -60,6 +60,7 @@ def test_live_dispatch_serves_actual_control_state_and_rejects_an_ambiguous_publ
     node.gazebo_window = GazeboDriveWindow(2.5)
     node.settings = dict(localization_topic='/localization/status', planning_topic='/planning/status',
                          gazebo_control_topic='/atd/gazebo/control_state', control_topic='/atd/gazebo/pursuit_status',
+                         gazebo_gt_stream_id='run', gazebo_gt_topic='/atd/gazebo/aligned_ground_truth',
                          parameter_node_prefix='/atd_gazebo_control')
     node.get_clock = Mock()
     node.get_clock.return_value.now.return_value.nanoseconds = 2 * 10**9
@@ -71,6 +72,7 @@ def test_live_dispatch_serves_actual_control_state_and_rejects_an_ambiguous_publ
     result = node.dispatch('/live/status', 'GET', {})
     assert result['gazebo']['current']['steering_rad'] == -.15
     assert result['control'] is None
+    assert result['gazebo']['ground_truth'] is None
     assert result['parameter_nodes'] == ['/atd_gazebo_control']
     assert result['pose'] is None and 'auto_drive' not in result
     source = dict(map_id='odaiba', map_sha256='a'*64, hdmap_sha256='b'*64, session_id='run', epoch=1, stamp=1.95)
@@ -85,3 +87,35 @@ def test_live_dispatch_serves_actual_control_state_and_rejects_an_ambiguous_publ
     assert node.dispatch('/live/status', 'GET', {})['control'] is None
     node.get_publishers_info_by_topic.return_value.append(endpoint)
     assert node.dispatch('/live/status', 'GET', {})['gazebo']['current'] is None
+    gt_source = SimpleNamespace(node_namespace='/', node_name='atd_gazebo_closed_loop_paths', endpoint_gid=b'viewer')
+    node.get_publishers_info_by_topic.side_effect = lambda topic: (
+        [gt_source] if topic == node.settings['gazebo_gt_topic'] else [])
+    row = dict(source, frame='map', stamp_s=1.99, x=.5, y=1., yaw=0., stream_id='run',
+               footprint=dict(vehicle_length=.35, vehicle_width=.19, rear_axle_to_rear=.1065, margin=0.))
+    node.receive_gazebo_gt(SimpleNamespace(data=json.dumps(row)), {'publisher_gid': {'data': b'viewer'}})
+    node.cache.put('localization', dict(source, state='lost'))
+    live = node.dispatch('/live/status', 'GET', {})
+    assert live['pose'] is None and live['control'] is None
+    assert live['gazebo']['ground_truth']['x'] == .5
+
+
+def test_gt_requires_matching_run_writer_frame_dimensions_and_fresh_sim_and_wall_time():
+    dims = dict(vehicle_length=.35, vehicle_width=.19, rear_axle_to_rear=.1065, margin=0.)
+    row = dict(frame='map', stamp_s=20., x=1., y=2., yaw=.7, footprint=dims,
+               map_id='odaiba', map_sha256='a'*64, hdmap_sha256='b'*64, stream_id='this-run')
+    for update in (dict(frame='gazebo_world'), dict(stream_id='old-run'), dict(map_sha256=''), dict(yaw=float('nan')),
+                   dict(footprint=dict(dims, rear_axle_to_rear=1.))):
+        assert ground_truth_sample(dict(row, **update), 'this-run', 'writer') is None
+    sample = ground_truth_sample(row, 'this-run', 'writer')
+    cache = Cache(.5)
+    with patch('time.monotonic', return_value=10.):
+        cache.put('gazebo_gt', sample)
+        gt = live_ground_truth(cache, 20.25, 'writer')
+        assert gt['x'] == 1. and gt['footprint'] == dims and gt['remaining_s'] == .25
+        assert 'publisher_gid' not in gt and 'stream_id' not in gt
+        assert live_ground_truth(cache, 20., 'other') is None
+        assert live_ground_truth(cache, 20., None) is None
+        assert live_ground_truth(cache, 19., 'writer') is None
+        assert live_ground_truth(cache, 21., 'writer') is None
+    with patch('time.monotonic', return_value=11.):
+        assert live_ground_truth(cache, 20., 'writer') is None

@@ -1,8 +1,41 @@
 """Gazebo の制御出力をシミュレーション時刻で保持する。"""
 from collections import deque
 import math
+import re
 from threading import Lock
 import time
+
+
+def ground_truth_sample(data, stream_id, gid):
+    if (not gid or not stream_id or not isinstance(data, dict) or data.get('stream_id') != stream_id
+            or data.get('frame') != 'map' or not isinstance(data.get('map_id'), str) or not data['map_id']):
+        return None
+    if not all(isinstance(data.get(k), str) and re.fullmatch('[0-9a-f]{64}', data[k])
+               for k in ('map_sha256', 'hdmap_sha256')):
+        return None
+    dims = data.get('footprint')
+    keys = ('vehicle_length', 'vehicle_width', 'rear_axle_to_rear', 'margin')
+    if not isinstance(dims, dict):
+        return None
+    values = [data.get(k) for k in ('x', 'y', 'yaw', 'stamp_s')] + [dims.get(k) for k in keys]
+    if not all(type(v) in (int, float) and -math.inf < v < math.inf for v in values):
+        return None
+    if not (0 < data['stamp_s'] < 2**31 and 0 <= dims['rear_axle_to_rear'] < dims['vehicle_length']
+            and dims['vehicle_width'] > 0 and dims['margin'] >= 0):
+        return None
+    sample = {k: data[k] for k in ('frame', 'map_id', 'map_sha256', 'hdmap_sha256', 'x', 'y', 'yaw', 'stamp_s')}
+    return dict(sample, footprint={k: dims[k] for k in keys}, publisher_gid=gid)
+
+
+def live_ground_truth(cache, now_s, gid):
+    sample = cache.get('gazebo_gt')
+    if not sample or not gid or sample.pop('publisher_gid') != gid:
+        return None
+    sim_age = now_s - sample['stamp_s']
+    remaining = cache.fresh_s - max(sim_age, sample.pop('age_s'))
+    if sim_age < -.05 or remaining <= 0. or sample.pop('stale'):
+        return None
+    return dict(sample, remaining_s=remaining)
 
 
 class GazeboDriveWindow:

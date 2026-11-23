@@ -10,8 +10,14 @@ export interface LiveStatus {
   velocity?: { linear_mps: number; angular_rps: number; frame: string; stamp: unknown; age_s?: number; stale: boolean } | null;
   localization?: Localization | null; planning?: LivePlan | null; control?: LiveControl | null; speed_control?: LiveSpeed | null;
   auto_drive?: AutoObservation | null;
-  gazebo?: {now_s: number; current: GazeboDriveSample | null; history: GazeboDriveSample[]};
+  gazebo?: {now_s: number; current: GazeboDriveSample | null; history: GazeboDriveSample[]; ground_truth?: GazeboGroundTruth | null};
   topics?: unknown[]; parameter_nodes?: string[]; availability?: unknown;
+}
+
+export interface GazeboGroundTruth {
+  frame: string; stamp_s: number; remaining_s: number; x: number; y: number; yaw: number;
+  map_id: string; map_sha256: string; hdmap_sha256: string;
+  footprint: {vehicle_length: number; vehicle_width: number; rear_axle_to_rear: number; margin: number};
 }
 
 export interface GazeboDriveSample {

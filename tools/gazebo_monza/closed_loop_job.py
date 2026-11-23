@@ -41,8 +41,14 @@ def choose(label, choices):
     return choices[int(selection) - 1]
 
 
-def map_options(folder):
+def map_options(folder, requested_line, requested_resolution):
     """候補と描画解像度。地図・VGL engine の内容は ROS launch が再検査する。"""
+    if not folder.is_dir():
+        raise ValueError(f'保存地図のディレクトリが見つかりません（{folder}）')
+    if not (folder / 'hdmap/map.json').is_file():
+        raise ValueError('hdmap/map.json がありません。Web UI「地図とライン」でこの地図の HDMap と走行ラインを保存してください')
+    if not (folder / 'vgl.json').is_file():
+        raise ValueError('vgl.json がありません。Web UI「地図とライン」でこの地図の VGL 地図を準備してください')
     doc = read_json(folder / 'hdmap/map.json')
     vgl = read_json(folder / 'vgl.json')
     if (folder.is_symlink() or doc.get('id') != folder.name or doc.get('closed') is not True
@@ -55,6 +61,8 @@ def map_options(folder):
     resolution = f'{shape[3]}x{shape[2]}'
     if resolution not in RESOLUTIONS:
         raise ValueError(f'地図の解像度 {resolution} は Gazebo で配信できません')
+    if requested_resolution and requested_resolution != resolution:
+        raise ValueError(f'VGL 地図の解像度は {resolution} です（指定 {requested_resolution}）')
     lines = []
     for line in LINE_KEYS:
         try:
@@ -64,6 +72,8 @@ def map_options(folder):
         lines.append(line)
     if not lines:
         raise ValueError('地図の速度付き Centerline・Raceline・Customline のいずれかを保存してください')
+    if requested_line and requested_line not in lines:
+        raise ValueError(f'速度付き {requested_line} がありません（利用可能: {", ".join(lines)}）')
     return lines, resolution
 
 
@@ -77,32 +87,31 @@ def select(args):
                          or (not args.map and (not maps.is_dir() or not sys.stdin.isatty()))):
         return (args.map or '<選択した地図>', args.line or 'raceline', args.resolution or '<地図の解像度>')
     selected = args.map
+    if selected:
+        folders = [maps / selected]
+    else:
+        folders = [p for p in sorted(maps.glob('*')) if p.is_dir() and re.fullmatch(valid_id, p.name)]
+    options = {}
+    for folder in folders:
+        try:
+            options[folder.name] = map_options(folder, args.line, args.resolution)
+        except (OSError, ValueError, AttributeError, TypeError) as error:
+            if selected:
+                raise ValueError(f'地図 ID「{selected}」: {error}。別の保存地図を選ぶには --map を省略して再実行してください') from error
+            print(f'{folder.name}: {error}', file=sys.stderr)
     if not selected:
-        options = []
-        for folder in sorted(maps.iterdir()) if maps.is_dir() else ():
-            if not folder.is_dir() or not re.fullmatch(valid_id, folder.name):
-                continue
-            try:
-                map_options(folder)
-            except (OSError, ValueError, AttributeError, TypeError) as error:
-                print(f'{folder.name}: {error}', file=sys.stderr)
-            else:
-                options.append(folder.name)
         if not options:
-            raise ValueError('Notebook の「地図とライン」で bag から作成した NVIDIA 地図の VGL と走行ラインを準備してください')
-        selected = choose('自己位置推定の地図 (--map)', options)
+            raise ValueError(f'{maps} に条件に合う保存地図がありません。Notebook の「地図とライン」で '
+                             'bag から作成した NVIDIA 地図の VGL と走行ラインを準備してください')
+        selected = choose('自己位置推定の地図 (--map)', list(options))
         if selected is None:
             return None
-    lines, resolution = map_options(maps / selected)
-    if args.resolution and args.resolution != resolution:
-        raise ValueError(f'地図 {selected} の VGL 解像度は {resolution} です')
+    lines, resolution = options[selected]
     line = args.line
     if line is None:
         line = choose('走行ライン (--line)', lines) if sys.stdin.isatty() and len(lines) > 1 else lines[0]
         if line is None:
             return None
-    if line not in lines:
-        raise ValueError(f'{selected} の速度付きラインを選んでください: {", ".join(lines)}')
     return selected, line, resolution
 
 

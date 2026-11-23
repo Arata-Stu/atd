@@ -94,8 +94,19 @@ class CompositionTests(unittest.TestCase):
             self.assertTrue(node.parameters[0]['use_sim_time'])
             self.assertEqual(node.parameters[0]['map_sha256'].args[0], metadata['map_sha256'])
             self.assertEqual(node.parameters[0]['min_lookahead_m'], .65)
-            *_, bridge = module['setup'](dict(context, web='true'))
+            *_, headless, bridge = module['setup'](dict(context, web='true'))
+            self.assertFalse(headless.parameters[0]['rviz'])
             self.assertEqual(bridge.parameters[0]['control_topic'], '/atd/gazebo/pursuit_status')
+            dims = dict(vehicle_length=.41, vehicle_width=.21, rear_axle_to_rear=.11, margin=.01)
+            with TemporaryDirectory() as directory, patch.dict(os.environ, DISPLAY=':0'):
+                scene = Path(directory) / 'scene/scene.json'
+                scene.parent.mkdir()
+                scene.write_text(json.dumps(dict(course_evaluation=dict(footprint=dims))))
+                *_, view, gui, bridge = module['setup'](dict(context, run_dir=directory, web='true', rviz='true'))
+                self.assertEqual((view.executable, gui.executable), ('gazebo_closed_loop_paths', 'rviz2'))
+                self.assertEqual(json.loads(view.parameters[0]['footprint_json'].args[0]), dims)
+                stream = view.parameters[0]['gt_stream_id'].args[0]
+                self.assertTrue(stream and stream == bridge.parameters[0]['gazebo_gt_stream_id'].args[0])
             with TemporaryDirectory() as directory:
                 folder = Path(directory)
                 *_, recorder = module['setup'](dict(context, run_dir=directory))

@@ -91,6 +91,26 @@ def test_contact_review_uses_image_stamp_and_archived_line(archive):
     assert data['vslam'] == [dict(t=1.075, track_ms=4, callback_ms=7, vo_state=1)]
 
 
+def test_runtime_switch_preserves_selected_and_controller_lines_at_contact(archive):
+    api, folder, _ = archive
+    doc = json.loads((folder/'hdmap.json').read_bytes())
+    doc['lines']['centerline'] = dict(points=[[9, 20], [9, 21], [10, 20]])
+    save(folder/'hdmap.json', doc)
+    meta = json.loads((folder/'closed_loop.reference.json').read_bytes())
+    meta['hdmap_sha256'] = hashlib.sha256((folder/'hdmap.json').read_bytes()).hexdigest()
+    save(folder/'closed_loop.reference.json', meta)
+    log(folder/'closed_loop.lines.jsonl', [dict(stamp_ns=0, line='raceline'),
+                                           dict(stamp_ns=1_100_000_000, line='centerline'),
+                                           dict(stamp_ns=1_105_000_000, line='centerline')])
+    data = api.get(URL+RUN).json()
+    assert data['run']['line'] == 'raceline'
+    assert data['line_changes'] == [dict(t=1.1, line='centerline')]
+    assert data['additional_references']['centerline']['points'][0] == pytest.approx([.025, 1.])
+    # The choice may change before the next planner output/actuator command.
+    assert data['samples'][-1]['control_line'] == 'raceline'
+    assert data['reference_speeds_mps'] == [.5, 2, 1.2]
+
+
 def test_legacy_reads_mesh_and_does_not_present_current_map_as_archive(archive):
     api, folder, base = archive
     (base/'maps/map1/hdmap').mkdir(parents=True)

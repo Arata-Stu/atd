@@ -90,7 +90,7 @@ class BridgeNode(Node):
             'vehicle_status_topic': '/vehicle/layout/status',
             'vehicle_profile_path': '/data/results/runs/vehicle/layout.yaml',
             'recording_status_topic': '/recording/status',
-            'parameter_node_prefix': '/atd_', 'parameter_allowlist_json': '{}'}
+            'parameter_node_prefix': '/atd_', 'parameter_allowlist_json': '{}', 'drive_tuning': False}
         self.settings = {key: self.declare_parameter(key, value, fixed).value for key, value in defaults.items()}
         if not 1024 <= self.settings['port'] <= 65535 or not .1 <= self.settings['freshness_s'] <= 30:
             raise ValueError('Invalid bridge port or freshness_s')
@@ -102,6 +102,12 @@ class BridgeNode(Node):
         environment = self.settings['environment']
         if environment not in ('jetson', 'gazebo') or environment == 'gazebo' and not self.get_parameter('use_sim_time').value:
             raise ValueError('Gazebo 接続にはシミュレーション時計が必要です。environment は jetson / gazebo で指定してください')
+        if environment == 'jetson':
+            if self.settings['drive_tuning']:
+                from atd_control.drive_tuning import DEFAULT_DRIVE_TUNING
+                self.allowed['/atd_auto_drive'] = list(DEFAULT_DRIVE_TUNING.values())
+            else:
+                self.allowed.pop('/atd_auto_drive', None)
         self.operation_lock = threading.RLock()
         self.identity = {'schema': 'atd.web_bridge.v1', 'instance_id': uuid.uuid4().hex,
                          'environment': environment,
@@ -329,7 +335,8 @@ class BridgeNode(Node):
         names = [namespace.rstrip('/') + '/' + name for name, namespace in self.get_node_names_and_namespaces()]
         if self.identity.get('environment') == 'gazebo':
             return ['/atd_gazebo_control'] if names.count('/atd_gazebo_control') == 1 else []
-        return sorted({name for name in names if name.startswith(prefix)})
+        return sorted(name for name in set(names) if name.startswith(prefix) and names.count(name) == 1
+                      and (name != '/atd_auto_drive' or self.settings.get('drive_tuning')))
 
     def client(self, node):
         if node not in self.nodes():
@@ -427,7 +434,9 @@ class BridgeNode(Node):
                     raise ValueError('Gazebo bridge はライブ表示とシミュレーターのパラメータに対応します')
                 if path == '/live/parameters' and 'values' in body and body.get('instance_id') != self.identity['instance_id']:
                     raise ValueError('Gazebo の試行が切り替わりました。再接続して設定を取得してください')
-            if path.startswith(('/teleop/', '/propo/', '/vehicle/')) and method in ('PUT', 'POST'):
+            tuning_vehicle = (not simulation and path == '/live/parameters' and body.get('node') == '/atd_auto_drive'
+                              and 'values' in body)
+            if (tuning_vehicle or path.startswith(('/teleop/', '/propo/', '/vehicle/'))) and method in ('PUT', 'POST'):
                 if type(body.get('instance_id')) is not str or body['instance_id'] != self.identity['instance_id']:
                     raise ValueError('Jetson bridge の接続先が変更されています。状態と設定を再取得してください')
             if path == '/live/status' and method == 'GET':

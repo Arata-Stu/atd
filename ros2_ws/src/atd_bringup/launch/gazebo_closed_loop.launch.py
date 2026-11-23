@@ -23,7 +23,7 @@ from atd_control.bicycle import resolve_full_throttle_speed
 from atd_control.core import LookaheadConfig
 from atd_control.speed import PIDConfig
 from atd_localization.assets import map_metadata, verified_hdmap
-from atd_planning.core import DEFAULT_HORIZON_M, ReferenceLine
+from atd_planning.core import DEFAULT_HORIZON_M, LINE_KEYS, ReferenceLine
 
 
 def rviz_node(reference):
@@ -52,7 +52,8 @@ def setup(context):
     root, key, line = arg('results_root'), arg('map_id'), arg('line')
     metadata = map_metadata(root, key)
     hdmap = verified_hdmap(root, metadata)
-    ref = ReferenceLine.from_document(json.loads(hdmap), line)
+    document = json.loads(hdmap)
+    ref = ReferenceLine.from_document(document, line)
     if not ref.closed:
         raise ValueError('周回評価には選択した保存地図上の閉じた走行ラインが必要です')
     cap = float(arg('max_speed_mps'))
@@ -62,6 +63,16 @@ def setup(context):
     validate_speed_cap(cap, full_speed, table)
     if min(ref.speeds) < table.speeds[0]:
         raise ValueError('走行ラインの最低速度が選択した前進 FF 表の範囲を下回っています')
+    available = []
+    for name in LINE_KEYS:
+        try:
+            candidate = ref if name == line else ReferenceLine.from_document(document, name)
+        except ValueError:
+            continue
+        if min(candidate.speeds) >= table.speeds[0] and min(candidate.speeds) > 0:
+            available.append(name)
+    if line not in available:
+        raise ValueError('閉ループ走行には全区間で目標速度が正のラインが必要です')
     lateral_args = {k: arg(k) for k in asdict(LookaheadConfig())}
     if lateral_args['min_lookahead_m'] == '':
         lateral_args['min_lookahead_m'] = default_min_lookahead(line)
@@ -76,14 +87,15 @@ def setup(context):
     common = dict(map_id=key, results_root=root, use_sim_time='true', simulation_freshness='true',
                   allow_sparse_tf='true')
     control = {k: ParameterValue(metadata[k], value_type=str) for k in ('map_id', 'map_sha256', 'hdmap_sha256')}
-    control.update(line=ParameterValue(line, value_type=str), feedforward_path=ParameterValue(arg('feedforward_path'),
+    control.update(line=ParameterValue(line, value_type=str), available_lines=available,
+                   feedforward_path=ParameterValue(arg('feedforward_path'),
                    value_type=str), max_speed_mps=cap, full_throttle_speed_mps=full_speed,
                    use_sim_time=True, **asdict(lateral),
                    **{'speed_' + k: v for k, v in asdict(pid).items()})
     actions = [
         include('atd_localization', 'localization.launch.py',
                 dict(common, engine_dir=arg('engine_dir'), visualize_landmarks=arg('rviz'))),
-        include('atd_planning', 'planning.launch.py', dict(common, line=line,
+        include('atd_planning', 'planning.launch.py', dict(common, line=line, reference_line_topic='/atd/gazebo/reference_line',
                 horizon_m=str(max(DEFAULT_HORIZON_M, lateral.max_lookahead_m)))),
         Node(package='atd_bringup', executable='gazebo_control', output='screen', parameters=[control],
              on_exit=[Shutdown(reason='Gazebo の車両制御ノードが終了しました')]),

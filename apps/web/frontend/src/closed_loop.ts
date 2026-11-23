@@ -6,6 +6,7 @@ export type Sample = Pose & {
   steering_rad: number | null; requested_steering_rad: number | null; speed_mps: number | null;
   clearance_m: number | null; image_to_apply_ms: number | null; image_to_control_ms: number | null; command_age_ms: number | null;
   actuator_state: string | null; tracking_lateral_error_m: number | null; control_image_s: number | null;
+  control_line?: string | null;
 };
 export type Estimate = Pose & {
   segment: number; lateral_error_m: number; yaw_error_rad: number; received_delay_ms: number | null;
@@ -18,6 +19,8 @@ export type GazeboRun = {
 export type ClosedLoopDetail = {
   run: GazeboRun; samples: Sample[]; estimates: Estimate[]; vslam: Vslam[]; reference: XY[];
   reference_speeds_mps?: number[]; reference_source: 'snapshot' | 'verified_map' | 'current_map' | 'missing';
+  line_changes?: {t: number; line: string}[];
+  additional_references?: Record<string, {points: XY[]; speeds_mps: number[]}>;
   boundaries: {left: XY[]; right: XY[]}; contact_s: number | null; warnings: string[]; anchor_s: number | null;
   footprint: {vehicle_length: number; vehicle_width: number; rear_axle_to_rear: number} | null;
 };
@@ -39,6 +42,23 @@ function lowerBound<T extends Timed>(rows: T[], t: number) {
     else high = mid;
   }
   return low;
+}
+
+export function referenceAt(run: ClosedLoopDetail, t: number) {
+  const changes = run.line_changes ?? [];
+  // If several changes share a paused simulation clock, the last accepted value wins.
+  const next = changes.findIndex(event => event.t > t);
+  const name = changes[(next < 0 ? changes.length : next) - 1]?.line ?? run.run.line;
+  if (name === run.run.line) return {name, points: run.reference, speeds: run.reference_speeds_mps};
+  const ref = name ? run.additional_references?.[name] : undefined;
+  return {name, points: ref?.points ?? [], speeds: ref?.speeds_mps};
+}
+
+export function controlLineAt(samples: Sample[], t: number) {
+  const i = lowerBound(samples, t);
+  const sample = samples[i]?.t === t ? samples[i] : samples[i - 1];
+  if (!sample || sample.control_image_s == null || t - sample.control_image_s > maxGap) return null;
+  return sample.control_line ?? null;
 }
 
 export function timeBounds(run: ClosedLoopDetail): Span | null {
@@ -89,13 +109,15 @@ function series<T extends Timed>(rows:T[], label:string, color:string, get:(p:T)
 export function controlObservations(samples: Sample[]) {
   const rows: (Timed & {lateral: number|null; delay: number|null})[] = [];
   let last = -Infinity, segment = 0, active = false;
+  let previousLine: string | null | undefined;
   for (const source of samples) {
     const t = source.control_image_s;
     if (t === null) { active = false; continue; }
     if (t <= last) continue;
-    if (!active) segment++;
+    if (!active || source.control_line !== previousLine) segment++;
     rows.push({t, segment, lateral:source.tracking_lateral_error_m, delay:source.image_to_control_ms});
     active = true;
+    previousLine = source.control_line;
     last = t;
   }
   return rows;

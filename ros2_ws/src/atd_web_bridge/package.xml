@@ -8,6 +8,7 @@
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>atd_esc_trials</exec_depend>
   <exec_depend>atd_interfaces</exec_depend>
+  <exec_depend>atd_control</exec_depend>
   <exec_depend>atd_joy</exec_depend>
   <exec_depend>atd_teleop</exec_depend>
   <exec_depend>atd_rc_input</exec_depend>

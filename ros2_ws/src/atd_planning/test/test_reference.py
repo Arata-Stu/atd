@@ -2,7 +2,17 @@ import math
 
 import pytest
 
-from atd_planning.core import Planner, ReferenceLine, yaw_from_quaternion
+from atd_planning.core import Planner, ReferenceLine, selected_reference, yaw_from_quaternion
+
+
+def test_reference_selection_is_scoped_to_the_current_verified_map_and_line():
+    identity = dict(map_id='odaiba', map_sha256='a' * 64, hdmap_sha256='b' * 64)
+    lines = ('centerline', 'raceline')
+    event = dict(identity, line='centerline', stamp_ns=0)
+    assert selected_reference(event, identity, lines) == 'centerline'
+    for change in (dict(hdmap_sha256='other'), dict(line='custom'), dict(stamp_ns=-1), dict(stamp_ns=True)):
+        with pytest.raises(ValueError):
+            selected_reference(dict(event, **change), identity, lines)
 
 
 def document(points, speeds=None, closed=False, key='custom'):

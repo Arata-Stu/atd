@@ -6,7 +6,7 @@ import math
 import time
 
 import rclpy
-from atd_interfaces.msg import DriveCommand, PicoTelemetry, PlanningStatus, SpeedControlStatus
+from atd_interfaces.msg import DriveCommand, PicoTelemetry, PlanningStatus, SpeedControlStatus, TunedSpeedControlStatus
 from atd_interfaces.srv import SetSpeedTable
 from atd_planning.core import LINE_KEYS, MAX_AGE_S
 from rcl_interfaces.msg import ParameterDescriptor
@@ -18,6 +18,7 @@ from .manual_inputs import JoyStream, match_manual, pico_reading
 from .monitor import IDENTITY_FIELDS
 from .speed import DEFAULT_FEEDFORWARD_PATH, DriveFeedback, PIDConfig, SpeedController, limited_target, speed_unavailable
 from .speed_table_file import SpeedTableFile
+from .tuned_output import TunedOutput
 
 
 def stamp_ns(msg):
@@ -49,6 +50,11 @@ class SpeedMonitor(Node):
         self.drive_feedback = DriveFeedback() if self.speed_limit else None
         self.drive_gid = None
         self.publisher = self.create_publisher(SpeedControlStatus, '/control/speed_status', 10)
+        self.tuned = None
+        if self.declare_parameter('drive_tuning', False, fixed).value:
+            if not self.speed_limit:
+                raise ValueError('走行設定の反映には正の低速走行上限が必要です')
+            self.tuned = TunedOutput(self, TunedSpeedControlStatus, '/control/tuned_speed', self.apply_tuning)
         self.pico_sub = self.create_subscription(PicoTelemetry, '/vehicle/pico/telemetry', self.receive_pico, 20)
         self.joy_sub = self.create_subscription(DriveCommand, '/teleop/command', self.receive_joy, 20)
         self.create_subscription(PlanningStatus, '/planning/status', self.observe, 10)
@@ -58,6 +64,14 @@ class SpeedMonitor(Node):
             self.create_service(SetSpeedTable, '/control/set_speed_table', self.set_speed_table)
         self.refresh_table()
         self.create_timer(.1, self.watch, clock=Clock(clock_type=ClockType.STEADY_TIME))
+
+    def apply_tuning(self, config):
+        table = self.tables.table
+        controller = SpeedController(table, config.pid, max_target_speed_mps=config.max_speed_mps) if table else None
+        self.speed_limit, self.config = config.max_speed_mps, config.pid
+        self.controller = controller
+        self.plan = self.identity = self.watermark = self.arrived = None
+        self.drive_feedback = DriveFeedback()
 
     def refresh_table(self):
         self.next_check = time.monotonic() + 1.
@@ -156,6 +170,8 @@ class SpeedMonitor(Node):
             msg.joy_throttle, msg.joy_age_s = manual['joy_throttle'], manual['joy_age_s']
             msg.joy_enable_requested = manual['joy_enable_requested']
         self.publisher.publish(msg)
+        if self.tuned:
+            self.tuned.publish(msg)
 
     def invalid(self, reason):
         if self.controller:
@@ -205,6 +221,8 @@ class SpeedMonitor(Node):
         return ''
 
     def observe(self, plan):
+        if self.tuned and not self.tuned.matches(plan):
+            return
         self.plan = plan
         identity = tuple(getattr(plan, k) for k in IDENTITY_FIELDS)
         if self.identity != identity:
@@ -238,6 +256,8 @@ class SpeedMonitor(Node):
                                            target, measured), self.manual_at(stamp_ns(self.plan)))
 
     def watch(self):
+        if self.tuned:
+            self.tuned.resolve()
         if not self.speed_limit and time.monotonic() >= self.next_check and self.refresh_table():
             return self.after_table_change()
         issue = self.source_issue(self.get_clock().now().nanoseconds)

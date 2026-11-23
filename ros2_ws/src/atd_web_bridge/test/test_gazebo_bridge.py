@@ -52,6 +52,27 @@ def test_simulation_rejects_hardware_operations_and_tuning_for_a_previous_run():
     assert node.nodes() == []
 
 
+def test_vehicle_tuning_requires_an_autonomous_bridge_unique_writer_and_current_connection():
+    node = object.__new__(load_bridge_module().BridgeNode)
+    node.identity = dict(environment='jetson', instance_id='jetson-1')
+    node.settings = {'parameter_node_prefix': '/atd_', 'drive_tuning': False}
+    node.operation_lock = RLock()
+    node.get_node_names_and_namespaces = Mock(return_value=[('atd_auto_drive', '/'), ('atd_joy', '/')])
+    assert node.nodes() == ['/atd_joy']
+    node.settings['drive_tuning'] = True
+    assert node.nodes() == ['/atd_auto_drive', '/atd_joy']
+    node.apply_parameters = Mock(return_value={'applied': True})
+    update = dict(node='/atd_auto_drive', values={'line': 'centerline'})
+    for request in (update, dict(update, instance_id='jetson-2')):
+        with pytest.raises(ValueError, match='接続先'):
+            node.dispatch('/live/parameters', 'POST', request)
+    node.apply_parameters.assert_not_called()
+    assert node.dispatch('/live/parameters', 'POST', dict(update, instance_id='jetson-1'))['applied']
+    node.get_node_names_and_namespaces.return_value.append(('atd_auto_drive', '/'))
+    with pytest.raises(ValueError, match='稼働中'):
+        node.client('/atd_auto_drive')
+
+
 def test_live_dispatch_serves_actual_control_state_and_rejects_an_ambiguous_publisher():
     node = object.__new__(load_bridge_module().BridgeNode)
     node.identity = dict(environment='gazebo', instance_id='one-run')

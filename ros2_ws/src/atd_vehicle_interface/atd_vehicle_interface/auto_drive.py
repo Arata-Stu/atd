@@ -25,6 +25,10 @@ class AutoDriveGate:
         if not math.isfinite(max_speed_mps) or not 0 < max_speed_mps <= 1.:
             raise ValueError('低速前進の上限は 0 より大きく 1.0 m/s 以下で指定してください')
         self.map_id, self.line, self.max_speed = map_id, line, max_speed_mps
+        self.speed_ceiling = max_speed_mps
+        self.settings_stamp = 0
+        self.last_drive_expires = 0
+        self.switching = False
         self.calibration = calibration
         self.speeds = DriveSpeeds(map_id, line, MAX_AGE_NS)
         self.last_stop = None
@@ -35,6 +39,17 @@ class AutoDriveGate:
         self.host_since = None
         self.requested = self.active = False
         self.fault = ''
+
+    def retune(self, line, speed_limit, stamp):
+        """設定をまたぐ観測を破棄し、切替中も最後の有効な指令の期限を守る。"""
+        if line not in ('centerline', 'raceline', 'custom') or not 0 < speed_limit <= self.speed_ceiling:
+            raise ValueError('走行ラインまたは実車の速度上限が範囲外です')
+        self.line, self.max_speed, self.settings_stamp = line, speed_limit, stamp
+        for rows in self.samples.values():
+            rows.clear()
+        self.speeds.clear(stamp)
+        self.speeds.line = line
+        self.switching = self.active
 
     def invalidate(self, reason):
         for rows in self.samples.values():
@@ -47,6 +62,8 @@ class AutoDriveGate:
         stamp = msg.header.stamp
         ns = stamp.sec * NS + stamp.nanosec
         is_loc = kind == 'localization'
+        if 0 < ns <= self.settings_stamp and (not is_loc or msg.state == 'tracking'):
+            return
         ttl = MAX_AGE_NS
         if not is_loc:
             if not msg.valid or not math.isfinite(msg.validity_s) or msg.validity_s <= 0:
@@ -84,7 +101,7 @@ class AutoDriveGate:
             if not msg.has_speeds or not 0 < msg.target_speed_mps <= self.max_speed:
                 self.invalidate('目標速度が低速前進の許可範囲外です')
                 return
-            if (not -STANDSTILL_MPS <= msg.estimated_speed_mps <= self.max_speed
+            if (not -STANDSTILL_MPS <= msg.estimated_speed_mps <= self.speed_ceiling
                     or not all(0 <= raw <= 2047 for raw in (msg.feedforward_raw, msg.calculated_raw))):
                 self.invalidate('速度制御が報告した推定速度または CH2 指令が範囲外です')
                 return
@@ -98,7 +115,7 @@ class AutoDriveGate:
             return  # 同じ観測からの再配信で期限を延長しない。
         if is_loc:
             self.velocity = (ns, steady, msg.speed_mps)
-            if not -STANDSTILL_MPS <= msg.speed_mps <= self.max_speed:
+            if not -STANDSTILL_MPS <= msg.speed_mps <= self.speed_ceiling:
                 self.invalidate('推定速度が低速前進の許可範囲外です')
                 return
         if len(rows) >= MAX_PENDING_FRAMES:
@@ -119,6 +136,7 @@ class AutoDriveGate:
             else:
                 board.disarm()
         self.requested = self.active = self.rc_seen = False
+        self.switching = False
         self.fault = reason
         return reason + '。停止を要求しました。CH3 をプロポ側へ戻してください'
 
@@ -128,6 +146,7 @@ class AutoDriveGate:
             if self.requested:
                 board.disarm()
             self.requested = self.active = False
+            self.switching = False
             self.host_since = None
             if (status and status['selector'] == 0 and status['active_path'] == 1
                     and status['fault_bits'] == 0 and 1000 <= status['rx_mode_us'] <= 1300):
@@ -146,6 +165,13 @@ class AutoDriveGate:
             self.host_since = (wall, steady)
         common = set(self.samples['localization']).intersection(self.samples['steering'], self.samples['speed'])
         stamp = max(common, default=0)
+        if self.switching:
+            if steady >= self.last_drive_expires:
+                return self.trip(board, '設定変更後の新しい制御指令が期限内にそろいません', wall, steady)
+            if not stamp:
+                if status['active_path'] != 2 or not board.drive(0., 0.):
+                    return self.trip(board, '設定切替中に CH3 の HOST 許可が解除されました', wall, steady)
+                return '中立出力・新しい走行設定での操舵とスロットルを待機中'
         if stamp <= self.host_since[0]:
             if steady - self.host_since[1] < MAX_AGE_NS:
                 return '切替後の自己位置・操舵・スロットルを待機中'
@@ -180,4 +206,6 @@ class AutoDriveGate:
             board.disarm()
             self.requested = self.active = False
             return self.trip(board, 'CH3 の HOST 許可が解除されました', wall, steady)
+        self.last_drive_expires = min(loc.expires, lateral.expires, speed.expires)
+        self.switching = False
         return '低速前進の自動走行中'

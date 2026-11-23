@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 
 from atd_mapping.frames import stamp_ns
-from atd_planning.core import yaw_from_quaternion
+from atd_planning.core import LINE_KEYS, selected_reference, yaw_from_quaternion
 
 
 def localization_row(msg, now, reference):
@@ -51,18 +51,32 @@ def main():
     from isaac_ros_visual_slam_interfaces.msg import VisualSlamStatus
     from rclpy.executors import ExternalShutdownException
     from rclpy.node import Node
+    from rclpy.qos import DurabilityPolicy, QoSProfile
     from rclpy.utilities import remove_ros_args
+    from std_msgs.msg import String
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run_dir', type=Path)
     folder = parser.parse_args(remove_ros_args(args=sys.argv)[1:]).run_dir
     reference = json.loads((folder / 'closed_loop.reference.json').read_text())
     with rclpy.init(), Node('atd_gazebo_closed_loop_log') as node, \
+            (folder / 'closed_loop.lines.jsonl').open('x', encoding='utf-8', buffering=1) as lines, \
             (folder / 'closed_loop.localization.jsonl').open('x', encoding='utf-8', buffering=1) as loc, \
             (folder / 'closed_loop.vslam.jsonl').open('x', encoding='utf-8', buffering=1) as timing:
         def record_localization(msg):
             write_row(loc, localization_row(msg, node.get_clock().now().nanoseconds, reference))
 
+        def record_line(msg):
+            try:
+                event = json.loads(msg.data)
+                name = selected_reference(event, reference, LINE_KEYS)
+            except ValueError as exc:
+                node.get_logger().warning(str(exc), throttle_duration_sec=5.)
+                return
+            write_row(lines, dict(stamp_ns=event['stamp_ns'], line=name))
+
+        node.create_subscription(String, '/atd/gazebo/reference_line', record_line,
+                                 QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         node.create_subscription(LocalizationStatus, '/localization/status', record_localization, 100)
         node.create_subscription(VisualSlamStatus, '/visual_slam/status',
                                  lambda msg: write_row(timing, vslam_row(msg)), 100)

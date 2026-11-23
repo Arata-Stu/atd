@@ -12,9 +12,9 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     lateral = dict(profile='/data/results/runs/vehicle/layout.yaml', use_sim_time=False, max_target_speed_mps=0.,
-                   **asdict(LookaheadConfig()))
+                   drive_tuning=False, **asdict(LookaheadConfig()))
     speed = dict(feedforward_path=DEFAULT_FEEDFORWARD_PATH, max_target_speed_mps=0., use_sim_time=False,
-                 **{'speed_' + key: v for key, v in asdict(PIDConfig()).items()})
+                 drive_tuning=False, **{'speed_' + key: v for key, v in asdict(PIDConfig()).items()})
 
     def parameters(defaults):
         return [{key: ParameterValue(LaunchConfiguration(key), value_type=type(value))

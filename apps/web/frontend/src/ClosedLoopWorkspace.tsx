@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
-import { around, chartsFor, poseAt, runKey, statuses, timeBounds, valueAt } from './closed_loop';
+import { around, chartsFor, controlLineAt, poseAt, referenceAt, runKey, statuses, timeBounds, valueAt } from './closed_loop';
 import type { ClosedLoopDetail, GazeboRun, XY } from './closed_loop';
 import { ClosedLoopMap, TimelinePlot } from './ClosedLoopPlots';
 import { SpeedLegend } from './SpeedLegend';
@@ -8,6 +8,8 @@ import { speedScale } from './raceline_speed';
 import { Empty, Field, Icon } from './ui';
 import './replay_errors.css';
 import './closed_loop.css';
+
+const noLine: XY[] = [];
 
 function label(run:GazeboRun) {
   const status = statuses[run.status] ?? run.status;
@@ -23,12 +25,14 @@ function RunTimeline({data}: {data:ClosedLoopDetail}) {
   const [focus,setFocus] = useState(data.contact_s !== null);
   const [cursor,setCursor] = useState<number|null>(null);
   const [showCurrent,setShowCurrent] = useState(false);
-  const lineScale = useMemo(()=>data.run.line === 'raceline' ? speedScale(data.reference_speeds_mps,data.reference.length) : null,[data]);
   const event = data.contact_s ?? full?.[1] ?? 0;
   const span = useMemo(()=>full && focus ? around(event,full) : full,[full,focus,event]);
+  const at = span ? Math.min(span[1],Math.max(span[0],cursor ?? data.contact_s ?? data.anchor_s ?? span[0])) : 0;
+  const line = referenceAt(data,at);
+  const lineScale = useMemo(()=>line.name === 'raceline' ? speedScale(line.speeds,line.points.length) : null,
+    [line.name,line.speeds,line.points.length]);
   if (!span) return <p className="cl-missing" role="status">この試行には時刻付きの走行データがありません。</p>;
-  const at = Math.min(span[1],Math.max(span[0],cursor ?? data.contact_s ?? data.anchor_s ?? span[0]));
-  const lineAvailable = data.reference.length > 0;
+  const lineAvailable = line.points.length > 0;
   const currentMap = data.reference_source === 'current_map';
   const showLine = lineAvailable && (!currentMap || showCurrent);
   const isContact = data.contact_s !== null;
@@ -55,14 +59,15 @@ function RunTimeline({data}: {data:ClosedLoopDetail}) {
         <header><h3>走行軌跡</h3><span>Gazebo world · 後輪軸</span></header>
         <div className="replay-legend cl-legend">
           <span className="replay-truth">Gazebo GT</span><span className="replay-estimate">推定軌跡</span>
-          {showLine && !lineScale && <span className="cl-reference">{data.run.line ?? '選択ライン'}{currentMap && '（現在の地図）'}</span>}
+          {showLine && !lineScale && <span className="cl-reference">{line.name ?? '選択ライン'}{currentMap && '（現在の地図）'}</span>}
           {data.boundaries.left.length>0 && <span className="cl-wall">舗装境界</span>}
         </div>
         {currentMap && lineAvailable && <label className="cl-toggle"><input type="checkbox" checked={showCurrent} onChange={e=>setShowCurrent(e.target.checked)}/>
           現在の地図のラインを参考表示（走行時との一致は未確認）</label>}
         {!lineAvailable && <p className="cl-missing">この試行に重ねられる選択ラインがありません。</p>}
         {showLine && lineScale && <SpeedLegend scale={lineScale}/>}
-        <ClosedLoopMap run={data} span={span} focus={focus} showLine={showLine} lineScale={showLine ? lineScale : null} at={at} select={setCursor}/>
+        <ClosedLoopMap run={data} span={span} focus={focus} line={showLine ? line.points : noLine} speeds={line.speeds}
+          lineScale={showLine ? lineScale : null} at={at} select={setCursor}/>
         <p className="cl-guide">+X 右・+Y 上{data.footprint && ' · 矩形は選択時刻の GT 車体外形'}{isContact && ' · × は接触判定時の後輪軸'}</p>
         <label className="replay-slider"><span>シミュレーション時刻 <output>{at.toFixed(3)} s</output></span>
           <input aria-label="シミュレーション時刻（秒）" type="range" min={span[0]} max={span[1]} step="any" value={at}
@@ -73,6 +78,8 @@ function RunTimeline({data}: {data:ClosedLoopDetail}) {
           <dt>推定位置 (x, y)</dt><dd>{xyText(est)}</dd>
           <dt>GT 速度</dt><dd>{speed===null ? '—' : speed.toFixed(2)+' m/s'}</dd>
           <dt>制御が参照した画像時刻</dt><dd>{controlImage===null ? '—' : controlImage.toFixed(3)+' s'}</dd>
+          {!!data.line_changes?.length && <><dt>選択中のライン</dt><dd>{line.name}</dd>
+            <dt>直近の制御計算のライン</dt><dd>{controlLineAt(data.samples, at) ?? '—'}</dd></>}
         </dl>
         {data.anchor_s !== null && <p className="cl-guide">{data.anchor_s.toFixed(3)} s の後輪軸位置と向きで推定座標を GT に合わせています。</p>}
       </section>
@@ -90,7 +97,7 @@ function Result({data}: {data:ClosedLoopDetail}) {
   const {run} = data;
   return <>
     <div className="cl-summary"><strong>{label(run)}</strong><span>地図 {run.map_id ?? '未記録'}</span>
-      <span>選択ライン {run.line ?? '未記録'}</span>{run.max_speed_mps!==null && <span>起動時の速度上限 {run.max_speed_mps.toFixed(2)} m/s</span>}
+      <span>起動時のライン {run.line ?? '未記録'}</span>{run.max_speed_mps!==null && <span>起動時の速度上限 {run.max_speed_mps.toFixed(2)} m/s</span>}
       {run.reason && <p>{run.reason}</p>}
     </div>
     {data.warnings.length>0 && <details className="cl-warnings">

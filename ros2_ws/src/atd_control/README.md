@@ -2,7 +2,7 @@
 
 プロポで手動走行中の後輪軸姿勢と planner の前方軌道から、Pure Pursuit が選ぶ目標・曲率・等価前輪舵角を観測する。購読は `/planning/status`、配信は `/control/status`。Notebook の別 bag 検証でも同じ Python 関数を使う。走行指令の配信や Pico への書き込みは行わない。
 
-`bringup.sh autonomous` では、Jetson の `auto_drive` が操舵と `/control/speed_status` を購読し、前進限定で車両へ出力する。目標速度と PID の前進側出力を低速上限で制限し、起動時に読み込んだ FF 表を使う。自己位置・制御の鮮度、CH3、制動と再開の条件は[低速前進の自動走行](../../../docs/bringup.md#低速前進の自動走行)を参照。
+`bringup.sh autonomous` では、Jetson の `atd_auto_drive` が `/vehicle/drive_tuning` で地図・ライン・先読み・速度上限・PID の設定を制御器へ渡す。各制御器は採用時刻を付けて操舵を `/control/tuned_steering`、速度制御を `/control/tuned_speed` に配信する。Jetson は同じ設定と元観測に対応する両方の値を照合して Pico へ前進指令を送る。Web UI と rosbag は従来の観測 topic `/control/status`・`/control/speed_status` を使える。[低速前進の自動走行](../../../docs/bringup.md#低速前進の自動走行)
 
 ## 先読みと舵角
 
@@ -27,6 +27,8 @@ ros2 launch atd_control control.launch.py min_lookahead_m:=0.35 lookahead_time_s
 ```
 
 `profile` の既定は `/data/results/runs/vehicle/layout.yaml`。node 起動時に読み込む。目標・姿勢・舵角は同じ planner 元観測の時刻と地図・セッション・追跡世代を持つ。有効期限切れ、元時刻逆行、planner 無効、後退、または複数 planner を検出すると数値を失効させる。`valid` と `has_steering` を確認して表示する。
+
+`control.launch.py` 単体では `drive_tuning` の既定は `false`。実車自動走行では `true` と正の `max_target_speed_mps` を渡す。変更を受けると古い計画と PID 履歴を破棄し、同じ地図・ラインで設定時刻より新しい計画から計算を再開する。設定が同じでも追跡を失えば無効状態を配信する。
 
 将来 MPC / MPPI を追加する場合も `PlanningStatus` の姿勢・推定速度・軌道・速度列を利用できる。`ControlStatus.controller` は計算法を識別する。先読み距離・終端フラグは Pure Pursuit 固有の診断情報である。
 

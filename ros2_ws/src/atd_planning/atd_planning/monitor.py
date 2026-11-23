@@ -10,19 +10,27 @@ from geometry_msgs.msg import Point
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
+from std_msgs.msg import String
 
-from .core import DEFAULT_HORIZON_M, MAX_AGE_S, Planner, ReferenceLine, invalid, yaw_from_quaternion
+from .core import (
+    DEFAULT_HORIZON_M, LINE_KEYS, MAX_AGE_S, Planner, ReferenceLine, invalid, selected_reference, yaw_from_quaternion,
+)
 
 
 class PlanningMonitor(Node):
     def __init__(self, **kwargs):
         super().__init__('atd_planning', **kwargs)
-        descriptor = ParameterDescriptor(read_only=True)
         defaults = dict(results_root='/data/results', map_id='', line='raceline',
-                        horizon_m=DEFAULT_HORIZON_M, max_offset_m=.75)
-        cfg = {key: self.declare_parameter(key, value, descriptor).value for key, value in defaults.items()}
-        sim_freshness = self.declare_parameter('simulation_freshness', False, descriptor).value
-        self.allow_sparse_tf = self.declare_parameter('allow_sparse_tf', False, descriptor).value
+                        horizon_m=DEFAULT_HORIZON_M, max_offset_m=.75, simulation_freshness=False,
+                        reference_line_topic='', allow_sparse_tf=False)
+        cfg = {key: self.declare_parameter(key, value, ParameterDescriptor(read_only=True)).value
+               for key, value in defaults.items()}
+        sim_freshness = cfg['simulation_freshness']
+        self.selection_topic = cfg['reference_line_topic']
+        self.pending_selection = None
+        self.switch_stamp = -1
+        self.allow_sparse_tf = cfg['allow_sparse_tf']
         if sim_freshness and not self.get_parameter('use_sim_time').value:
             raise ValueError('模擬時間での鮮度検査には use_sim_time が必要です')
         if self.allow_sparse_tf and not sim_freshness:
@@ -32,12 +40,23 @@ class PlanningMonitor(Node):
         self.identity = dict(map_id=cfg['map_id'], map_sha256='', hdmap_sha256='')
         self.asset_issue = ''
         self.planner = None
+        self.planners = {}
         try:
             meta = map_metadata(cfg['results_root'], cfg['map_id'])
             self.identity = {key: meta[key] for key in self.identity}
             doc = json.loads(verified_hdmap(cfg['results_root'], meta))
             self.planner = Planner(ReferenceLine.from_document(doc, self.line), horizon_m=cfg['horizon_m'],
                                    max_offset_m=cfg['max_offset_m'])
+            if self.selection_topic:
+                self.planners[self.line] = self.planner
+                for name in LINE_KEYS:
+                    if name != self.line:
+                        try:
+                            reference = ReferenceLine.from_document(doc, name)
+                        except ValueError:
+                            continue
+                        self.planners[name] = Planner(reference, horizon_m=cfg['horizon_m'],
+                                                      max_offset_m=cfg['max_offset_m'])
         except (ValueError, OSError, KeyError, TypeError) as error:
             self.asset_issue = str(error)
             self.get_logger().error(self.asset_issue)
@@ -46,7 +65,41 @@ class PlanningMonitor(Node):
         self.source = None
         self.publisher = self.create_publisher(PlanningStatus, '/planning/status', 10)
         self.subscription = self.create_subscription(LocalizationStatus, '/localization/status', self.observe, 10)
+        if self.selection_topic:
+            allowed = {'/atd/gazebo/reference_line': 'atd_gazebo_control', '/vehicle/drive_tuning': 'atd_auto_drive'}
+            if self.selection_topic not in allowed:
+                raise ValueError('参照ラインには Gazebo または車載の制御ノードのトピックを指定してください')
+            self.selection_source = allowed[self.selection_topic]
+            qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+            self.create_subscription(String, self.selection_topic, self.select_line, qos)
         self.create_timer(.1, self.watch, clock=self.get_clock() if sim_freshness else Clock(clock_type=ClockType.STEADY_TIME))
+
+    def select_line(self, message, info):
+        gid = bytes((info.get('publisher_gid') or {}).get('data', b''))
+        if not any(gid):
+            return
+        try:
+            data = json.loads(message.data)
+            name = selected_reference(data, self.identity, self.planners)
+        except ValueError as exc:
+            self.get_logger().warning(str(exc), throttle_duration_sec=5.)
+            return
+        self.pending_selection = (gid, name, data['stamp_ns'])
+        self.apply_selection()
+
+    def apply_selection(self):
+        gid, name, stamp = self.pending_selection
+        writers = self.get_publishers_info_by_topic(self.selection_topic)
+        # Discovery can supply a durable sample before the graph associates its writer with a ROS node.
+        if len(writers) != 1 or writers[0].node_name != self.selection_source or writers[0].node_namespace != '/':
+            return
+        self.pending_selection = None
+        if bytes(writers[0].endpoint_gid) != gid or stamp < self.switch_stamp:
+            return
+        if name != self.line:
+            self.line, self.planner = name, self.planners[name]
+            self.planner.reset()
+            self.switch_stamp = stamp
 
     def publish(self, data):
         msg = PlanningStatus()
@@ -73,6 +126,8 @@ class PlanningMonitor(Node):
         self.publish(invalid(reason))
 
     def watch(self):
+        if self.pending_selection:
+            self.apply_selection()
         if self.asset_issue:
             self.invalidate(self.asset_issue)
         elif self.count_publishers('/localization/status') > 1:
@@ -110,6 +165,8 @@ class PlanningMonitor(Node):
             return
         if source.state != 'tracking':
             return self.invalidate(f'{source.state}: {source.reason}')
+        if stamp_ns <= self.switch_stamp:
+            return
         if not self.fresh_stamp(stamp_ns) or self.arrival_time() - self.changed_at > MAX_AGE_S:
             # Past samples can arrive late or repeat during a Gazebo observation gap.
             # A malformed or future stamp is still reported as a planning failure.

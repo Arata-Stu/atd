@@ -88,6 +88,7 @@ def test_sparse_tf_planner_waits_through_temporal_gaps_and_forwards_failures():
     source.pose.orientation.w = 1.
     now = SimpleNamespace(nanoseconds=4_000_000_000)
     node = SimpleNamespace(allow_sparse_tf=True, asset_issue='', last_observation=None, changed_at=None,
+                           pending_selection=None, switch_stamp=-1,
                            identity=identity, count_publishers=lambda _: 1, arrival_time=lambda: now.nanoseconds * 1e-9,
                            get_clock=lambda: SimpleNamespace(now=lambda: now))
     node.fresh_stamp = lambda stamp: monitor.PlanningMonitor.fresh_stamp(node, stamp)
@@ -108,3 +109,59 @@ def test_sparse_tf_planner_waits_through_temporal_gaps_and_forwards_failures():
     source.state, source.reason = 'lost', 'VO lost'
     monitor.PlanningMonitor.observe(node, source)
     assert calls == ['plan', 'plan', 'lost: VO lost']
+
+
+def test_selected_line_waits_for_its_writer_and_a_fresh_pose(monkeypatch):
+    from rclpy.qos import DurabilityPolicy, QoSProfile
+    from std_msgs.msg import String
+
+    identity = dict(map_id='course', map_sha256='a' * 64, hdmap_sha256='b' * 64)
+    def lane(y):
+        return dict(points=[[0, y], [3, y]], profile=[[0, 0, y, 0, 0, .5, 0], [3, 3, y, 0, 0, .5, 0]])
+    doc = dict(frame='map', closed=False, lines=dict(centerline=lane(0.), raceline=lane(.15)))
+    monkeypatch.setattr(monitor, 'map_metadata', lambda *_: identity)
+    monkeypatch.setattr(monitor, 'verified_hdmap', lambda *_: json.dumps(doc).encode())
+    context = Context()
+    rclpy.init(context=context, domain_id=110 + os.getpid() % 45)
+    node = monitor.PlanningMonitor(context=context, parameter_overrides=[
+        Parameter('map_id', value='course'), Parameter('reference_line_topic', value='/vehicle/drive_tuning')])
+    driver = Node('atd_auto_drive', context=context)
+    executor = SingleThreadedExecutor(context=context)
+    for item in (driver, node):
+        executor.add_node(item)
+
+    def spin_until(predicate):
+        end = time.monotonic() + 5.
+        while time.monotonic() < end and not predicate():
+            executor.spin_once(timeout_sec=.02)
+        assert predicate()
+
+    try:
+        route = driver.create_publisher(String, '/vehicle/drive_tuning',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        poses = driver.create_publisher(LocalizationStatus, '/localization/status', 10)
+        received = []
+        driver.create_subscription(PlanningStatus, '/planning/status', received.append, 10)
+        spin_until(lambda: poses.get_subscription_count() and node.publisher.get_subscription_count())
+        source = LocalizationStatus(**identity, session_id='test', state='tracking', speed_mps=.2)
+        source.header.frame_id, source.pose.orientation.w = 'map', 1.
+        source.header.stamp = driver.get_clock().now().to_msg()
+        poses.publish(source)
+        spin_until(lambda: any(p.valid and p.line == 'raceline' for p in received))
+        old_pose = driver.get_clock().now()
+        route.publish(String(data=json.dumps(dict(identity, line='centerline', stamp_ns=old_pose.nanoseconds))))
+        spin_until(lambda: node.line == 'centerline')
+        source.header.stamp = old_pose.to_msg()
+        poses.publish(source)
+        spin_until(lambda: node.last_observation[-1] == old_pose.nanoseconds)
+        source.header.stamp = driver.get_clock().now().to_msg()
+        poses.publish(source)
+        spin_until(lambda: any(p.valid and p.line == 'centerline' for p in received))
+        new_plans = [p for p in received if p.valid and p.line == 'centerline']
+        assert all(p.header.stamp == source.header.stamp for p in new_plans)
+        assert new_plans[-1].trajectory[0].y == 0.
+    finally:
+        executor.shutdown()
+        driver.destroy_node()
+        node.destroy_node()
+        rclpy.shutdown(context=context)

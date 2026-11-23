@@ -7,7 +7,7 @@ import rclpy
 from atd_bringup.gazebo_closed_loop_paths import ClosedLoopPaths, lookahead_remaining_ns
 from atd_interfaces.msg import ControlStatus, LocalizationStatus
 from atd_localization.assets import map_metadata, verified_hdmap
-from atd_planning.core import ReferenceLine, yaw_from_quaternion
+from atd_planning.core import ReferenceLine, selected_reference, yaw_from_quaternion
 from geometry_msgs.msg import Point, PoseStamped
 from nav_msgs.msg import Path
 from rclpy.executors import ExternalShutdownException
@@ -108,22 +108,37 @@ class ClosedLoopViewer(Node):
             self.create_timer(.1, self.publish_live)
         if not rviz:
             return
-        document = json.loads(verified_hdmap(root, metadata))
-        line = ReferenceLine.from_document(document, selection)
+        self.document = json.loads(verified_hdmap(root, metadata))
+        self.identity = identity
         self.last_arrows = (None, None)
         qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
         self.reference = self.create_publisher(Path, '/atd/gazebo/reference_path', qos)
         self.gt = self.create_publisher(Path, '/atd/gazebo/ground_truth_path', qos)
         self.estimate = self.create_publisher(Path, '/atd/gazebo/estimated_path', qos)
         self.markers = self.create_publisher(MarkerArray, '/atd/gazebo/current_poses', qos)
-        self.selection = selection
+        self.selection = None
         self.pursuit_sample = self.drawn_pursuit = None
         self.lookahead = self.create_publisher(MarkerArray, '/atd/gazebo/lookahead_markers', 1)
         self.create_subscription(ControlStatus, '/atd/gazebo/pursuit_status', self.pursuit, 1)
+        self.show_reference(selection)
+        self.create_subscription(String, '/atd/gazebo/reference_line', self.receive_reference, qos)
+        self.create_timer(.2, self.publish)
+
+    def receive_reference(self, msg):
+        try:
+            name = selected_reference(json.loads(msg.data), self.identity, self.document['lines'])
+            if name != self.selection:
+                self.show_reference(name)
+                self.publish_lookahead()
+        except ValueError as exc:
+            self.get_logger().warning(str(exc), throttle_duration_sec=5.)
+
+    def show_reference(self, name):
+        line = ReferenceLine.from_document(self.document, name)
         points, _ = line.preview(0., line.length)
         self.reference.publish(Path(header=Header(frame_id='map'), poses=[
             map_pose(0, (x, y, 0.), (0., 0., 0., 1.)) for x, y in points]))
-        self.create_timer(.2, self.publish)
+        self.selection = name
 
     def world_pose(self, msg):
         try:

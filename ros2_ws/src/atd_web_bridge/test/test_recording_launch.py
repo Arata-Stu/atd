@@ -33,6 +33,7 @@ def input_launch():
         'launch.substitutions': module('launch.substitutions', LaunchConfiguration=Action),
         'launch_ros': module('launch_ros'),
         'launch_ros.actions': module('launch_ros.actions', Node=Action),
+        'launch_ros.parameter_descriptions': module('launch_ros.parameter_descriptions', ParameterValue=Action),
     }
     path = Path(__file__).resolve().parents[1] / 'launch/input.launch.py'
     with patch.dict(sys.modules, modules):
@@ -69,6 +70,9 @@ class RecordingLaunchTests(unittest.TestCase):
             self.assertEqual(dict(joy.launch_arguments)['config'].args[0], 'joy_config')
             bridge = next(item for item in actions if getattr(item, 'package', None) == 'atd_web_bridge')
             self.assertEqual(bridge.parameters[0].args[0], 'config')
+            self.assertEqual(bridge.parameters[1]['drive_tuning'].value_type, bool)
+            self.assertEqual(next(x.default_value for x in actions if getattr(x, 'args', ()) == ('drive_tuning',)),
+                             'false')
 
 
 if __name__ == '__main__':

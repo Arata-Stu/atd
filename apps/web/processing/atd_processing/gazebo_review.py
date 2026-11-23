@@ -149,6 +149,7 @@ def motion_sample(row, truth):
                 speed_mps=number(row.get('speed_mps')), steering_rad=number(row.get('steering_rad')),
                 requested_steering_rad=number(row.get('requested_steering_rad')), clearance_m=None,
                 tracking_lateral_error_m=number(control.get('lateral_error_m')) if control_image else None,
+                control_line=control.get('line') if control_image and control.get('line') in ('centerline', 'raceline', 'custom') else None,
                 control_image_s=control_image/1e9 if control_image else None,
                 image_to_control_ms=delay_ms(control_image, publish), command_age_ms=delay_ms(image, ns),
                 image_to_apply_ms=delay_ms(image, applied) if applied is not None and applied <= ns else None)

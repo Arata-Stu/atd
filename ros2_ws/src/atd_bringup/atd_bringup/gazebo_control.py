@@ -8,14 +8,14 @@ from atd_control.bicycle import FULL_SPEED_MPS, STEERING_LIMIT, WHEELBASE_M, res
 from atd_control.simulation import FORWARD_SPAN_RAW, NEUTRAL_RAW, simulation_feedforward
 from atd_control.core import LookaheadConfig, STANDSTILL_MPS, forward_control_speed, pure_pursuit
 from atd_control.speed import FeedforwardTable, PIDConfig, SpeedController
-from atd_planning.core import DEFAULT_HORIZON_M, yaw_from_quaternion
+from atd_planning.core import DEFAULT_HORIZON_M, LINE_KEYS, yaw_from_quaternion
 
 
 # The Gazebo plant consumes the image timestamp and independently expires it after 0.30 sim s.
 COMMAND_TTL_NS = 250_000_000
 # Covers valid 90 Hz observations even if the other stream or /clock arrives later.
 MAX_PENDING_FRAMES = 32
-TUNABLE_PARAMETERS = ('max_speed_mps', *asdict(LookaheadConfig()),
+TUNABLE_PARAMETERS = ('line', 'max_speed_mps', *asdict(LookaheadConfig()),
                       *('speed_' + key for key in asdict(PIDConfig())))
 
 
@@ -51,9 +51,14 @@ def tracking_id(msg):
 class GazeboController:
     """1つの計画と同一観測の自己位置から1回だけ PID を進める。全時刻は /clock。"""
     def __init__(self, route, line, max_speed, table, *, full_throttle_speed_mps=FULL_SPEED_MPS,
-                 lookahead=None, pid=PIDConfig()):
+                 lookahead=None, pid=PIDConfig(), available_lines=None):
         validate_speed_cap(max_speed, full_throttle_speed_mps, table)
         self.route, self.line, self.max_speed = route, line, max_speed
+        self.available_lines = tuple(available_lines) if available_lines is not None else (line,)
+        if line not in self.available_lines or any(name not in LINE_KEYS for name in self.available_lines):
+            raise ValueError('起動ラインと選択可能な保存ラインを確認してください')
+        self.switch_stamp = None
+        self.switch_pending = False
         self.lookahead = lookahead or LookaheadConfig(min_lookahead_m=default_min_lookahead(line))
         self.launch_speed_cap = max_speed
         self.full_throttle_speed = full_throttle_speed_mps
@@ -70,6 +75,9 @@ class GazeboController:
         """候補をまとめて検査し、走行中の状態は採用されるまで変更しない。"""
         if updates.keys() - set(TUNABLE_PARAMETERS):
             raise ValueError('Gazebo の走行中に変更できない設定です')
+        line = updates.get('line', self.line)
+        if line not in self.available_lines:
+            raise ValueError(f'地図と速度 FF 表に適合するラインを選んでください（{", ".join(self.available_lines)}）')
         speed = updates.get('max_speed_mps', self.max_speed)
         validate_speed_cap(speed, self.full_throttle_speed, self.pid.table)
         if speed > self.launch_speed_cap:
@@ -78,15 +86,21 @@ class GazeboController:
         if lookahead.max_lookahead_m > self.horizon:
             raise ValueError(f'最大先読みは計画の前方軌道長 {self.horizon:g} m 以内です')
         pid = PIDConfig(**{k: updates.get('speed_' + k, v) for k, v in asdict(self.pid.config).items()})
-        return speed, lookahead, pid
+        return line, speed, lookahead, pid
 
-    def apply_tuning(self, updates):
-        speed, lookahead, pid = self.tuning(updates)
-        if (speed, lookahead, pid) == (self.max_speed, self.lookahead, self.pid.config):
+    def apply_tuning(self, updates, now=None):
+        line, speed, lookahead, pid = self.tuning(updates)
+        if (line, speed, lookahead, pid) == (self.line, self.max_speed, self.lookahead, self.pid.config):
             return False
-        if speed != self.max_speed or pid != self.pid.config:
+        if line != self.line:
+            self.switch_stamp = self.clock_ns if now is None else now
+            self.switch_pending = True
+            self.locations.clear()
+            self.plans.clear()
+            self.wait_for_observation(f'{line} に切替中です。新しい自己位置と計画を待っています')
+        if line != self.line or speed != self.max_speed or pid != self.pid.config:
             self.pid = SpeedController(self.pid.table, pid)
-        self.max_speed, self.lookahead = speed, lookahead
+        self.line, self.max_speed, self.lookahead = line, speed, lookahead
         return True
 
     def inhibit(self, reason):
@@ -101,7 +115,7 @@ class GazeboController:
         self.pid.reset()
 
     def wait_for_observation(self, reason):
-        if self.state == 'driving':
+        if self.state in ('driving', 'waiting_observation'):
             self.state, self.reason = 'waiting_observation', reason
             self.observation = None
             self.pursuit_sample = None
@@ -126,6 +140,12 @@ class GazeboController:
             return None
         is_pose = kind == 'localization'
         identity = tracking_id(msg)
+        stamp = timestamp(msg)
+        if (not is_pose and self.switch_stamp is not None and msg.header.frame_id == 'map'
+                and identity[:3] == self.route and msg.line in self.available_lines
+                and (0 < stamp <= self.switch_stamp or self.switch_pending and msg.line != self.line)):
+            # In-flight plans from the previous line can arrive until the planner receives the selection.
+            return None
         if (msg.header.frame_id != 'map' or identity[:3] != self.route or not msg.session_id
                 or not is_pose and msg.line != self.line):
             self.inhibit('自己位置・計画の地図、走行ラインまたは座標系が不一致です')
@@ -143,9 +163,10 @@ class GazeboController:
             if self.state == 'stopped':
                 return None
         self.session = identity
-        stamp = timestamp(msg)
         if stamp <= 0 or stamp > now + 50_000_000:
             self.inhibit('元観測のシミュレーション時刻が有効期間外です')
+            return None
+        if self.switch_stamp is not None and stamp <= self.switch_stamp:
             return None
         if stamp <= self.stamp or now - stamp >= COMMAND_TTL_NS:
             return None
@@ -203,6 +224,7 @@ class GazeboController:
             self.inhibit(str(exc))
             return None
         self.stamp, self.expires = stamp, expiry
+        self.switch_pending = False
         self.locations = {t: value for t, value in self.locations.items() if t > stamp}
         self.plans = {t: value for t, value in self.plans.items() if t > stamp}
         self.observation = dict(image_stamp_ns=stamp, x_m=p.x, y_m=p.y, yaw_rad=yaw,

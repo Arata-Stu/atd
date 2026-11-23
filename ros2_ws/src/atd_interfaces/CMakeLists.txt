@@ -14,6 +14,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PlanningStatus.msg"
   "msg/ControlStatus.msg"
   "msg/SpeedControlStatus.msg"
+  "msg/TunedControlStatus.msg"
+  "msg/TunedSpeedControlStatus.msg"
   "srv/SetSpeedTable.srv"
   DEPENDENCIES std_msgs geometry_msgs)
 ament_export_dependencies(rosidl_default_runtime)

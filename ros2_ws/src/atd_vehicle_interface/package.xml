@@ -13,6 +13,7 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>atd_esc_trials</exec_depend><exec_depend>rclpy</exec_depend>
   <exec_depend>atd_control</exec_depend><exec_depend>python3-yaml</exec_depend>
+  <exec_depend>atd_localization</exec_depend><exec_depend>atd_planning</exec_depend>
   <test_depend>python3</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>sensor_msgs</test_depend>

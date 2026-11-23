@@ -119,6 +119,17 @@
 .live-overview .live-toolbar h2 { font-size: 19px; margin: 0; }
 .live-overview .live-toolbar .button-row { flex-direction: row; align-items: center; flex-wrap: wrap; }
 .live-toolbar label { white-space: nowrap; }
+.drive-tuning .tuning-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.drive-tuning .tuning-fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.drive-tuning .field { margin: 0; }
+.drive-tuning .tuning-fields small { font-size: 11px; color: var(--muted); }
+.drive-tuning fieldset { margin: 18px 0 0; padding: 10px 0 0; border: 0; border-top: 1px solid var(--line); }
+.drive-tuning legend { padding: 0 7px 0 0; font-size: 12px; font-weight: 600; }
+.drive-tuning .tuning-table { margin: 0 0 8px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.drive-tuning .modal-actions { justify-content: space-between; gap: 8px; }
+@media (max-width: 500px) {
+  .drive-tuning .tuning-fields.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .live-page.live-overview { display: flex; flex-direction: column; gap: 8px; padding: 12px 18px 58px; }
 .live-page.live-overview > .auto-drive-panel { margin: 0; }
 .live-overview > .inline-note, .live-overview .auto-notice { margin: 0; padding-block: 6px; }

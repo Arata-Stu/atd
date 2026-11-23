@@ -90,10 +90,12 @@ class CompositionTests(unittest.TestCase):
                                  ('true', 'true', 'odaiba'))
                 self.assertEqual(params['allow_sparse_tf'], 'true')
             self.assertEqual(dict(loc.actions[0].launch_arguments)['visualize_landmarks'], 'false')
+            self.assertEqual(dict(plan.actions[0].launch_arguments)['reference_line_topic'], '/atd/gazebo/reference_line')
             self.assertEqual((node.package, node.executable), ('atd_bringup', 'gazebo_control'))
             self.assertTrue(node.parameters[0]['use_sim_time'])
             self.assertEqual(node.parameters[0]['map_sha256'].args[0], metadata['map_sha256'])
             self.assertEqual(node.parameters[0]['min_lookahead_m'], .65)
+            self.assertEqual(node.parameters[0]['available_lines'], ['raceline', 'centerline'])
             *_, headless, bridge = module['setup'](dict(context, web='true'))
             self.assertFalse(headless.parameters[0]['rviz'])
             self.assertEqual(bridge.parameters[0]['control_topic'], '/atd/gazebo/pursuit_status')
@@ -346,11 +348,17 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(params['serial'].args[0].name, 'pico_serial')
         self.assertEqual(params['map_id'].args[0].name, 'map_id')
         self.assertEqual(params['line'].args[0].name, 'line')
+        self.assertTrue(params['drive_tuning'])
+        self.assertEqual(params['results_root'].args[0].name, 'results_root')
         groups = [e.actions[0] for e in entities if hasattr(e, 'actions')]
         included = {e.args[0].args[0]: dict(e.launch_arguments) for e in groups}
         self.assertIn('/share/atd_sensors/launch/d455.launch.py', included)
         self.assertIn('/share/atd_localization/launch/localization.launch.py', included)
         controller = included['/share/atd_control/launch/control.launch.py']
+        self.assertEqual(included['/share/atd_web_bridge/launch/input.launch.py']['drive_tuning'], 'true')
+        self.assertEqual(controller['drive_tuning'], 'true')
+        for key in ('min_lookahead_m', 'lookahead_time_s', 'max_lookahead_m', 'speed_kp', 'speed_ki', 'speed_kd'):
+            self.assertIs(controller[key], params[key].args[0])
         self.assertIs(controller['max_target_speed_mps'], params['max_speed_mps'].args[0])
         self.assertIs(controller['feedforward_path'], params['feedforward_path'].args[0])
         # Explicit map_id/line on the CLI bypasses the chooser. Validate the saved line before the writer starts.
@@ -363,6 +371,7 @@ class CompositionTests(unittest.TestCase):
                 patch('atd_localization.assets.verified_hdmap', return_value=doc):
             group, = planning(context)
             self.assertEqual(dict(group.actions[0].launch_arguments)['line'].perform(context), 'custom')
+            self.assertEqual(dict(group.actions[0].launch_arguments)['reference_line_topic'], '/vehicle/drive_tuning')
             meta.assert_called_once_with('/data/results', 'course_a')
             with self.assertRaisesRegex(ValueError, 'raceline'):
                 planning({**context, 'line': 'raceline'})

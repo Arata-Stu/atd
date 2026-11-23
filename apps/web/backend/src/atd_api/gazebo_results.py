@@ -138,14 +138,11 @@ def raceline_speeds(doc, saved, point_count):
     return speeds
 
 
-def reference(store, folder, run, identity, comparison, warnings):
+def references(store, folder, run, identity, selections, comparison, warnings):
     if comparison.anchor is None:
-        return [], [], 'missing'
+        return {}, 'missing'
     try:
         map_id = identifier(run['map_id'])
-        line = run['line']
-        if line not in LINES:
-            raise ValueError('走行時に選択したラインが不明です')
         expected = identity.get('hdmap_sha256')
         snapshot = artifact(folder, 'hdmap.json')
         if snapshot.is_file():
@@ -166,16 +163,24 @@ def reference(store, folder, run, identity, comparison, warnings):
         doc = json.loads(raw)
         if not isinstance(doc, dict) or doc.get('id') != map_id or doc.get('frame') != 'map' or doc.get('closed') is not True:
             raise ValueError('地図 ID・座標系・閉路の指定が一致しません')
-        lines = doc.get('lines')
-        saved = lines.get(line) if isinstance(lines, dict) else None
-        if not isinstance(saved, dict):
-            raise ValueError(f'{map_id} に {line} の点列がありません')
-        coords = points(saved.get('points'), minimum=3)
-        speeds = raceline_speeds(doc, saved, len(coords)) if line == 'raceline' else []
-        return [comparison.to_world(*p) for p in coords], speeds, source
+        saved_lines = doc.get('lines')
+        if not isinstance(saved_lines, dict):
+            raise ValueError(f'{map_id} に走行ラインがありません')
     except (ValueError, OSError) as error:
         warnings.append(f'選択ラインを表示できません。{error}')
-        return [], [], 'missing'
+        return {}, 'missing'
+    output = {}
+    for name in selections:
+        try:
+            saved = saved_lines.get(name)
+            if not isinstance(saved, dict):
+                raise ValueError(f'{map_id} に {name} の点列がありません')
+            coords = points(saved.get('points'), minimum=3)
+            output[name] = dict(points=[comparison.to_world(*p) for p in coords],
+                                speeds_mps=raceline_speeds(doc, saved, len(coords)) if name == 'raceline' else [])
+        except ValueError as error:
+            warnings.append(f'{name} を表示できません。{error}')
+    return output, source if output else 'missing'
 
 
 def review(store, circuit, key):
@@ -221,7 +226,22 @@ def review(store, circuit, key):
             warnings.append('独立した自己位置ログに対応点がないため、保存された制御状態に含まれる画像時刻の推定姿勢を使っています。')
     if comparison.anchor is None:
         warnings.append('同じシミュレーション時刻で GT と対応する推定姿勢がなく、位置合わせできません。')
-    ref, speeds, source = reference(store, folder, run, identity, comparison, warnings)
+    changes = []
+    active = run['line']
+    last_stamp = -1
+    for entry in rows(folder, 'closed_loop.lines.jsonl', warnings):
+        ns, name = entry.get('stamp_ns'), entry.get('line')
+        if type(ns) is not int or not 0 <= ns < 2**31 * 10**9 or ns < last_stamp or name not in LINES:
+            raise ValueError('参照ライン変更履歴の時刻またはライン名が不正です')
+        last_stamp = ns
+        if name != active:
+            changes.append(dict(t=ns/1e9, line=name))
+            active = name
+    names = {item['line'] for item in changes}
+    if run['line'] in LINES:
+        names.add(run['line'])
+    lines, source = references(store, folder, run, identity, sorted(names), comparison, warnings)
+    initial = lines.pop(run['line'], {})
     timing = DisplaySeries(contact)
     last_t = None
     for row in rows(folder, 'closed_loop.vslam.jsonl', warnings):
@@ -234,8 +254,9 @@ def review(store, circuit, key):
     if max(motion.stride, comparison.series.stride, timing.stride) > 1:
         warnings.append('長い記録は全体表示を間引いています。接触判定の前後10秒は記録の各時刻を保持しています。')
     return dict(run=run, samples=samples, estimates=comparison.series.result(), vslam=timing.result(),
-                contact_s=contact, anchor_s=comparison.anchor_s, reference=ref,
-                reference_speeds_mps=speeds, reference_source=source,
+                contact_s=contact, anchor_s=comparison.anchor_s, reference=initial.get('points', []),
+                reference_speeds_mps=initial.get('speeds_mps', []), reference_source=source,
+                line_changes=changes, additional_references=lines,
                 warnings=warnings, boundaries=road.boundaries if road else dict(left=[], right=[]),
                 footprint=road.footprint if road else None)
 

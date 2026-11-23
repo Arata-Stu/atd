@@ -16,13 +16,12 @@ function format(value:number|null, digits:number, unit:string) {
   return value === null ? '—' : value.toFixed(digits) + ' ' + unit;
 }
 
-export function ClosedLoopMap({run,span,focus,showLine,lineScale,at,select}: {
-  run:ClosedLoopDetail; span:Span; focus:boolean; showLine:boolean; lineScale:SpeedScale | null;
+export function ClosedLoopMap({run,span,focus,line,speeds,lineScale,at,select}: {
+  run:ClosedLoopDetail; span:Span; focus:boolean; line:XY[]; speeds?:number[]; lineScale:SpeedScale | null;
   at:number; select:(t:number)=>void;
 }) {
   const picture = useMemo(() => {
     const gt = windowRows(run.samples,span), est = windowRows(run.estimates,span);
-    const line = showLine ? run.reference : [];
     let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
     const include = (x:number, y:number) => {
       xmin = Math.min(xmin,x); xmax = Math.max(xmax,x); ymin = Math.min(ymin,y); ymax = Math.max(ymax,y);
@@ -44,7 +43,7 @@ export function ClosedLoopMap({run,span,focus,showLine,lineScale,at,select}: {
     return {x,y,scale,bar:10 ** Math.floor(Math.log10(80/scale)), gt,est, gtPath:trace(gt), estPath:trace(est),
       line:course(line), linePoints:line.map(([a,b]):XY=>[x(a),y(b)]),
       walls:[course(run.boundaries.left),course(run.boundaries.right)]};
-  },[run,span,focus,showLine]);
+  },[run,span,focus,line]);
 
   if (!picture) return <p className="cl-missing">この範囲に描画できる座標がありません。</p>;
   const {x,y,scale} = picture, gt = poseAt(run.samples,at), est = poseAt(run.estimates,at);
@@ -67,8 +66,8 @@ export function ClosedLoopMap({run,span,focus,showLine,lineScale,at,select}: {
     <defs><pattern id="cl-map-grid" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".8" fill="#c6d2c9"/></pattern></defs>
     <rect width="500" height="350" fill="url(#cl-map-grid)"/>
     {picture.walls.map((d,i)=><path key={i} d={d} fill="none" stroke="#8b9990" strokeWidth="1.4"/>)}
-    {lineScale && run.reference_speeds_mps
-      ? <RacelineSpeedPath points={picture.linePoints} speeds={run.reference_speeds_mps} scale={lineScale} width={5.5}/>
+    {lineScale && speeds
+      ? <RacelineSpeedPath points={picture.linePoints} speeds={speeds} scale={lineScale} width={5.5}/>
       : <path d={picture.line} fill="none" stroke={reference} strokeWidth="2.3" strokeDasharray="2 4" strokeLinecap="round"/>}
     <path d={picture.gtPath} fill="none" stroke={truth} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>
     <path d={picture.estPath} fill="none" stroke={estimate} strokeWidth="2.2" strokeDasharray="7 3" strokeLinecap="round"/>

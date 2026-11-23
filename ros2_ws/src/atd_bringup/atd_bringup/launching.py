@@ -80,8 +80,10 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
         ]
     if manual:
         # input.launch.py already owns the only web_bridge instance.
-        actions.append(include('atd_web_bridge', 'input.launch.py',
-                               {key: arguments[key] for key in INPUT_ARGUMENTS}))
+        inputs = {key: arguments[key] for key in INPUT_ARGUMENTS}
+        if autonomous:
+            inputs['drive_tuning'] = 'true'
+        actions.append(include('atd_web_bridge', 'input.launch.py', inputs))
     if manual and not autonomous:
         actions.append(Node(package='atd_vehicle_interface', executable='joy_drive', name='atd_joy_drive',
                             output='screen', condition=IfCondition(AndSubstitution(arguments['teleop'], arguments['joy_drive'])),
@@ -100,21 +102,26 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
                 ReferenceLine.from_document(json.loads(verified_hdmap(root, metadata)), arguments['line'].perform(context))
             config = LookaheadConfig(**{key: float(arguments[key].perform(context)) for key in tuning})
             horizon = max(DEFAULT_HORIZON_M, config.max_lookahead_m)
-            return [include('atd_planning', 'planning.launch.py', {
-                **{key: arguments[key] for key in ('map_id', 'results_root', 'line')},
-                'horizon_m': str(horizon)})]
+            params = {key: arguments[key] for key in ('map_id', 'results_root', 'line')}
+            params['horizon_m'] = str(horizon)
+            if autonomous:
+                params['reference_line_topic'] = '/vehicle/drive_tuning'
+            return [include('atd_planning', 'planning.launch.py', params)]
 
         actions.append(OpaqueFunction(function=planning))
         control = {'profile': arguments['vehicle_profile'], **{key: arguments[key] for key in (*tuning, *speed_arguments)}}
         if autonomous:
             control['max_target_speed_mps'] = arguments['max_speed_mps']
+            control['drive_tuning'] = 'true'
         actions.append(include('atd_control', 'control.launch.py', control))
     if autonomous:
         auto_params = {key: ParameterValue(arguments[key], value_type=str)
-                       for key in ('map_id', 'line', 'auto_calibration_path', 'feedforward_path')}
+                       for key in ('map_id', 'results_root', 'line', 'auto_calibration_path', 'feedforward_path')}
         auto_params.update(port=ParameterValue(arguments['auto_drive_port'], value_type=str),
                            serial=ParameterValue(arguments['pico_serial'], value_type=str),
-                           max_speed_mps=ParameterValue(arguments['max_speed_mps'], value_type=float))
+                           drive_tuning=True)
+        for key in ('max_speed_mps', *tuning, 'speed_kp', 'speed_ki', 'speed_kd'):
+            auto_params[key] = ParameterValue(arguments[key], value_type=float)
         actions.append(Node(package='atd_vehicle_interface', executable='auto_drive', name='atd_auto_drive',
                             output='screen', parameters=[auto_params],
                             on_exit=[Shutdown(reason='自動走行の Pico 出力ノードが終了しました')]))

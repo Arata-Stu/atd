@@ -5,7 +5,7 @@ from functools import partial
 import json
 
 import rclpy
-from rcl_interfaces.msg import SetParametersResult
+from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor, SetParametersResult
 from atd_interfaces.msg import ControlStatus, LocalizationStatus, PlanningStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
@@ -25,18 +25,28 @@ class GazeboControlNode(Node):
         if not self.get_parameter('use_sim_time').value:
             raise ValueError('Gazebo の /clock が必要です')
         route = tuple(self.declare_parameter(k, '').value for k in ('map_id', 'map_sha256', 'hdmap_sha256'))
-        line = self.declare_parameter('line', 'raceline').value
+        line = self.declare_parameter('line', 'raceline', ParameterDescriptor(description='保存地図の参照ライン')).value
+        lines = self.declare_parameter('available_lines', [line], ParameterDescriptor(
+            read_only=True, description='地図と速度 FF 表で使用できるライン')).value
         speed = self.declare_parameter('max_speed_mps', 1.5).value
         full_speed = self.declare_parameter('full_throttle_speed_mps', resolve_full_throttle_speed(speed)).value
         table = simulation_table(self.declare_parameter('feedforward_path', '').value, full_speed)
+        self.declare_parameter('launch_speed_cap_mps', speed, ParameterDescriptor(
+            read_only=True, description='起動時に指定した速度上限 [m/s]'), ignore_override=True)
+        limits = self.describe_parameter('max_speed_mps')
+        limits.description = '目標速度の上限 [m/s]'
+        limits.floating_point_range = [FloatingPointRange(from_value=max(.2, table.speeds[0]), to_value=speed)]
+        self.set_descriptor('max_speed_mps', limits)
         defaults = LookaheadConfig(min_lookahead_m=default_min_lookahead(line))
         lookahead = {k: self.declare_parameter(k, v).value for k, v in asdict(defaults).items()}
         pid = {k: self.declare_parameter('speed_' + k, v).value for k, v in asdict(PIDConfig()).items()}
         self.controller = GazeboController(route, line, speed, table, full_throttle_speed_mps=full_speed,
-                                          lookahead=LookaheadConfig(**lookahead), pid=PIDConfig(**pid))
+                                          lookahead=LookaheadConfig(**lookahead), pid=PIDConfig(**pid), available_lines=lines)
         self.actuators = self.create_publisher(JointState, '/atd/gazebo/actuators', 1)
         status_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.status = self.create_publisher(String, '/atd/gazebo/control_state', status_qos)
+        self.selection = self.create_publisher(String, '/atd/gazebo/reference_line', status_qos)
+        self.publish_selection(self.get_clock().now().nanoseconds)
         self.pursuit = self.create_publisher(ControlStatus, '/atd/gazebo/pursuit_status', 1)
         self.last_status = None
         self.last_report_ns = 0
@@ -57,9 +67,21 @@ class GazeboControlNode(Node):
 
     def apply_tuning(self, params):
         updates = {p.name: p.value for p in params}
-        if self.controller.apply_tuning(updates):
-            self.get_logger().info(f'Gazebo 制御設定を適用 sim_time_ns={self.get_clock().now().nanoseconds} '
+        now = self.get_clock().now().nanoseconds
+        previous_line = self.controller.line
+        if self.controller.apply_tuning(updates, now):
+            if self.controller.line != previous_line:
+                self.publish_selection(now)
+                self.last_status = None
+                self.publish(now, None)
+            self.get_logger().info(f'Gazebo 制御設定を適用 sim_time_ns={now} '
                                    f'{json.dumps(updates, sort_keys=True)}')
+
+    def publish_selection(self, now):
+        map_id, map_hash, hdmap_hash = self.controller.route
+        selected = dict(map_id=map_id, map_sha256=map_hash, hdmap_sha256=hdmap_hash,
+                        line=self.controller.line, stamp_ns=now)
+        self.selection.publish(String(data=json.dumps(selected)))
 
     def check_sources(self):
         return self.controller.check_sources(*(sub.get_publisher_count() for sub in self.observers))

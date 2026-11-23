@@ -4,7 +4,7 @@ import math
 import time
 
 import rclpy
-from atd_interfaces.msg import ControlStatus, PlanningStatus
+from atd_interfaces.msg import ControlStatus, PlanningStatus, TunedControlStatus
 from atd_planning.core import LINE_KEYS, MAX_AGE_S, yaw_from_quaternion
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.clock import Clock, ClockType
@@ -12,6 +12,7 @@ from rclpy.node import Node
 
 from .core import CONTROLLER, LookaheadConfig, pure_pursuit, unavailable
 from .speed import limited_target
+from .tuned_output import TunedOutput
 from .vehicle import load_measured_wheelbase
 
 
@@ -62,11 +63,23 @@ class ControlMonitor(Node):
         self.last_stamp_ns = None
         self.changed_at = None
         self.publisher = self.create_publisher(ControlStatus, '/control/status', 10)
+        self.tuned = None
+        if self.declare_parameter('drive_tuning', False, descriptor).value:
+            if not self.low_speed_drive:
+                raise ValueError('走行設定の反映には正の低速走行上限が必要です')
+            self.tuned = TunedOutput(self, TunedControlStatus, '/control/tuned_steering', self.apply_tuning)
         self.subscription = self.create_subscription(PlanningStatus, '/planning/status', self.observe, 10)
         self.create_timer(.1, self.watch, clock=Clock(clock_type=ClockType.STEADY_TIME))
 
+    def apply_tuning(self, config):
+        self.config = config.lookahead
+        self.source = self.last_identity = self.last_stamp_ns = self.changed_at = None
+
     def publish(self, data):
-        self.publisher.publish(pursuit_status(self.source, data, self.config, self.wheelbase))
+        status = pursuit_status(self.source, data, self.config, self.wheelbase)
+        self.publisher.publish(status)
+        if self.tuned:
+            self.tuned.publish(status)
 
     def issue(self):
         source = self.source
@@ -93,11 +106,15 @@ class ControlMonitor(Node):
         return None
 
     def watch(self):
+        if self.tuned:
+            self.tuned.resolve()
         issue = self.issue()
         if issue:
             self.publish(unavailable(issue))
 
     def observe(self, source):
+        if self.tuned and not self.tuned.matches(source):
+            return
         self.source = source
         identity = tuple(getattr(source, field) for field in IDENTITY_FIELDS)
         if identity != self.last_identity:

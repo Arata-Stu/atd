@@ -117,6 +117,39 @@ def test_clock_trailing_frame_buffers_and_never_drives_on_misaligned_stamps():
     assert c.observe('localization', newer, START + 1) is None
 
 
+def test_atomic_line_handover_requires_a_new_pose_and_matching_plan():
+    c = GazeboController(ROUTE, 'raceline', 1.5, simulation_table(), available_lines=('raceline', 'centerline'))
+    assert run(c, y=.1) is not None
+    loc, old = inputs(START + 1, speed=.5)
+    c.observe('localization', loc, START + 1)
+    for rejected in (dict(line='custom', max_speed_mps=.8), dict(line='centerline', max_lookahead_m=20)):
+        with pytest.raises(ValueError):
+            c.apply_tuning(rejected)
+        assert c.line == 'raceline' and c.max_speed == 1.5 and c.state == 'driving'
+    c.apply_tuning(dict(line='centerline', max_speed_mps=.8, min_lookahead_m=.9), START + 1)
+    assert c.state == 'waiting_observation' and not c.plans and not c.locations and c.pursuit_sample is None
+    assert c.observe('planning', old, START + 1) is None
+    old.line = 'centerline'
+    assert c.observe('planning', old, START + 1) is None
+    assert c.observe('localization', loc, START + 1) is None
+    now = START + 33_333_333
+    loc, plan = inputs(now, y=.1, speed=.5)
+    assert c.observe('localization', loc, now) is None
+    assert c.observe('planning', plan, now) is None  # in flight from old planner
+    assert c.state == 'waiting_observation'
+    plan.line = 'centerline'
+    assert c.observe('planning', plan, now)[0] == now
+    assert c.state == 'driving' and c.pursuit_sample[0].line == 'centerline'
+    assert c.observation['target_speed_mps'] == .8 and c.pid.last['i_raw'] == 0.
+    assert c.pursuit_sample[2]['actual_lookahead_m'] == pytest.approx(.9 + .5 * c.lookahead.lookahead_time_s)
+    c.apply_tuning(dict(line='raceline'), now)
+    loc, _ = inputs(now + 1)
+    loc.state = 'lost'
+    c.observe('localization', loc, now + 1)
+    c.apply_tuning(dict(line='centerline'), now + 2)
+    assert c.state == 'stopped' and c.ready(now + 3) is None
+
+
 def test_delayed_plan_can_match_a_valid_90hz_pose():
     c = gate()
     for frame in range(21):

@@ -1,6 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { around, chartsFor, controlObservations, timeBounds, valueAt, windowRows } from '../src/closed_loop.ts';
+import { around, chartsFor, controlLineAt, controlObservations, referenceAt, timeBounds, valueAt, windowRows } from '../src/closed_loop.ts';
+
+test('選択時刻の参照ラインを保存した地図から描き、直前の操舵に使ったラインと区別する',()=>{
+  const data = {run:{line:'raceline'},reference:[[0,0],[1,0]],reference_speeds_mps:[1,1]};
+  assert.equal(referenceAt(data,9).name,'raceline');
+  data.line_changes = [{t:1,line:'custom'},{t:2,line:'centerline'},{t:2,line:'raceline'}];
+  data.additional_references = {custom:{points:[[0,1],[1,1]],speeds_mps:[]}};
+  assert.deepEqual(referenceAt(data,.99).points,data.reference);
+  assert.deepEqual(referenceAt(data,1).points,data.additional_references.custom.points);
+  assert.deepEqual(referenceAt(data,2).points,data.reference);
+  const samples = [{t:.99,control_image_s:.98,control_line:'raceline'},
+    {t:1.1,control_image_s:1.09,control_line:'custom'}];
+  assert.equal(controlLineAt(samples,1),'raceline');
+  assert.equal(controlLineAt(samples,1.1),'custom');
+  assert.equal(controlLineAt(samples,2),null);
+  assert.notEqual(controlObservations(samples)[0].segment,controlObservations(samples)[1].segment);
+});
 
 test('短い区間を補間し、終了後・欠測・追跡区間の切り替わり・方位角の折返しを結ばない',()=>{
   const rows = [{t:10, v:1, segment:1},{t:10.125,v:3,segment:1},{t:10.25,v:4,segment:2},

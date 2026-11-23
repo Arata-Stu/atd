@@ -8,6 +8,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def include(path, arguments, condition=None):
@@ -41,6 +42,7 @@ def generate_launch_description():
         DeclareLaunchArgument('recording', default_value='true', choices=['true', 'false']),
         DeclareLaunchArgument('recording_profile', default_value='inputs', choices=['mapping', 'calibration', 'inputs']),
         DeclareLaunchArgument('recording_config', default_value=''),
+        DeclareLaunchArgument('drive_tuning', default_value='false', choices=['true', 'false']),
         include(joy / 'launch/joy.launch.py',
                 {'profile': LaunchConfiguration('profile'), 'config': LaunchConfiguration('joy_config')}),
         include(teleop / 'launch/teleop.launch.py',
@@ -59,5 +61,6 @@ def generate_launch_description():
              parameters=[LaunchConfiguration('config'), {'profile_path': LaunchConfiguration('profile'),
                           'teleop_profile_path': LaunchConfiguration('teleop_profile'),
                           'rc_profile_path': LaunchConfiguration('rc_profile'),
-                          'vehicle_profile_path': LaunchConfiguration('vehicle_profile')}]),
+                          'vehicle_profile_path': LaunchConfiguration('vehicle_profile'),
+                          'drive_tuning': ParameterValue(LaunchConfiguration('drive_tuning'), value_type=bool)}]),
     ])

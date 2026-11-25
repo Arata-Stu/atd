@@ -1,6 +1,6 @@
 # ORB-SLAM3 のステレオ地図と初期自己位置推定
 
-実験ブランチは `codex/orbslam3-localization`。既定の `atd replay` は cuVSLAM を使う。ORB-SLAM3 を選ぶと、D455 または Gazebo の左右の rectified IR・CameraInfo と `/tf_static` からステレオ追跡できる。地図作成は Notebook、実車の初期定位・追跡は Jetson で実行する。
+実験ブランチは `experiment/orbslam3-localization`。既定の `atd replay` は cuVSLAM を使う。ORB-SLAM3 を選ぶと、D455 または Gazebo の左右の rectified IR・CameraInfo と `/tf_static` からステレオ追跡できる。地図作成は Notebook、実車の初期定位・追跡は Jetson で実行する。
 
 ## Linux Notebook・Jetson の準備
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # イメージに固定する入力と、起動済みコンテナの検査に使う入力を分ける。
-atd_image_revision() { _atd_revision "$1" image; }
+atd_image_revision() { _atd_revision "$1" "${2:-image}"; }
 atd_runtime_revision() { _atd_revision "$1" runtime; }
 
 _atd_revision() {
@@ -26,6 +26,9 @@ if sys.argv[2] == 'runtime':
         'docker/isaac_ros/build_image_layers.yaml', 'docker/isaac_ros/common-config.sh',
         'docker/isaac_ros/config.yaml',
     ])
+if sys.argv[2] == 'orbslam3':
+    paths.extend(str(path.relative_to(root)) for path in sorted((root / 'docker/orbslam3').rglob('*'))
+                 if path.is_file())
 digest = hashlib.sha256()
 for relative in paths:
     try:

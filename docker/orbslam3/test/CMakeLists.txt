@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.16)
+project(ATDOrbslam3Test LANGUAGES CXX)
+find_package(ATDOrbslam3 CONFIG REQUIRED)
+add_executable(atd_orbslam3_smoke fixed_map.cpp)
+target_compile_features(atd_orbslam3_smoke PRIVATE cxx_std_17)
+target_link_libraries(atd_orbslam3_smoke PRIVATE ATDOrbslam3::core)

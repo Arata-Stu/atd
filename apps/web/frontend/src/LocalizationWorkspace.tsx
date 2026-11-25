@@ -119,8 +119,8 @@ export function LocalizationWorkspace({jobs, onLog}: {jobs: Job[]; onLog: (id: s
         {map?.issue && <p className="inline-note">{map.issue}</p>}
         {map?.ready && <details className="validation-options"><summary>再生設定</summary>
           <div className="validation-option-grid"><Field label="再生倍率"><input type="number" min=".05" max="4" step="any" required value={rate} onChange={e => setRate(e.target.value)}/></Field>
-            <Field label="Notebook 用 VGL engine"><select value={engine} onChange={e => setEngine(e.target.value)}><option value="">自動選択</option>
-              {data!.engine_dirs.map(path => <option key={path} value={path}>{path}</option>)}</select></Field></div>
+            {map.backend !== 'orbslam3' && <Field label="Notebook 用 VGL engine"><select value={engine} onChange={e => setEngine(e.target.value)}><option value="">自動選択</option>
+              {data!.engine_dirs.map(path => <option key={path} value={path}>{path}</option>)}</select></Field>}</div>
         </details>}
       </form>
       {job && <div className="validation-job"><div><strong role="status">{job.cancel_requested && ACTIVE.has(job.status) ? '停止要求中' : STATUS[job.status] || job.status}</strong>

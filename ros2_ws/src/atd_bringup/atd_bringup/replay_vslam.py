@@ -1,4 +1,4 @@
-"""Notebook でステレオ bag を cuVSLAM 再生し、Gazebo の正解軌跡と比較する。"""
+"""Notebook でステレオ bag を SLAM 再生し、Gazebo の正解軌跡と比較する。"""
 import argparse
 from contextlib import ExitStack
 import fcntl
@@ -27,18 +27,23 @@ class ViewerClosed(Exception):
     """RViz のウィンドウを閉じて再生セッションを終了した。"""
 
 
-def estimated_only_config(preset, directory):
-    """正解を照合できない bag では RViz も正解用の topic を購読しない。"""
+def replay_config(preset, directory, hidden):
+    """今回配信しない topic を RViz の表示から取り除く。"""
     config = yaml.safe_load(preset.read_text())
     manager = config['Visualization Manager']
     manager['Displays'] = [display for display in manager['Displays']
-                           if display.get('Topic', {}).get('Value') not in (GROUND_TRUTH_PATH, GROUND_TRUTH_ERROR)]
+                           if display.get('Topic', {}).get('Value') not in hidden]
     output = Path(directory) / preset.name
     output.write_text(yaml.safe_dump(config, sort_keys=False))
     return output
 
 
-def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=None, *, slam_max_map_size=0, imu=None):
+def estimated_only_config(preset, directory):
+    return replay_config(preset, directory, {GROUND_TRUTH_PATH, GROUND_TRUTH_ERROR})
+
+
+def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=None, *, slam_max_map_size=0,
+                imu=None, orb=None):
     from .replay_readiness import wait_and_resume
 
     with ExitStack() as children:
@@ -52,6 +57,10 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
         if imu:
             launch_args.extend(['tracking_mode:=1', f'imu_frame:={imu.frame}', f'imu_frequency:={imu.frequency}'])
             topics.append(IMU_TOPIC)
+        name = 'ORB-SLAM3' if orb else 'cuVSLAM'
+        if orb:
+            launch_args = orb.command
+            topics = [topic for topic in topics if topic not in orb.seed_topics]
         launch = start(launch_args)
         rviz = None
         if rviz_config is not None:
@@ -59,17 +68,19 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                           '-p', 'use_sim_time:=true', '-r', '__node:=rviz2'])
         spin_overlay = None
         if ground_truth is not None:
-            observer = children.enter_context(ground_truth_viewer(ground_truth, result, visualize=rviz is not None))
+            observer = children.enter_context(ground_truth_viewer(
+                ground_truth, result, visualize=rviz is not None, **({'orb': orb} if orb else {})))
             spin_overlay = observer.spin_once
         player_name = f'atd_replay_player_{os.getpid()}'
+        offset = ['--start-offset', str(orb.options.start_offset)] if orb and orb.options.start_offset else []
         player = start(['ros2', 'bag', 'play', str(bag), '--start-paused', '--disable-keyboard-controls',
-                        '--clock', '--rate', str(rate), '--qos-profile-overrides-path', str(qos),
+                        '--clock', '--rate', str(rate), *offset, '--qos-profile-overrides-path', str(qos),
                         '--remap', f'__node:={player_name}',
                         '--topics', *topics])
 
         def check_viewer():
             if launch.poll() is not None:
-                raise RuntimeError(f'cuVSLAM が終了しました（exit {launch.returncode}）。起動ログを確認してください')
+                raise RuntimeError(f'{name} が終了しました（exit {launch.returncode}）。起動ログを確認してください')
             if rviz is not None and rviz.poll() is not None:
                 if rviz.returncode:
                     raise RuntimeError(f'RViz が終了しました（exit {rviz.returncode}）。画面接続と起動ログを確認してください')
@@ -81,21 +92,35 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                 raise RuntimeError(f'再生開始前に rosbag2 が終了しました（exit {player.returncode}）')
 
         tracking = f'VIO (IMU {imu.frequency:g} Hz, {imu.frame})' if imu else 'VO'
-        consumers = 'cuVSLAM と RViz' if rviz is not None else 'cuVSLAM と GT 比較用ノード'
-        print(f'{bag} ({rate:g} 倍速)  {tracking}  slam_max_map_size={slam_max_map_size}'
+        consumers = f'{name} と RViz' if rviz is not None else name
+        settings = orb.params['mode'] if orb else f'slam_max_map_size={slam_max_map_size}'
+        print(f'{bag} ({rate:g} 倍速)  {tracking}  {settings}'
               f'\n{consumers} の購読準備を待っています。', flush=True)
+
+        def spin(timeout_sec):
+            if orb:
+                orb.spin(timeout_sec=min(.005, timeout_sec))
+                if spin_overlay:
+                    spin_overlay(timeout_sec=0.)
+            elif spin_overlay:
+                spin_overlay(timeout_sec=timeout_sec)
+            else:
+                time.sleep(timeout_sec)
+
         finished = False
         try:
             wait_and_resume(node, player_name=f'/{player_name}', check_running=check_startup,
                             ground_truth=spin_overlay is not None, vio=imu is not None,
-                            rviz_name='/rviz2' if rviz is not None else None)
+                            rviz_name='/rviz2' if rviz is not None else None, **({'orb': orb} if orb else {}))
             print('bag を再生しています。' + ('終了するには RViz を閉じるか Ctrl+C を押してください。'
                                            if rviz is not None else '末尾で比較結果を保存して終了します。'), flush=True)
             while True:
                 if not finished and player.poll() is not None:
                     if player.returncode:
                         raise RuntimeError(f'rosbag2 の再生に失敗しました（exit {player.returncode}）')
-                    if rviz is None:
+                    if orb:
+                        orb.finish(spin, check_viewer, result)
+                    elif rviz is None:
                         # rosbag2 の終了後も GPU から遅れて届く姿勢は比較に含める。
                         stamp = result.last_stamp
                         deadline = time.monotonic() + 2.
@@ -109,19 +134,19 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                             raise RuntimeError('GT と時刻を照合できた cuVSLAM の推定姿勢が 0 件です')
                     finished = True
                     if result is not None:
-                        observer.inspect_loop_graph()
+                        if not orb:
+                            observer.inspect_loop_graph()
+                            print(result.closure_report(), flush=True)
                         result.mark_eof()
-                        print(result.closure_report(), flush=True)
                     if rviz is None:
-                        print(f'bag の末尾に到達しました。比較結果を保存しました: {result.directory}', flush=True)
+                        print(f'bag の末尾に到達しました。結果を保存しました: {result.directory if result else orb.directory}', flush=True)
                         return
                     print('bag の末尾に到達しました。RViz で最終表示を確認できます。', flush=True)
                 check_viewer()
-                if spin_overlay is None:
-                    time.sleep(.15)
-                else:
-                    spin_overlay(timeout_sec=.15)
+                spin(.15)
         except ViewerClosed:
+            if orb and not finished:
+                raise RuntimeError('ORB-SLAM3 の処理が完了する前に RViz が閉じられました')
             # An estimate can arrive just after the last image was played.
             if finished and spin_overlay is not None:
                 deadline = time.monotonic() + .5
@@ -129,7 +154,7 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                     spin_overlay(timeout_sec=.05)
 
 
-def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False):
+def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_options=None):
     from ament_index_python.packages import get_package_share_directory
     import rclpy
     from rclpy.signals import SignalHandlerOptions
@@ -160,35 +185,53 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False):
             raise ValueError(f'ROS domain {domain} では既に atd replay が実行中です') from exc
         imu = validate_bag(bag, vio=tracking == 'vio')
         trace = None
+        root = Path(os.environ.get('ATD_REPLAY_RESULTS_ROOT', '/data/results')).expanduser().resolve()
         try:
-            ground_truth = find_ground_truth(bag)
+            ground_truth = find_ground_truth(bag, root)
             if ground_truth is not None:
                 trace = Trace.from_file(ground_truth)
         except (OSError, ValueError) as exc:
-            if headless:
+            if headless or orb_options:
                 raise ValueError(f'Gazebo 正解軌跡を照合できません: {exc}') from exc
             ground_truth = None
             print(f'Gazebo 正解軌跡を照合できません。cuVSLAM の推定軌跡のみ表示します。{exc}',
                   file=sys.stderr, flush=True)
         else:
             if ground_truth is None:
-                if headless:
+                if headless and not orb_options:
                     raise ValueError('--headless の比較には、この bag に対応する Gazebo 正解軌跡が必要です')
-                print('対応する Gazebo 正解軌跡が見つからないため、cuVSLAM の推定軌跡のみ表示します。', flush=True)
-        if ground_truth is None:
-            config = estimated_only_config(config, stack.enter_context(TemporaryDirectory(prefix='atd-replay-rviz-')))
+                print('対応する Gazebo 正解軌跡がありません。推定結果を観測します。', flush=True)
         rclpy.init(args=[], signal_handler_options=SignalHandlerOptions.NO)
         stack.callback(rclpy.try_shutdown)
         node = rclpy.create_node('atd_bag_replay')
         stack.callback(node.destroy_node)
         result = None
+        course = load_course(bag, ground_truth, root) if trace else {}
+        orb = None
+        hidden = set()
+        if orb_options:
+            from .replay_orbslam3 import OrbReplay
+            orb = OrbReplay(stack, root, node, bag, orb_options, imu, course)
+            hidden.update(('/visual_slam/vis/landmarks_cloud', '/visual_slam/vis/loop_closure_cloud'))
+            if trace and orb.metadata and not orb.fixed_alignment:
+                print('このコースと照合できる地図作成時の GT 座標変換がないため、絶対誤差は評価しません。', flush=True)
+                trace = None
+        if not trace:
+            hidden.update((GROUND_TRUTH_PATH, GROUND_TRUTH_ERROR))
+        if config and hidden:
+            config = replay_config(config, stack.enter_context(TemporaryDirectory(prefix='atd-replay-rviz-')), hidden)
         if trace is not None:
-            root = Path('/data/results')
-            course = load_course(bag, ground_truth, root)
             result = stack.enter_context(ReplayResult(root, bag, rate, trace, course,
                                                      slam_max_map_size=slam_max_map_size, imu=imu))
+            if orb:
+                result.summary.pop('slam_max_map_size')
+                result.summary.update(backend='orbslam3', mode=orb.params['mode'], map_id=orb_options.map or orb_options.save_map,
+                                      start_offset_s=orb_options.start_offset, alignment_source=(
+                                          'saved_map' if orb_options.map else 'first_estimate'))
+                result.summary['loop_closure_graph'] = {'status': 'unavailable', 'reason': 'ORB-SLAM3 replay'}
+                orb.summary['gt_replay_id'] = result.directory.name
             print(f'Gazebo 正解軌跡: {ground_truth}\n比較結果の保存先: {result.directory}', flush=True)
-        run_session(node, bag, rate, config, qos, trace, result, slam_max_map_size=slam_max_map_size, imu=imu)
+        run_session(node, bag, rate, config, qos, trace, result, slam_max_map_size=slam_max_map_size, imu=imu, orb=orb)
 
 
 def main(argv=None):
@@ -200,15 +243,38 @@ def main(argv=None):
                         help='vo はステレオのみ（既定）、vio は統合 IMU も使用')
     parser.add_argument('--slam-max-map-size', type=int, default=0,
                         help='SLAM 地図の姿勢数上限（既定 0 は無制限）')
+    parser.add_argument('--backend', choices=('cuvslam', 'orbslam3'), default='cuvslam')
+    maps = parser.add_mutually_exclusive_group()
+    maps.add_argument('--save-map', metavar='ID', help='新しい ORB-SLAM3 コース地図を保存')
+    maps.add_argument('--map', metavar='ID', help='保存済み ORB-SLAM3 地図に別走行から再定位')
+    parser.add_argument('--start-offset', type=float, default=0., help='固定地図を検証する bag の途中開始位置 [s]')
+    parser.add_argument('--imu-calibration', type=Path, help='ORB-SLAM3 VIO 用 IMU ノイズ校正 YAML')
     args = parser.parse_args(argv)
+    if args.backend != 'orbslam3' and (args.map or args.save_map or args.start_offset or args.imu_calibration):
+        parser.error('地図・途中開始・IMU校正の指定には --backend orbslam3 が必要です')
+    if not math.isfinite(args.start_offset) or args.start_offset < 0 or (args.start_offset and not args.map):
+        parser.error('--start-offset は --map と一緒に、0 以上の有限値で指定してください')
+    if args.backend == 'orbslam3':
+        if args.slam_max_map_size:
+            parser.error('--slam-max-map-size は cuVSLAM の設定です')
+        if args.tracking == 'vio' and (args.map or args.save_map):
+            parser.error('固定地図の作成・再定位には --tracking vo を指定してください')
+        if bool(args.imu_calibration) != (args.tracking == 'vio'):
+            parser.error('ORB-SLAM3 の --tracking vio には --imu-calibration が必要です')
     if not math.isfinite(args.rate) or args.rate <= 0:
         parser.error('--rate には正の有限値を指定してください')
     if not 0 <= args.slam_max_map_size <= 2147483647:
         parser.error('--slam-max-map-size には 0〜2147483647 の整数を指定してください')
     try:
-        bag = select_bag(args.bag)
+        roots = {}
+        if os.environ.get('ATD_REPLAY_RECORD_ROOT'):
+            roots['root'] = Path(os.environ['ATD_REPLAY_RECORD_ROOT']).expanduser().resolve()
+        if os.environ.get('ATD_REPLAY_RESULTS_ROOT'):
+            roots['results_root'] = Path(os.environ['ATD_REPLAY_RESULTS_ROOT']).expanduser().resolve()
+        bag = select_bag(args.bag, **roots)
         if bag is not None:
-            run(bag, args.rate, slam_max_map_size=args.slam_max_map_size, tracking=args.tracking, headless=args.headless)
+            run(bag, args.rate, slam_max_map_size=args.slam_max_map_size, tracking=args.tracking, headless=args.headless,
+                **({'orb_options': args} if args.backend == 'orbslam3' else {}))
         return 0
     except KeyboardInterrupt:
         return 130

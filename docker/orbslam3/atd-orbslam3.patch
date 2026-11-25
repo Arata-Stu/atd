@@ -1,0 +1,1074 @@
+diff --git a/Thirdparty/DBoW2/CMakeLists.txt b/Thirdparty/DBoW2/CMakeLists.txt
+index c312b25..0d9ef11 100644
+--- a/Thirdparty/DBoW2/CMakeLists.txt
++++ b/Thirdparty/DBoW2/CMakeLists.txt
+@@ -5,8 +5,8 @@ if(NOT CMAKE_BUILD_TYPE)
+   set(CMAKE_BUILD_TYPE Release)
+ endif()
+ 
+-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -Wall  -O3 -march=native ")
+-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall  -O3 -march=native")
++set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -Wall  -O3 ")
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall  -O3")
+ 
+ set(HDRS_DBOW2
+   DBoW2/BowVector.h
+@@ -29,13 +29,7 @@ set(SRCS_DUTILS
+   DUtils/Timestamp.cpp)
+ 
+ 
+-find_package(OpenCV 4 QUIET)
+-if(NOT OpenCV_FOUND)
+-   find_package(OpenCV 3.0 QUIET)
+-   if(NOT OpenCV_FOUND)
+-      message(FATAL_ERROR "OpenCV > 3.0 not found.")
+-   endif()
+-endif()
++find_package(OpenCV 4 REQUIRED COMPONENTS core)
+ 
+ set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
+ 
+diff --git a/Thirdparty/DBoW2/DBoW2/FORB.cpp b/Thirdparty/DBoW2/DBoW2/FORB.cpp
+index 1f1990c..b78c2d1 100644
+--- a/Thirdparty/DBoW2/DBoW2/FORB.cpp
++++ b/Thirdparty/DBoW2/DBoW2/FORB.cpp
+@@ -13,7 +13,7 @@
+ #include <vector>
+ #include <string>
+ #include <sstream>
+-#include <stdint-gcc.h>
++#include <cstdint>
+ 
+ #include "FORB.h"
+ 
+diff --git a/Thirdparty/g2o/CMakeLists.txt b/Thirdparty/g2o/CMakeLists.txt
+index 1a32ff9..1cb9b37 100644
+--- a/Thirdparty/g2o/CMakeLists.txt
++++ b/Thirdparty/g2o/CMakeLists.txt
+@@ -54,8 +54,8 @@ IF(OPENMP_FOUND AND G2O_USE_OPENMP)
+ ENDIF(OPENMP_FOUND AND G2O_USE_OPENMP)
+ 
+ # Compiler specific options for gcc
+-SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native")
+-SET(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -march=native")
++SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
++SET(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
+ # SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+ # SET(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
+ 
+diff --git a/Thirdparty/g2o/g2o/core/estimate_propagator.h b/Thirdparty/g2o/g2o/core/estimate_propagator.h
+index 6a16d11..8910422 100644
+--- a/Thirdparty/g2o/g2o/core/estimate_propagator.h
++++ b/Thirdparty/g2o/g2o/core/estimate_propagator.h
+@@ -34,11 +34,7 @@
+ #include <set>
+ #include <limits>
+ 
+-#ifdef _MSC_VER
+ #include <unordered_map>
+-#else
+-#include <tr1/unordered_map>
+-#endif
+ 
+ namespace g2o {
+ 
+@@ -135,7 +131,7 @@ namespace g2o {
+           size_t operator ()(const OptimizableGraph::Vertex* v) const { return v->id();}
+       };
+ 
+-      typedef std::tr1::unordered_map<OptimizableGraph::Vertex*, AdjacencyMapEntry, VertexIDHashFunction> AdjacencyMap;
++      typedef std::unordered_map<OptimizableGraph::Vertex*, AdjacencyMapEntry, VertexIDHashFunction> AdjacencyMap;
+ 
+     public:
+       EstimatePropagator(OptimizableGraph* g);
+diff --git a/Thirdparty/g2o/g2o/core/hyper_graph.h b/Thirdparty/g2o/g2o/core/hyper_graph.h
+index da6bb3d..4b18290 100644
+--- a/Thirdparty/g2o/g2o/core/hyper_graph.h
++++ b/Thirdparty/g2o/g2o/core/hyper_graph.h
+@@ -35,11 +35,7 @@
+ #include <limits>
+ #include <cstddef>
+ 
+-#ifdef _MSC_VER
+ #include <unordered_map>
+-#else
+-#include <tr1/unordered_map>
+-#endif
+ 
+ 
+ /** @addtogroup graph */
+@@ -90,7 +86,7 @@ namespace g2o {
+       typedef std::set<Edge*>                           EdgeSet;
+       typedef std::set<Vertex*>                         VertexSet;
+ 
+-      typedef std::tr1::unordered_map<int, Vertex*>     VertexIDMap;
++      typedef std::unordered_map<int, Vertex*>     VertexIDMap;
+       typedef std::vector<Vertex*>                      VertexContainer;
+ 
+       //! abstract Vertex, your types must derive from that one
+diff --git a/Thirdparty/g2o/g2o/core/marginal_covariance_cholesky.h b/Thirdparty/g2o/g2o/core/marginal_covariance_cholesky.h
+index e7dfce8..6d05532 100644
+--- a/Thirdparty/g2o/g2o/core/marginal_covariance_cholesky.h
++++ b/Thirdparty/g2o/g2o/core/marginal_covariance_cholesky.h
+@@ -33,11 +33,7 @@
+ #include <cassert>
+ #include <vector>
+ 
+-#ifdef _MSC_VER
+ #include <unordered_map>
+-#else
+-#include <tr1/unordered_map>
+-#endif
+ 
+ 
+ namespace g2o {
+@@ -50,7 +46,7 @@ namespace g2o {
+       /**
+        * hash struct for storing the matrix elements needed to compute the covariance
+        */
+-      typedef std::tr1::unordered_map<int, double>     LookupMap;
++      typedef std::unordered_map<int, double>     LookupMap;
+     
+     public:
+       MarginalCovarianceCholesky();
+diff --git a/Thirdparty/g2o/g2o/core/robust_kernel.h b/Thirdparty/g2o/g2o/core/robust_kernel.h
+index 29e1394..ce8add4 100644
+--- a/Thirdparty/g2o/g2o/core/robust_kernel.h
++++ b/Thirdparty/g2o/g2o/core/robust_kernel.h
+@@ -27,11 +27,7 @@
+ #ifndef G2O_ROBUST_KERNEL_H
+ #define G2O_ROBUST_KERNEL_H
+ 
+-#ifdef _MSC_VER
+ #include <memory>
+-#else
+-#include <tr1/memory>
+-#endif
+ #include <Eigen/Core>
+ 
+ 
+@@ -74,7 +70,7 @@ namespace g2o {
+     protected:
+       double _delta;
+   };
+-  typedef std::tr1::shared_ptr<RobustKernel> RobustKernelPtr;
++  typedef std::shared_ptr<RobustKernel> RobustKernelPtr;
+ 
+ } // end namespace g2o
+ 
+diff --git a/Thirdparty/g2o/g2o/core/sparse_block_matrix_ccs.h b/Thirdparty/g2o/g2o/core/sparse_block_matrix_ccs.h
+index eb9042c..7f72f93 100644
+--- a/Thirdparty/g2o/g2o/core/sparse_block_matrix_ccs.h
++++ b/Thirdparty/g2o/g2o/core/sparse_block_matrix_ccs.h
+@@ -34,11 +34,7 @@
+ #include "../../config.h"
+ #include "matrix_operations.h"
+ 
+-#ifdef _MSC_VER
+ #include <unordered_map>
+-#else
+-#include <tr1/unordered_map>
+-#endif
+ 
+ namespace g2o {
+ 
+@@ -223,7 +219,7 @@ namespace g2o {
+       //! rows of the matrix
+       int rows() const {return _rowBlockIndices.size() ? _rowBlockIndices.back() : 0;}
+ 
+-      typedef std::tr1::unordered_map<int, MatrixType*> SparseColumn;
++      typedef std::unordered_map<int, MatrixType*> SparseColumn;
+ 
+       SparseBlockMatrixHashMap(const std::vector<int>& rowIndices, const std::vector<int>& colIndices) :
+         _rowBlockIndices(rowIndices), _colBlockIndices(colIndices)
+diff --git a/include/LoopClosing.h b/include/LoopClosing.h
+index c9ccb26..e8b2e71 100644
+--- a/include/LoopClosing.h
++++ b/include/LoopClosing.h
+@@ -78,6 +78,7 @@ public:
+         return mbFinishedGBA;
+     }   
+ 
++    void JoinGlobalBA(bool cancel = false);
+     void RequestFinish();
+ 
+     bool isFinished();
+@@ -223,7 +224,7 @@ protected:
+     bool mbFixScale;
+ 
+ 
+-    bool mnFullBAIdx;
++    int mnFullBAIdx;
+ 
+ 
+ 
+diff --git a/include/MLPnPsolver.h b/include/MLPnPsolver.h
+index 963612c..a386c56 100644
+--- a/include/MLPnPsolver.h
++++ b/include/MLPnPsolver.h
+@@ -62,7 +62,7 @@ namespace ORB_SLAM3{
+ 
+         MLPnPsolver(const Frame &F, const vector<MapPoint*> &vpMapPointMatches);
+ 
+-        ~MLPnPsolver();
++        ~MLPnPsolver() = default;
+ 
+         void SetRansacParameters(double probability = 0.99, int minInliers = 8, int maxIterations = 300, int minSet = 6, float epsilon = 0.4,
+                                  float th2 = 5.991);
+diff --git a/include/Map.h b/include/Map.h
+index 0e0a49c..73a02cc 100644
+--- a/include/Map.h
++++ b/include/Map.h
+@@ -24,7 +24,7 @@
+ #include "KeyFrame.h"
+ 
+ #include <set>
+-#include <pangolin/pangolin.h>
++#include <cstdint>
+ #include <mutex>
+ 
+ #include <boost/serialization/base_object.hpp>
+@@ -188,7 +188,7 @@ protected:
+ 
+ 
+     // View of the map in aerial sight (for the AtlasViewer)
+-    GLubyte* mThumbnail;
++    uint8_t* mThumbnail;
+ 
+     bool mIsInUse;
+     bool mHasTumbnail;
+diff --git a/include/MapDrawer.h b/include/MapDrawer.h
+index 635fb21..1a63f30 100644
+--- a/include/MapDrawer.h
++++ b/include/MapDrawer.h
+@@ -24,7 +24,7 @@
+ #include"MapPoint.h"
+ #include"KeyFrame.h"
+ #include "Settings.h"
+-#include<pangolin/pangolin.h>
++namespace pangolin { struct OpenGlMatrix; }
+ 
+ #include<mutex>
+ 
+diff --git a/include/System.h b/include/System.h
+index 872c86e..7415800 100644
+--- a/include/System.h
++++ b/include/System.h
+@@ -102,7 +102,7 @@ public:
+ public:
+     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+     // Initialize the SLAM system. It launches the Local Mapping, Loop Closing and Viewer threads.
+-    System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true, const int initFr = 0, const string &strSequence = std::string());
++    System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true, const int initFr = 0, const string &strSequence = std::string(), bool fixedMap = false);
+ 
+     // Proccess the given stereo frame. Images must be synchronized and rectified.
+     // Input images: RGB (CV_8UC3) or grayscale (CV_8U). RGB is converted to grayscale.
+@@ -174,6 +174,10 @@ public:
+     // Information from most recent processed frame
+     // You can call this right after TrackMonocular (or stereo or RGBD)
+     int GetTrackingState();
++    int GetFixedMapInliers();
++    long GetTrackingMapOriginId();
++    // After Shutdown returns, copy the finite landmarks of the saved (or reloaded) Atlas.
++    std::vector<Eigen::Vector3f> GetSavedMapPoints();
+     std::vector<MapPoint*> GetTrackedMapPoints();
+     std::vector<cv::KeyPoint> GetTrackedKeyPointsUn();
+ 
+@@ -201,6 +205,8 @@ private:
+ 
+     // Input sensor
+     eSensor mSensor;
++    const bool mbFixedMap;
++    int mnFixedMapInliers = 0;
+ 
+     // ORB vocabulary used for place recognition and feature matching.
+     ORBVocabulary* mpVocabulary;
+@@ -248,6 +254,8 @@ private:
+ 
+     // Shutdown flag
+     bool mbShutDown;
++    bool mbSavedMapReady = false;
++    std::mutex mMutexSession;
+ 
+     // Tracking state
+     int mTrackingState;
+diff --git a/include/Tracking.h b/include/Tracking.h
+index 863c98e..d13347f 100644
+--- a/include/Tracking.h
++++ b/include/Tracking.h
+@@ -40,6 +40,7 @@
+ #include "GeometricCamera.h"
+ 
+ #include <mutex>
++#include <memory>
+ #include <unordered_set>
+ 
+ namespace ORB_SLAM3
+@@ -87,6 +88,7 @@ public:
+ 
+     // Use this function if you have deactivated local mapping and you only want to localize the camera.
+     void InformOnlyTracking(const bool &flag);
++    void UseFixedMap() { mbFixedMap = true; mbOnlyTracking = true; }
+ 
+     void UpdateFrameIMU(const float s, const IMU::Bias &b, KeyFrame* pCurrentKeyFrame);
+     KeyFrame* GetLastKeyFrame()
+@@ -195,6 +197,8 @@ public:
+ protected:
+ 
+     // Main tracking function. It is independent of the input sensor.
++    bool mbFixedMap = false;
++    void TrackFixedMap();
+     void Track();
+ 
+     // Map initialization for stereo and RGB-D
+diff --git a/src/Frame.cc b/src/Frame.cc
+index a04c312..94f75ae 100644
+--- a/src/Frame.cc
++++ b/src/Frame.cc
+@@ -838,9 +838,9 @@ void Frame::ComputeStereoMatches()
+     }
+ 
+     // Set limits for search
+-    const float minZ = mb;
+     const float minD = 0;
+-    const float maxD = mbf/minZ;
++    // bf / baseline equals fx; mb is set only after stereo matching.
++    const float maxD = mK.at<float>(0,0);
+ 
+     // For each left keypoint search a match in the right image
+     vector<pair<int, int> > vDistIdx;
+@@ -964,13 +964,14 @@ void Frame::ComputeStereoMatches()
+         }
+     }
+ 
++    if (vDistIdx.empty()) return;
+     sort(vDistIdx.begin(),vDistIdx.end());
+     const float median = vDistIdx[vDistIdx.size()/2].first;
+     const float thDist = 1.5f*1.4f*median;
+ 
+     for(int i=vDistIdx.size()-1;i>=0;i--)
+     {
+-        if(vDistIdx[i].first<thDist)
++        if(vDistIdx[i].first<=thDist)
+             break;
+         else
+         {
+diff --git a/src/LocalMapping.cc b/src/LocalMapping.cc
+index 53df332..d5d65fa 100644
+--- a/src/LocalMapping.cc
++++ b/src/LocalMapping.cc
+@@ -272,7 +272,7 @@ void LocalMapping::Run()
+         // Tracking will see that Local Mapping is busy
+         SetAcceptKeyFrames(true);
+ 
+-        if(CheckFinish())
++        if(CheckFinish() && (!CheckNewKeyFrames() || mbBadImu))
+             break;
+ 
+         usleep(3000);
+diff --git a/src/LoopClosing.cc b/src/LoopClosing.cc
+index 319afb5..b793d76 100644
+--- a/src/LoopClosing.cc
++++ b/src/LoopClosing.cc
+@@ -298,7 +298,7 @@ void LoopClosing::Run()
+ 
+         ResetIfRequested();
+ 
+-        if(CheckFinish()){
++        if(CheckFinish() && (!mbActiveLC || !CheckNewKeyFrames())){
+             break;
+         }
+ 
+@@ -979,16 +979,7 @@ void LoopClosing::CorrectLoop()
+     if(isRunningGBA())
+     {
+         cout << "Stoping Global Bundle Adjustment...";
+-        unique_lock<mutex> lock(mMutexGBA);
+-        mbStopGBA = true;
+-
+-        mnFullBAIdx++;
+-
+-        if(mpThreadGBA)
+-        {
+-            mpThreadGBA->detach();
+-            delete mpThreadGBA;
+-        }
++        JoinGlobalBA(true);
+         cout << "  Done!!" << endl;
+     }
+ 
+@@ -1198,6 +1189,7 @@ void LoopClosing::CorrectLoop()
+     // Launch a new thread to perform Global Bundle Adjustment (Only if few keyframes, if not it would take too much time)
+     if(!pLoopMap->isImuInitialized() || (pLoopMap->KeyFramesInMap()<200 && mpAtlas->CountMaps()==1))
+     {
++        JoinGlobalBA();
+         mbRunningGBA = true;
+         mbFinishedGBA = false;
+         mbStopGBA = false;
+@@ -1230,16 +1222,7 @@ void LoopClosing::MergeLocal()
+     // If a Global Bundle Adjustment is running, abort it
+     if(isRunningGBA())
+     {
+-        unique_lock<mutex> lock(mMutexGBA);
+-        mbStopGBA = true;
+-
+-        mnFullBAIdx++;
+-
+-        if(mpThreadGBA)
+-        {
+-            mpThreadGBA->detach();
+-            delete mpThreadGBA;
+-        }
++        JoinGlobalBA(true);
+         bRelaunchBA = true;
+     }
+ 
+@@ -1763,6 +1746,7 @@ void LoopClosing::MergeLocal()
+     if(bRelaunchBA && (!pCurrentMap->isImuInitialized() || (pCurrentMap->KeyFramesInMap()<200 && mpAtlas->CountMaps()==1)))
+     {
+         // Launch a new thread to perform Global Bundle Adjustment
++        JoinGlobalBA();
+         mbRunningGBA = true;
+         mbFinishedGBA = false;
+         mbStopGBA = false;
+@@ -1803,16 +1787,7 @@ void LoopClosing::MergeLocal2()
+     // If a Global Bundle Adjustment is running, abort it
+     if(isRunningGBA())
+     {
+-        unique_lock<mutex> lock(mMutexGBA);
+-        mbStopGBA = true;
+-
+-        mnFullBAIdx++;
+-
+-        if(mpThreadGBA)
+-        {
+-            mpThreadGBA->detach();
+-            delete mpThreadGBA;
+-        }
++        JoinGlobalBA(true);
+         bRelaunchBA = true;
+     }
+ 
+@@ -2510,6 +2485,23 @@ void LoopClosing::RunGlobalBundleAdjustment(Map* pActiveMap, unsigned long nLoop
+     }
+ }
+ 
++// Called by the loop-closing thread, or by Shutdown after joining that thread.
++void LoopClosing::JoinGlobalBA(bool cancel)
++{
++    if (!mpThreadGBA) return;
++    if (cancel) {
++        unique_lock<mutex> lock(mMutexGBA);
++        mbStopGBA = true;
++        ++mnFullBAIdx;
++    }
++    mpThreadGBA->join();
++    delete mpThreadGBA;
++    mpThreadGBA = nullptr;
++    unique_lock<mutex> lock(mMutexGBA);
++    mbRunningGBA = false;
++    mbFinishedGBA = true;
++}
++
+ void LoopClosing::RequestFinish()
+ {
+     unique_lock<mutex> lock(mMutexFinish);
+diff --git a/src/Map.cc b/src/Map.cc
+index f1f8cd0..e13a3e9 100644
+--- a/src/Map.cc
++++ b/src/Map.cc
+@@ -30,7 +30,7 @@ Map::Map():mnMaxKFid(0),mnBigChangeIdx(0), mbImuInitialized(false), mnMapChange(
+ mbFail(false), mIsInUse(false), mHasTumbnail(false), mbBad(false), mnMapChangeNotified(0), mbIsInertial(false), mbIMU_BA1(false), mbIMU_BA2(false)
+ {
+     mnId=nNextId++;
+-    mThumbnail = static_cast<GLubyte*>(NULL);
++    mThumbnail = static_cast<uint8_t*>(NULL);
+ }
+ 
+ Map::Map(int initKFid):mnInitKFid(initKFid), mnMaxKFid(initKFid),/*mnLastLoopKFid(initKFid),*/ mnBigChangeIdx(0), mIsInUse(false),
+@@ -38,7 +38,7 @@ Map::Map(int initKFid):mnInitKFid(initKFid), mnMaxKFid(initKFid),/*mnLastLoopKFi
+                        mnMapChange(0), mbFail(false), mnMapChangeNotified(0), mbIsInertial(false), mbIMU_BA1(false), mbIMU_BA2(false)
+ {
+     mnId=nNextId++;
+-    mThumbnail = static_cast<GLubyte*>(NULL);
++    mThumbnail = static_cast<uint8_t*>(NULL);
+ }
+ 
+ Map::~Map()
+@@ -51,7 +51,7 @@ Map::~Map()
+ 
+     if(mThumbnail)
+         delete mThumbnail;
+-    mThumbnail = static_cast<GLubyte*>(NULL);
++    mThumbnail = static_cast<uint8_t*>(NULL);
+ 
+     mvpReferenceMapPoints.clear();
+     mvpKeyFrameOrigins.clear();
+diff --git a/src/ORBmatcher.cc b/src/ORBmatcher.cc
+index 9129683..d234694 100644
+--- a/src/ORBmatcher.cc
++++ b/src/ORBmatcher.cc
+@@ -25,7 +25,7 @@
+ 
+ #include "Thirdparty/DBoW2/DBoW2/FeatureVector.h"
+ 
+-#include<stdint-gcc.h>
++#include<cstdint>
+ 
+ using namespace std;
+ 
+diff --git a/src/Settings.cc b/src/Settings.cc
+index 93a50be..16bc6d1 100644
+--- a/src/Settings.cc
++++ b/src/Settings.cc
+@@ -166,8 +166,6 @@ namespace ORB_SLAM3 {
+ 
+         readORB(fSettings);
+         cout << "\t-Loaded ORB settings" << endl;
+-        readViewer(fSettings);
+-        cout << "\t-Loaded viewer settings" << endl;
+         readLoadAndSave(fSettings);
+         cout << "\t-Loaded Atlas settings" << endl;
+         readOtherParameters(fSettings);
+@@ -550,7 +548,8 @@ namespace ORB_SLAM3 {
+             output << " ]" << endl;
+         }
+ 
+-        if(settings.sensor_ == System::STEREO || settings.sensor_ == System::IMU_STEREO){
++        if((settings.sensor_ == System::STEREO || settings.sensor_ == System::IMU_STEREO) &&
++           settings.cameraType_ != Settings::Rectified){
+             output << "\t-Camera 2 parameters (";
+             if(settings.cameraType_ == Settings::PinHole || settings.cameraType_ ==  Settings::Rectified){
+                 output << "Pinhole";
+diff --git a/src/System.cc b/src/System.cc
+index 60d9c51..54b2ca1 100644
+--- a/src/System.cc
++++ b/src/System.cc
+@@ -21,7 +21,7 @@
+ #include "System.h"
+ #include "Converter.h"
+ #include <thread>
+-#include <pangolin/pangolin.h>
++#include <stdexcept>
+ #include <iomanip>
+ #include <openssl/md5.h>
+ #include <boost/serialization/base_object.hpp>
+@@ -39,10 +39,11 @@ namespace ORB_SLAM3
+ Verbose::eLevel Verbose::th = Verbose::VERBOSITY_NORMAL;
+ 
+ System::System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor,
+-               const bool bUseViewer, const int initFr, const string &strSequence):
+-    mSensor(sensor), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false), mbResetActiveMap(false),
++               const bool bUseViewer, const int initFr, const string &strSequence, bool fixedMap):
++    mSensor(sensor), mbFixedMap(fixedMap), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false), mbResetActiveMap(false),
+     mbActivateLocalizationMode(false), mbDeactivateLocalizationMode(false), mbShutDown(false)
+ {
++    if (bUseViewer) throw std::invalid_argument("ATD ORB-SLAM3 is built without a GUI");
+     // Output welcome message
+     cout << endl <<
+     "ORB-SLAM3 Copyright (C) 2017-2020 Carlos Campos, Richard Elvira, Juan J. Gómez, José M.M. Montiel and Juan D. Tardós, University of Zaragoza." << endl <<
+@@ -70,8 +71,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+     cv::FileStorage fsSettings(strSettingsFile.c_str(), cv::FileStorage::READ);
+     if(!fsSettings.isOpened())
+     {
+-       cerr << "Failed to open settings file at: " << strSettingsFile << endl;
+-       exit(-1);
++       throw std::runtime_error("Failed to open settings file: " + strSettingsFile);
+     }
+ 
+     cv::FileNode node = fsSettings["File.version"];
+@@ -107,7 +107,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+ 
+     mStrVocabularyFilePath = strVocFile;
+ 
+-    bool loadedAtlas = false;
++    if (mbFixedMap && (sensor != STEREO || mStrLoadAtlasFromFile.empty() || !mStrSaveAtlasToFile.empty()))
++        throw std::invalid_argument("Fixed-map tracking requires stereo and a read-only input Atlas");
+ 
+     if(mStrLoadAtlasFromFile.empty())
+     {
+@@ -118,9 +119,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+         bool bVocLoad = mpVocabulary->loadFromTextFile(strVocFile);
+         if(!bVocLoad)
+         {
+-            cerr << "Wrong path to vocabulary. " << endl;
+-            cerr << "Falied to open at: " << strVocFile << endl;
+-            exit(-1);
++            throw std::runtime_error("Failed to load ORB vocabulary: " + strVocFile);
+         }
+         cout << "Vocabulary loaded!" << endl << endl;
+ 
+@@ -140,9 +139,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+         bool bVocLoad = mpVocabulary->loadFromTextFile(strVocFile);
+         if(!bVocLoad)
+         {
+-            cerr << "Wrong path to vocabulary. " << endl;
+-            cerr << "Falied to open at: " << strVocFile << endl;
+-            exit(-1);
++            throw std::runtime_error("Failed to load ORB vocabulary: " + strVocFile);
+         }
+         cout << "Vocabulary loaded!" << endl << endl;
+ 
+@@ -158,17 +155,22 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+ 
+         if(!isRead)
+         {
+-            cout << "Error to load the file, please try with other session file or vocabulary file" << endl;
+-            exit(-1);
++            throw std::runtime_error("Failed to load Atlas with the selected vocabulary: " + mStrLoadAtlasFromFile);
+         }
+         //mpKeyFrameDatabase = new KeyFrameDatabase(*mpVocabulary);
+ 
+ 
+         //cout << "KF in DB: " << mpKeyFrameDatabase->mnNumKFs << "; words: " << mpKeyFrameDatabase->mnNumWords << endl;
+ 
+-        loadedAtlas = true;
+-
+-        mpAtlas->CreateNewMap();
++        if (mbFixedMap) {
++            const auto maps = mpAtlas->GetAllMaps();
++            if (maps.size() != 1 || maps.front()->IsBad() || maps.front()->IsInertial() ||
++                maps.front()->KeyFramesInMap() < 2 || maps.front()->MapPointsInMap() < 50)
++                throw std::runtime_error("Expected one reusable visual stereo map in Atlas");
++            mpAtlas->ChangeMap(maps.front());
++        } else {
++            mpAtlas->CreateNewMap();
++        }
+ 
+         //clock_t timeElapsed = clock() - start;
+         //unsigned msElapsed = timeElapsed / (CLOCKS_PER_SEC / 1000);
+@@ -183,7 +185,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+ 
+     //Create Drawers. These are used by the Viewer
+     mpFrameDrawer = new FrameDrawer(mpAtlas);
+-    mpMapDrawer = new MapDrawer(mpAtlas, strSettingsFile, settings_);
++    mpMapDrawer = nullptr;
+ 
+     //Initialize the Tracking thread
+     //(it will live in the main thread of execution, the one that called this constructor)
+@@ -194,7 +196,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+     //Initialize the Local Mapping thread and launch
+     mpLocalMapper = new LocalMapping(this, mpAtlas, mSensor==MONOCULAR || mSensor==IMU_MONOCULAR,
+                                      mSensor==IMU_MONOCULAR || mSensor==IMU_STEREO || mSensor==IMU_RGBD, strSequence);
+-    mptLocalMapping = new thread(&ORB_SLAM3::LocalMapping::Run,mpLocalMapper);
++
+     mpLocalMapper->mInitFr = initFr;
+     if(settings_)
+         mpLocalMapper->mThFarPoints = settings_->thFarPoints();
+@@ -211,7 +213,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+     //Initialize the Loop Closing thread and launch
+     // mSensor!=MONOCULAR && mSensor!=IMU_MONOCULAR
+     mpLoopCloser = new LoopClosing(mpAtlas, mpKeyFrameDatabase, mpVocabulary, mSensor!=MONOCULAR, activeLC); // mSensor!=MONOCULAR);
+-    mptLoopClosing = new thread(&ORB_SLAM3::LoopClosing::Run, mpLoopCloser);
++
+ 
+     //Set pointers between threads
+     mpTracker->SetLocalMapper(mpLocalMapper);
+@@ -223,17 +225,11 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+     mpLoopCloser->SetTracker(mpTracker);
+     mpLoopCloser->SetLocalMapper(mpLocalMapper);
+ 
+-    //usleep(10*1000*1000);
+-
+-    //Initialize the Viewer thread and launch
+-    if(bUseViewer)
+-    //if(false) // TODO
+-    {
+-        mpViewer = new Viewer(this, mpFrameDrawer,mpMapDrawer,mpTracker,strSettingsFile,settings_);
+-        mptViewer = new thread(&Viewer::Run, mpViewer);
+-        mpTracker->SetViewer(mpViewer);
+-        mpLoopCloser->mpViewer = mpViewer;
+-        mpViewer->both = mpFrameDrawer->both;
++    if (mbFixedMap) {
++        mpTracker->UseFixedMap();
++    } else {
++        mptLocalMapping = new thread(&LocalMapping::Run, mpLocalMapper);
++        mptLoopClosing = new thread(&LoopClosing::Run, mpLoopCloser);
+     }
+ 
+     // Fix verbosity
+@@ -243,6 +239,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+ 
+ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timestamp, const vector<IMU::Point>& vImuMeas, string filename)
+ {
++    unique_lock<mutex> session(mMutexSession);
++    if (mbShutDown) throw std::logic_error("Cannot track after Shutdown");
+     if(mSensor!=STEREO && mSensor!=IMU_STEREO)
+     {
+         cerr << "ERROR: you called TrackStereo but input sensor was not set to Stereo nor Stereo-Inertial." << endl;
+@@ -315,9 +313,9 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight,
+     // std::cout << "start GrabImageStereo" << std::endl;
+     Sophus::SE3f Tcw = mpTracker->GrabImageStereo(imLeftToFeed,imRightToFeed,timestamp,filename);
+ 
+-    // std::cout << "out grabber" << std::endl;
+-
+     unique_lock<mutex> lock2(mMutexState);
++    mnFixedMapInliers = mbFixedMap && mpTracker->mState == Tracking::OK
++        ? mpTracker->GetMatchesInliers() : 0;
+     mTrackingState = mpTracker->mState;
+     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
+     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
+@@ -327,6 +325,8 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight,
+ 
+ Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const double &timestamp, const vector<IMU::Point>& vImuMeas, string filename)
+ {
++    unique_lock<mutex> session(mMutexSession);
++    if (mbShutDown) throw std::logic_error("Cannot track after Shutdown");
+     if(mSensor!=RGBD  && mSensor!=IMU_RGBD)
+     {
+         cerr << "ERROR: you called TrackRGBD but input sensor was not set to RGBD." << endl;
+@@ -398,6 +398,8 @@ Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const
+ 
+ Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp, const vector<IMU::Point>& vImuMeas, string filename)
+ {
++    unique_lock<mutex> session(mMutexSession);
++    if (mbShutDown) throw std::logic_error("Cannot track after Shutdown");
+ 
+     {
+         unique_lock<mutex> lock(mMutexReset);
+@@ -477,12 +479,14 @@ Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp,
+ 
+ void System::ActivateLocalizationMode()
+ {
++    if (mbFixedMap) throw std::logic_error("Cannot reset or change mode of a fixed Atlas");
+     unique_lock<mutex> lock(mMutexMode);
+     mbActivateLocalizationMode = true;
+ }
+ 
+ void System::DeactivateLocalizationMode()
+ {
++    if (mbFixedMap) throw std::logic_error("Cannot reset or change mode of a fixed Atlas");
+     unique_lock<mutex> lock(mMutexMode);
+     mbDeactivateLocalizationMode = true;
+ }
+@@ -502,53 +506,45 @@ bool System::MapChanged()
+ 
+ void System::Reset()
+ {
++    if (mbFixedMap) throw std::logic_error("Cannot reset or change mode of a fixed Atlas");
+     unique_lock<mutex> lock(mMutexReset);
+     mbReset = true;
+ }
+ 
+ void System::ResetActiveMap()
+ {
++    if (mbFixedMap) throw std::logic_error("Cannot reset or change mode of a fixed Atlas");
+     unique_lock<mutex> lock(mMutexReset);
+     mbResetActiveMap = true;
+ }
+ 
+ void System::Shutdown()
+ {
++    unique_lock<mutex> session(mMutexSession);
+     {
+         unique_lock<mutex> lock(mMutexReset);
++        if (mbShutDown) return;
+         mbShutDown = true;
+     }
+ 
+     cout << "Shutdown" << endl;
+ 
++    if (mbFixedMap) {
++        mbSavedMapReady = true;
++        return;
++    }
++    // Drain mapping first; loop closing can still request a mapper stop until finished.
+     mpLocalMapper->RequestFinish();
++    mptLocalMapping->join();
+     mpLoopCloser->RequestFinish();
+-    /*if(mpViewer)
+-    {
+-        mpViewer->RequestFinish();
+-        while(!mpViewer->isFinished())
+-            usleep(5000);
+-    }*/
+-
+-    // Wait until all thread have effectively stopped
+-    /*while(!mpLocalMapper->isFinished() || !mpLoopCloser->isFinished() || mpLoopCloser->isRunningGBA())
+-    {
+-        if(!mpLocalMapper->isFinished())
+-            cout << "mpLocalMapper is not finished" << endl;*/
+-        /*if(!mpLoopCloser->isFinished())
+-            cout << "mpLoopCloser is not finished" << endl;
+-        if(mpLoopCloser->isRunningGBA()){
+-            cout << "mpLoopCloser is running GBA" << endl;
+-            cout << "break anyway..." << endl;
+-            break;
+-        }*/
+-        /*usleep(5000);
+-    }*/
++    mptLoopClosing->join();
++    mpLoopCloser->JoinGlobalBA();
+ 
+     if(!mStrSaveAtlasToFile.empty())
+     {
+         Verbose::PrintMess("Atlas saving to file " + mStrSaveAtlasToFile, Verbose::VERBOSITY_NORMAL);
+         SaveAtlas(FileType::BINARY_FILE);
++        mbSavedMapReady = true;
+     }
+ 
+     /*if(mpViewer)
+@@ -1318,6 +1314,42 @@ void System::SaveDebugData(const int &initIdx)
+ }
+ 
+ 
++int System::GetFixedMapInliers()
++{
++    unique_lock<mutex> lock(mMutexState);
++    return mnFixedMapInliers;
++}
++
++long System::GetTrackingMapOriginId()
++{
++    Map* map = mpAtlas->GetCurrentMap();
++    unique_lock<mutex> lock(map->mMutexMapUpdate);
++    if (map->KeyFramesInMap() == 0 || !map->GetOriginKF())
++        return -1;
++    return static_cast<long>(map->GetOriginKF()->mnId);
++}
++
++std::vector<Eigen::Vector3f> System::GetSavedMapPoints()
++{
++    unique_lock<mutex> session(mMutexSession);
++    if (!mbSavedMapReady)
++        throw std::logic_error("Saved landmarks require a completed Atlas save or fixed-map session");
++    const auto maps = mpAtlas->GetAllMaps();
++    if (maps.size() != 1 || maps.front()->IsBad())
++        throw std::runtime_error("Cannot export landmarks from an ambiguous Atlas");
++    Map* map = maps.front();
++    const auto landmarks = map->GetAllMapPoints();
++    std::vector<Eigen::Vector3f> positions;
++    positions.reserve(landmarks.size());
++    for (MapPoint* point : landmarks) {
++        if (!point || point->isBad() || point->GetMap() != map || point->Observations() < 1)
++            continue;
++        const auto xyz = point->GetWorldPos();
++        if (xyz.allFinite()) positions.push_back(xyz);
++    }
++    return positions;
++}
++
+ int System::GetTrackingState()
+ {
+     unique_lock<mutex> lock(mMutexState);
+@@ -1406,11 +1438,13 @@ void System::SaveAtlas(int type){
+         //clock_t start = clock();
+ 
+         // Save the current session
++        const auto maps = mpAtlas->GetAllMaps();
++        if (maps.size() != 1 || maps.front()->IsBad() || maps.front()->KeyFramesInMap() < 2 ||
++            maps.front()->MapPointsInMap() < 50)
++            throw std::runtime_error("Cannot save a fragmented or insufficiently mapped Atlas");
+         mpAtlas->PreSave();
+ 
+-        string pathSaveFileName = "./";
+-        pathSaveFileName = pathSaveFileName.append(mStrSaveAtlasToFile);
+-        pathSaveFileName = pathSaveFileName.append(".osa");
++        const string pathSaveFileName = mStrSaveAtlasToFile + ".osa";
+ 
+         string strVocabularyChecksum = CalculateCheckSum(mStrVocabularyFilePath,TEXT_FILE);
+         std::size_t found = mStrVocabularyFilePath.find_last_of("/\\");
+@@ -1419,24 +1453,26 @@ void System::SaveAtlas(int type){
+         if(type == TEXT_FILE) // File text
+         {
+             cout << "Starting to write the save text file " << endl;
+-            std::remove(pathSaveFileName.c_str());
+             std::ofstream ofs(pathSaveFileName, std::ios::binary);
++            ofs.exceptions(std::ios::badbit | std::ios::failbit);
+             boost::archive::text_oarchive oa(ofs);
+ 
+             oa << strVocabularyName;
+             oa << strVocabularyChecksum;
+             oa << mpAtlas;
++            ofs.flush();
+             cout << "End to write the save text file" << endl;
+         }
+         else if(type == BINARY_FILE) // File binary
+         {
+             cout << "Starting to write the save binary file" << endl;
+-            std::remove(pathSaveFileName.c_str());
+             std::ofstream ofs(pathSaveFileName, std::ios::binary);
++            ofs.exceptions(std::ios::badbit | std::ios::failbit);
+             boost::archive::binary_oarchive oa(ofs);
+             oa << strVocabularyName;
+             oa << strVocabularyChecksum;
+             oa << mpAtlas;
++            ofs.flush();
+             cout << "End to write save binary file" << endl;
+         }
+     }
+@@ -1447,9 +1483,7 @@ bool System::LoadAtlas(int type)
+     string strFileVoc, strVocChecksum;
+     bool isRead = false;
+ 
+-    string pathLoadFileName = "./";
+-    pathLoadFileName = pathLoadFileName.append(mStrLoadAtlasFromFile);
+-    pathLoadFileName = pathLoadFileName.append(".osa");
++    const string pathLoadFileName = mStrLoadAtlasFromFile + ".osa";
+ 
+     if(type == TEXT_FILE) // File text
+     {
+diff --git a/src/Tracking.cc b/src/Tracking.cc
+index 5191451..b219f60 100644
+--- a/src/Tracking.cc
++++ b/src/Tracking.cc
+@@ -1791,8 +1791,38 @@ void Tracking::ResetFrameIMU()
+ }
+ 
+ 
++void Tracking::TrackFixedMap()
++{
++    Map* map = mpAtlas->GetCurrentMap();
++    unique_lock<mutex> lock(map->mMutexMapUpdate);
++    const bool hasPrior = mState == OK && mCurrentFrame.mTimeStamp > mLastFrame.mTimeStamp &&
++                          mCurrentFrame.mTimeStamp - mLastFrame.mTimeStamp < 1.0;
++    bool tracked = false;
++    if (mCurrentFrame.N > 0) {
++        // No temporary VO points, no new keyframes, and no identity pose initialization.
++        if (hasPrior && mpReferenceKF && !mpReferenceKF->isBad())
++            tracked = TrackReferenceKeyFrame() && TrackLocalMap();
++        if (!tracked) {
++            std::fill(mCurrentFrame.mvpMapPoints.begin(), mCurrentFrame.mvpMapPoints.end(), nullptr);
++            std::fill(mCurrentFrame.mvbOutlier.begin(), mCurrentFrame.mvbOutlier.end(), false);
++            tracked = Relocalization() && TrackLocalMap();
++        }
++    }
++    mState = tracked ? OK : LOST;
++    if (tracked) {
++        mLastFrame = Frame(mCurrentFrame);
++    } else {
++        mnMatchesInliers = 0;
++        mpReferenceKF = nullptr;
++    }
++}
++
+ void Tracking::Track()
+ {
++    if (mbFixedMap) {
++        TrackFixedMap();
++        return;
++    }
+ 
+     if (bStepByStep)
+     {
+@@ -2197,11 +2227,6 @@ void Tracking::Track()
+         vdLMTrack_ms.push_back(timeLMTrack);
+ #endif
+ 
+-        // Update drawer
+-        mpFrameDrawer->Update(this);
+-        if(mCurrentFrame.isSet())
+-            mpMapDrawer->SetCurrentCameraPose(mCurrentFrame.GetPose());
+-
+         if(bOK || mState==RECENTLY_LOST)
+         {
+             // Update motion model
+@@ -2215,8 +2240,6 @@ void Tracking::Track()
+                 mbVelocity = false;
+             }
+ 
+-            if(mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
+-                mpMapDrawer->SetCurrentCameraPose(mCurrentFrame.GetPose());
+ 
+             // Clean VO matches
+             for(int i=0; i<mCurrentFrame.N; i++)
+@@ -2334,6 +2357,12 @@ void Tracking::Track()
+ 
+ void Tracking::StereoInitialization()
+ {
++    // The ATD rectified stereo rig can deliver a textured left image with no
++    // right-eye correspondences. Do not publish tracking on an empty map.
++    if (!mpCamera2 && (mSensor == System::STEREO || mSensor == System::IMU_STEREO) &&
++        std::count_if(mCurrentFrame.mvDepth.begin(), mCurrentFrame.mvDepth.end(),
++                      [](float z) { return z > 0.0f && std::isfinite(z); }) < 50)
++        return;
+     if(mCurrentFrame.N>500)
+     {
+         if (mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
+@@ -2438,7 +2467,6 @@ void Tracking::StereoInitialization()
+ 
+         mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.push_back(pKFini);
+ 
+-        mpMapDrawer->SetCurrentCameraPose(mCurrentFrame.GetPose());
+ 
+         mState=OK;
+     }
+@@ -2649,7 +2677,6 @@ void Tracking::CreateInitialMapMonocular()
+ 
+     mpAtlas->SetReferenceMapPoints(mvpLocalMapPoints);
+ 
+-    mpMapDrawer->SetCurrentCameraPose(pKFcur->GetPose());
+ 
+     mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.push_back(pKFini);
+ 
+@@ -3627,7 +3654,7 @@ bool Tracking::Relocalization()
+     // If enough matches are found we setup a PnP solver
+     ORBmatcher matcher(0.75,true);
+ 
+-    vector<MLPnPsolver*> vpMLPnPsolvers;
++    vector<std::unique_ptr<MLPnPsolver>> vpMLPnPsolvers;
+     vpMLPnPsolvers.resize(nKFs);
+ 
+     vector<vector<MapPoint*> > vvpMapPointMatches;
+@@ -3655,7 +3682,7 @@ bool Tracking::Relocalization()
+             {
+                 MLPnPsolver* pSolver = new MLPnPsolver(mCurrentFrame,vvpMapPointMatches[i]);
+                 pSolver->SetRansacParameters(0.99,10,300,6,0.5,5.991);  //This solver needs at least 6 points
+-                vpMLPnPsolvers[i] = pSolver;
++                vpMLPnPsolvers[i].reset(pSolver);
+                 nCandidates++;
+             }
+         }
+@@ -3678,7 +3705,7 @@ bool Tracking::Relocalization()
+             int nInliers;
+             bool bNoMore;
+ 
+-            MLPnPsolver* pSolver = vpMLPnPsolvers[i];
++            MLPnPsolver* pSolver = vpMLPnPsolvers[i].get();
+             Eigen::Matrix4f eigTcw;
+             bool bTcw = pSolver->iterate(5,bNoMore,vbInliers,nInliers, eigTcw);
+ 
+@@ -3780,12 +3807,6 @@ void Tracking::Reset(bool bLocMap)
+ {
+     Verbose::PrintMess("System Reseting", Verbose::VERBOSITY_NORMAL);
+ 
+-    if(mpViewer)
+-    {
+-        mpViewer->RequestStop();
+-        while(!mpViewer->isStopped())
+-            usleep(3000);
+-    }
+ 
+     // Reset Local Mapping
+     if (!bLocMap)
+@@ -3831,8 +3852,6 @@ void Tracking::Reset(bool bLocMap)
+     mpLastKeyFrame = static_cast<KeyFrame*>(NULL);
+     mvIniMatches.clear();
+ 
+-    if(mpViewer)
+-        mpViewer->Release();
+ 
+     Verbose::PrintMess("   End reseting! ", Verbose::VERBOSITY_NORMAL);
+ }
+@@ -3840,12 +3859,6 @@ void Tracking::Reset(bool bLocMap)
+ void Tracking::ResetActiveMap(bool bLocMap)
+ {
+     Verbose::PrintMess("Active map Reseting", Verbose::VERBOSITY_NORMAL);
+-    if(mpViewer)
+-    {
+-        mpViewer->RequestStop();
+-        while(!mpViewer->isStopped())
+-            usleep(3000);
+-    }
+ 
+     Map* pMap = mpAtlas->GetCurrentMap();
+ 
+@@ -3922,8 +3935,6 @@ void Tracking::ResetActiveMap(bool bLocMap)
+ 
+     mbVelocity = false;
+ 
+-    if(mpViewer)
+-        mpViewer->Release();
+ 
+     Verbose::PrintMess("   End reseting! ", Verbose::VERBOSITY_NORMAL);
+ }

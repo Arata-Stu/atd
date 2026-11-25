@@ -17,7 +17,8 @@
   <exec_depend>std_msgs</exec_depend><exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>atd_recording</exec_depend>
   <exec_depend>atd_mapping</exec_depend><exec_depend>ros2bag</exec_depend>
-  <exec_depend>rosbag2_interfaces</exec_depend>
+  <exec_depend>rosbag2_interfaces</exec_depend><exec_depend>std_srvs</exec_depend>
+  <exec_depend>tf2_msgs</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <!-- GUI for the Notebook replay executable. The ATD image provisions it only on amd64. -->
   <exec_depend>rviz2</exec_depend><exec_depend>rviz_default_plugins</exec_depend>

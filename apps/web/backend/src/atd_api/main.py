@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from atd_processing.geometry import settings as generation_settings
 from .jobs import Jobs
-from .offline import DEFAULT_INPUTS, build_payload, vgl_exports, vgl_payload
+from .offline import DEFAULT_INPUTS, MAP_DOMAIN, build_payload, vgl_exports, vgl_payload
 from .store import Store, atomic_json, confined, read_json
 from . import transfers
 from . import capture as capture_service
@@ -93,6 +93,8 @@ class AdoptCalibration(Strict):
 class Build(Strict):
     id: str
     bag: str
+    backend: Literal['cuvslam', 'orbslam3'] = 'cuvslam'
+    rate: float | None = Field(default=None, ge=.05, le=4., allow_inf_nan=False)
     left_image: str = DEFAULT_INPUTS['left_image']
     right_image: str = DEFAULT_INPUTS['right_image']
     left_info: str = DEFAULT_INPUTS['left_info']
@@ -218,8 +220,12 @@ def create_app(record_root=None, result_root=None, static_dir=None):
 
     @app.post('/api/maps/build')
     def build(body: Build):
-        payload = build_payload(store, body.model_dump())
-        return jobs.start('map_build', payload, ['map:' + body.id, 'ros-domain:93', 'offline-mapping'], '公式 cuVSLAM 地図作成: ' + body.id)
+        payload = build_payload(store, body.model_dump(exclude_none=True))
+        resources = ['map:' + body.id, f'ros-domain:{MAP_DOMAIN}', 'offline-mapping']
+        if body.backend == 'orbslam3':
+            resources.append('record:' + payload['bag'])
+        name = 'ORB-SLAM3' if body.backend == 'orbslam3' else '公式 cuVSLAM'
+        return jobs.start('map_build', payload, resources, f'{name} 地図作成: {body.id}')
 
     @app.get('/api/maps/{key}')
     def load_map(key: str):
@@ -317,6 +323,8 @@ def create_app(record_root=None, result_root=None, static_dir=None):
             document = store.load_map(key)
             if document.get('source', {}).get('kind') == 'nvidia_offline':
                 raise ValueError('NVIDIA 保存地図の点群は「保存地図から点群取得」で準備してください')
+            if document.get('source', {}).get('kind') == 'orbslam3':
+                raise ValueError('ORB-SLAM3 地図には保存 Atlas の特徴点を使用します')
             if body.get('revision') != document['revision']:
                 raise ValueError('地図 revision が変わりました')
             atomic_json(store.folder(key) / 'hdmap/cloud.json', dict(frame='map', points=body['points'], provenance='explicit_import'))

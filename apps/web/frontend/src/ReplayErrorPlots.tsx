@@ -41,7 +41,7 @@ export function CourseMap({course, view, zoom, selected, reference, select}: {
   }, [course, view, zoom]);
   const {x,y} = picture;
   const gt = selected ? [selected.gt_x_m,selected.gt_y_m] : reference ? [reference.x_m,reference.y_m] : null;
-  return <svg className="replay-map" viewBox="0 0 500 335" role="img" aria-label="コース図。青が Gazebo、橙の破線が cuVSLAM。コース上をクリックして地点を選択"
+  return <svg className="replay-map" viewBox="0 0 500 335" role="img" aria-label="コース図。青が Gazebo、橙の破線が推定軌跡。コース上をクリックして地点を選択"
     onPointerDown={event => {
       const pt = pointer(event);
       if (!pt) return;

@@ -81,6 +81,22 @@ class Store:
         folder = self.folder(key)
         raw = confined(folder, 'hdmap/map.json').read_bytes()
         document = json.loads(raw)
+        source = document.get('source', {})
+        if isinstance(source, dict) and source.get('kind') == 'orbslam3':
+            # The ROS loader verifies both large assets before opening the Atlas. The
+            # live view compares identities without re-reading the Atlas every refresh.
+            manifest = read_json(confined(folder, 'orbslam3/manifest.json'))
+            if (not isinstance(manifest, dict) or manifest.get('schema') != 'atd.orbslam3.map.v1'
+                    or not isinstance(manifest.get('files'), dict)):
+                raise ValueError('ORB-SLAM3 地図の manifest が不正です')
+            files = manifest['files']
+            frozen = {name: files.get(name) for name in ('atlas.osa', 'camera.yml')}
+            encoded = json.dumps(frozen, sort_keys=True, separators=(',', ':')).encode()
+            map_digest = hashlib.sha256(encoded).hexdigest()
+            if (map_digest != source.get('map_sha256')
+                    or any(not re.fullmatch('[0-9a-f]{64}', str(value)) for value in frozen.values())):
+                raise ValueError('HDMap と ORB-SLAM3 の地図識別情報が一致しません')
+            return dict(document=document, hdmap_sha256=hashlib.sha256(raw).hexdigest(), map_sha256=map_digest)
         marker = confined(folder, 'vgl.json', exists=False)
         profile = read_json(marker) if marker.is_file() else {}
         fingerprint = profile.get('cuvslam_sha256')

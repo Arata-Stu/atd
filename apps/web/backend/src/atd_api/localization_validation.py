@@ -1,16 +1,14 @@
 """Notebook の保存地図と別 bag を選択し、既存の ROS 検証 CLI をジョブで実行する。"""
 from functools import lru_cache
 import hashlib
-import os
 import re
 from pathlib import Path
-import subprocess
 import time
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from .jobs import ROS_SETUP
+from .jobs import ros_program
 from .store import confined, identifier, read_json
 
 router = APIRouter()
@@ -30,16 +28,7 @@ class ValidationRun(BaseModel):
 
 @lru_cache(maxsize=1)
 def _probe(_interval):
-    try:
-        completed = subprocess.run(['bash', '-c', ROS_SETUP + 'exec ros2 pkg prefix atd_localization'],
-                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
-        prefix = Path(completed.stdout.strip())
-        executable = prefix / 'lib/atd_localization/validate_bag'
-        if completed.returncode == 0 and prefix.is_absolute() and executable.is_file() and os.access(executable, os.X_OK):
-            return executable
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    return None
+    return ros_program('atd_localization', 'validate_bag')
 
 
 def validator():
@@ -49,14 +38,17 @@ def validator():
 def _check_map(reference, key):
     doc = reference['document']
     source = doc.get('source', {})
-    if (doc.get('id') != key or doc.get('frame') != 'map' or not isinstance(source, dict) or source.get('kind') != 'nvidia_offline'
+    if (doc.get('id') != key or doc.get('frame') != 'map' or not isinstance(source, dict)
+            or source.get('kind') not in ('nvidia_offline', 'orbslam3')
             or not isinstance(source.get('inputs'), dict) or source['inputs'].get('base_frame') != 'base_link'):
-        raise ValueError('base_link で作成した NVIDIA 地図を選択してください')
+        raise ValueError('base_link で作成した NVIDIA または ORB-SLAM3 地図を選択してください')
     if (not isinstance(source.get('bag'), str) or not source['bag']
             or not re.fullmatch('[0-9a-f]{64}', str(source.get('metadata_sha256', '')))):
         raise ValueError('地図作成 bag の識別情報が不足しています')
-    if not reference['map_sha256']:
+    if not reference['map_sha256'] and source['kind'] == 'nvidia_offline':
         raise ValueError('この地図の VGL 準備を完了してください')
+    if not reference['map_sha256']:
+        raise ValueError('ORB-SLAM3 地図の識別情報がありません')
 
 
 def _bag(store, bag_id, source):
@@ -105,13 +97,14 @@ def options(store, selected):
         try:
             reference = store.live_reference(folder.name)
             doc = reference['document']
-            entry.update(title=doc.get('title', folder.name), revision=doc['revision'],
+            entry.update(title=doc.get('title', folder.name), revision=doc['revision'], backend=doc.get('source', {}).get('kind'),
                          source_bag=doc.get('source', {}).get('bag', ''),
                          has_raceline=bool(doc.get('lines', {}).get('raceline', {}).get('points')))
             _check_map(reference, folder.name)
             if folder.name == selected:
-                engines = _engines(store, selected)
                 source = doc['source']
+                if source['kind'] == 'nvidia_offline':
+                    engines = _engines(store, selected)
             entry['ready'] = True
         except (OSError, ValueError, KeyError, AttributeError, TypeError) as error:
             entry['issue'] = str(error)
@@ -136,7 +129,7 @@ def payload(store, body):
     if doc['revision'] != body.revision:
         raise ValueError('地図が更新されています。地図を再選択してください')
     bag, sha = _bag(store, body.bag, doc['source'])
-    if body.engine_dir is not None and body.engine_dir not in _engines(store, body.map_id):
+    if body.engine_dir is not None and (doc['source']['kind'] == 'orbslam3' or body.engine_dir not in _engines(store, body.map_id)):
         raise ValueError('地図の VGL export に対応する engine を選択してください')
     if validator() is None:
         raise ValueError(BUILD_HINT)

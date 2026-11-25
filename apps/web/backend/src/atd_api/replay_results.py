@@ -54,6 +54,15 @@ def _summary(folder):
     keys = ('version', 'id', 'bag', 'created_at', 'status', 'sample_count', 'rate', 'circuit', 'laps',
             'lap_length_m', 'reason')
     summary = {key: value.get(key) for key in keys}
+    if 'backend' in value:
+        if value['backend'] not in ('cuvslam', 'orbslam3'):
+            raise ValueError('replay の SLAM バックエンドが不正です')
+        summary['backend'] = value['backend']
+        if value['backend'] == 'orbslam3':
+            mode, map_id = value.get('mode'), value.get('map_id')
+            if mode not in ('mapping', 'localization') or (map_id is not None and not isinstance(map_id, str)):
+                raise ValueError('ORB-SLAM3 replay の地図情報が不正です')
+            summary.update(mode=mode, map_id=map_id)
     if 'tracking' in value:
         if value['tracking'] not in ('vo', 'vio'):
             raise ValueError('replay の追跡方式が不正です')

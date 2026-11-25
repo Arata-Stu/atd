@@ -4,11 +4,12 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-使い方: scripts/dev.sh [--host notebook|pc|jetson] [--workspace DIR] [--build] [--dry-run]
+使い方: scripts/dev.sh [--host notebook|pc|jetson] [--workspace DIR] [--build] [--orbslam3] [--dry-run]
 
   --host       自動判定を上書きして、保存先のホスト設定を選択する
   --workspace  保存済みの ROS workspace を単発で上書きする
   --build      追加 Dockerfile をローカル build してから起動する
+  --orbslam3   ステレオ自己位置推定の実験用に ORB-SLAM3 を含むイメージを使う
   --dry-run    設定とコマンドを表示する。CLI / Docker は起動しない
   -h, --help   この説明を表示する
 
@@ -36,6 +37,7 @@ fail() {
 
 task_host=""
 task_build=false
+task_orbslam3=false
 task_dry_run=false
 task_workspace_override=""
 while (($#)); do
@@ -47,6 +49,7 @@ while (($#)); do
             shift 2
             ;;
         --build) task_build=true; shift ;;
+        --orbslam3) task_orbslam3=true; shift ;;
         --dry-run) task_dry_run=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) fail "不明な引数: $1（--help を参照）" ;;
@@ -192,6 +195,11 @@ task_runtime_revision="$(atd_runtime_revision "$task_project_dir")" || exit 1
 export ATD_RUNTIME_REV="$task_runtime_revision"
 # 起動引数は起動構成ごとに生成する。イメージタグには build 用の入力だけを反映する。
 export ATD_GENERATED_DOCKER_DIR="${task_project_dir}/.cache/docker/${ATD_RUNTIME_REV}"
+export ATD_ORBSLAM3_REV=''
+if $task_orbslam3; then
+    ATD_ORBSLAM3_REV="$(atd_image_revision "$task_project_dir" orbslam3)" || exit 1
+    ATD_GENERATED_DOCKER_DIR+="-orbslam3"
+fi
 export DOCKER_ARGS_FILE="${ATD_GENERATED_DOCKER_DIR}/dev.${task_host}.dockerargs"
 task_container_name="atd_${task_host}_dev"
 task_cli_args=(activate --config "docker.run.container_name=${task_container_name}")
@@ -212,6 +220,7 @@ else
 fi
 printf 'record: %s -> /data/record (read-write)\nresults: %s -> /data/results (read-write)\n' "$ATD_RECORD_DIR" "$ATD_RESULT_DIR"
 printf 'DDS: Fast DDS / UDPv4 loopback\nruntime: %s\n' "$ATD_RUNTIME_REV"
+if $task_orbslam3; then printf 'ORB-SLAM3: %s\n' "$ATD_ORBSLAM3_REV"; fi
 if [[ -n "$ATD_HOST_SSH_DIR" ]]; then printf 'SSH: %s -> /home/admin/.ssh (read-only)\n' "$ATD_HOST_SSH_DIR"; fi
 if [[ -n "$ATD_HOST_SSH_AGENT" ]]; then printf 'SSH agent: existing socket -> /run/atd/ssh-agent\n'; fi
 printf 'docker_args: %s\ncommand: isaac-ros' "$DOCKER_ARGS_FILE"
@@ -265,6 +274,8 @@ for destination, (source, writable) in expected.items():
             or mount.get("RW") != writable):
         sys.exit("エラー: 起動済みコンテナの mount が設定と異なります。記録等を終了してコンテナを再作成してください: " + sys.argv[1])
 environment = dict(item.split("=", 1) for item in container.get("Config", {}).get("Env", []) if "=" in item)
+if os.environ["ATD_ORBSLAM3_REV"] and environment.get("ATD_ORBSLAM3_REV") != os.environ["ATD_ORBSLAM3_REV"]:
+    sys.exit("エラー: ORB-SLAM3 実験イメージが異なります。処理を終了し --build --orbslam3 で再作成してください")
 ssh_source = os.environ.get("ATD_HOST_SSH_DIR", "")
 ssh_agent = os.environ.get("ATD_HOST_SSH_AGENT", "")
 if ssh_source:
@@ -339,6 +350,10 @@ import sys
 import tempfile
 root, destination, revision = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 source = (root / 'docker/Dockerfile.atd').read_bytes()
+if os.environ['ATD_ORBSLAM3_REV']:
+    source += (b'\nRUN --mount=type=bind,source=orbslam3,target=/tmp/atd-orb-build,readonly '
+               b'bash /tmp/atd-orb-build/install.sh\nENV ATD_ORBSLAM3_REV='
+               + os.environ['ATD_ORBSLAM3_REV'].encode() + b'\n')
 dockerfile = source + ('\n# ATD image source revision: ' + revision + '\n').encode()
 arguments = (root / 'docker/dev.dockerargs').read_text().splitlines(keepends=True)
 if os.environ['ATD_SERIAL_ACCESS'] == '1':

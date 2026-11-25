@@ -179,3 +179,39 @@ def test_inspect_bag_reads_real_topic_contract_and_refuses_frame_mismatch(tmp_pa
     raw[0][1].transforms.pop()
     with pytest.raises(ValueError, match='Missing static TF'):
         inspect_inputs(tmp_path, description)
+
+
+def test_orb_startup_publishes_one_shot_calibration_before_ready_and_play(monkeypatch):
+    import sys
+    from unittest.mock import Mock
+    from atd_localization import orb_replay
+
+    bootstrap = orb_replay.OrbBootstrap.__new__(orb_replay.OrbBootstrap)
+    bootstrap.node = Mock()
+    bootstrap.ready = False
+    outputs = [Mock(), Mock(), Mock()]
+    bootstrap.seeds = list(zip(outputs, ['tf', 'left_info', 'right_info']))
+    # Startup discovery initially sees only a subset of the camera subscribers.
+    for publisher in outputs:
+        publisher.get_subscription_count.return_value = 1
+    outputs[-1].get_subscription_count.side_effect = [0, 1, 1]
+    clock = [0.]
+    def spin(node, timeout_sec):
+        clock[0] += .1
+        if all(p.publish.called for p in outputs):
+            bootstrap.ready = True
+    monkeypatch.setitem(sys.modules, 'rclpy', SimpleNamespace(spin_once=spin))
+    monkeypatch.setattr(orb_replay, 'monotonic', lambda: clock[0])
+    check = Mock()
+    bootstrap.wait(check, 1.)
+    assert check.call_count == 2
+    for publisher, message in bootstrap.seeds:
+        publisher.publish.assert_called_once_with(message)
+
+
+def test_orb_validation_uses_only_dynamic_images_in_the_paused_player():
+    command = replay.play_command('/bag', ['/infra1', '/infra2'], '/qos', .5, paused_player='orb_player')
+    assert '--start-paused' in command and '__node:=orb_player' in command
+    assert command[command.index('--topics')+1:] == ['/infra1', '/infra2']
+    window = stereo_window([10, 20, 30], [11, 21, 31], 1, left_stamp=True)
+    assert (window['first_stamp_ns'], window['last_stamp_ns']) == (10, 30)

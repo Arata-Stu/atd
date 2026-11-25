@@ -28,6 +28,20 @@ ROS_SETUP = ('set -e; source /opt/ros/lyrical/setup.bash; '
              'source "$ISAAC_ROS_WS/install/setup.bash"; fi; ')
 
 
+def ros_program(package, name):
+    """Resolve an installed program in the ROS overlay used by the worker."""
+    try:
+        completed = subprocess.run(['bash', '-c', ROS_SETUP + 'exec ros2 pkg prefix "$1"', 'atd-ros-probe', package],
+                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        prefix = Path(completed.stdout.strip())
+        program = prefix / 'lib' / package / name
+        if completed.returncode == 0 and prefix.is_absolute() and program.is_file() and os.access(program, os.X_OK):
+            return program
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
 class Cancelled(Exception):
     pass
 

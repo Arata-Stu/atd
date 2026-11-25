@@ -1,0 +1,6 @@
+include(CMakeFindDependencyMacro)
+find_dependency(Eigen3 3.3 NO_MODULE)
+find_dependency(OpenCV 4 COMPONENTS core imgproc features2d calib3d imgcodecs)
+find_dependency(Boost COMPONENTS serialization)
+find_dependency(Threads)
+include("${CMAKE_CURRENT_LIST_DIR}/ATDOrbslam3Targets.cmake")

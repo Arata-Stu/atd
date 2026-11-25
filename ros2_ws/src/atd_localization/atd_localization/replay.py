@@ -54,9 +54,11 @@ def launch_command(results, map_id, engine):
     return args
 
 
-def play_command(bag, topics, qos, rate):
+def play_command(bag, topics, qos, rate, *, paused_player=None):
     return ['ros2', 'bag', 'play', str(bag), '--clock', '--rate', str(rate),
-            '--qos-profile-overrides-path', str(qos), '--topics', *topics]
+            '--qos-profile-overrides-path', str(qos),
+            *(['--start-paused', '--disable-keyboard-controls', '--remap', f'__node:={paused_player}'] if paused_player else []),
+            '--topics', *topics]
 
 
 def run_ros(args, meta, bag, topics, duration, report, output):
@@ -64,7 +66,6 @@ def run_ros(args, meta, bag, topics, duration, report, output):
     from ament_index_python.packages import get_package_share_directory
     from atd_interfaces.msg import LocalizationStatus
     from rclpy.signals import SignalHandlerOptions
-    from isaac_ros_visual_slam_interfaces.srv import LocalizeInMap
 
     os.environ.update(ROS_DOMAIN_ID=str(args.domain), ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST', ROS_STATIC_PEERS='')
     def interrupt(*_):
@@ -99,12 +100,35 @@ def run_ros(args, meta, bag, topics, duration, report, output):
                 writer.writerow([stamp, msg.epoch, *sample])
 
         node.create_subscription(LocalizationStatus, STATUS, observe, 20)
-        client = node.create_client(LocalizeInMap, '/visual_slam/localize_in_map')
+        orb = meta.get('backend') == 'orbslam3'
+        if not orb:
+            from isaac_ros_visual_slam_interfaces.srv import LocalizeInMap
+            client = node.create_client(LocalizeInMap, '/visual_slam/localize_in_map')
         start = time.monotonic()
         while time.monotonic() - start < 1.:
             rclpy.spin_once(node, timeout_sec=.1)
-        if any(node.count_publishers(t) for t in [*topics, '/clock', STATUS, '/tf']):
+        feedback = [STATUS, *(['/orbslam3/ready', '/orbslam3/processed'] if orb else [])]
+        if any(node.count_publishers(t) for t in [*topics, *feedback, '/tf', '/clock']):
             raise ValueError('検証 domain に既存の sensor/TF/clock/localization publisher があります')
+        playback_topics = topics
+        paused_player = None
+        if orb:
+            from .orb_replay import OrbBootstrap, recorded_calibration
+            from .replay_player import _check_publishers, _connection_issues, _endpoints, resume_when_connected
+            from rclpy.qos import QoSProfile, DurabilityPolicy
+            from std_msgs.msg import Header
+
+            calibration, _ = recorded_calibration(bag)
+            bootstrap = OrbBootstrap(node, calibration)
+            playback_topics = [topic for topic in topics if topic not in bootstrap.topics]
+            paused_player = f'atd_orb_validation_{os.getpid()}'
+            processed_stamp = None
+
+            def processed(msg):
+                nonlocal processed_stamp
+                processed_stamp = stamp_ns(msg.stamp)
+            node.create_subscription(Header, '/orbslam3/processed', processed,
+                                     QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         launch = subprocess.Popen(launch_command(args.results_root, args.map_id, args.engine_dir), start_new_session=True)
         stack.callback(stop, launch)
         deadline = time.monotonic() + args.ready_timeout
@@ -112,17 +136,35 @@ def run_ros(args, meta, bag, topics, duration, report, output):
             rclpy.spin_once(node, timeout_sec=.1)
             if launch.poll() is not None:
                 raise ValueError('自己位置推定 launch の起動に失敗しました')
-            if (client.service_is_ready() and node.count_publishers(STATUS) == 1
-                    and node.count_subscribers('/localization/pose_hint') >= 2
-                    and all(node.count_subscribers(meta['workflow'][key]) >= 2
+            if (all(node.count_publishers(topic) == 1 for topic in feedback)
+                    and (orb or (client.service_is_ready() and node.count_subscribers('/localization/pose_hint') >= 2))
+                    and all(node.count_subscribers(meta['workflow'][key]) >= (1 if orb else 2)
                             for key in ('left_image', 'right_image', 'left_info', 'right_info'))):
                 break
         else:
-            raise ValueError('cuVSLAM・VGL・状態ノードの準備がタイムアウトしました')
-        identity = publisher_signature(node, [STATUS])
+            raise ValueError('保存地図の自己位置推定ノードの準備がタイムアウトしました')
+        identity = publisher_signature(node, feedback)
         qos = Path(get_package_share_directory('atd_mapping')) / 'config/replay_qos.yaml'
-        player = subprocess.Popen(play_command(bag, topics, qos, args.rate), start_new_session=True)
+        player = subprocess.Popen(play_command(bag, playback_topics, qos, args.rate, paused_player=paused_player),
+                                  start_new_session=True)
         stack.callback(stop, player)
+        if orb:
+            def check_children():
+                if launch.poll() is not None or player.poll() is not None:
+                    raise ValueError('ORB-SLAM3 または bag player が再生開始前に終了しました')
+
+            def missing():
+                issues = []
+                for topic in [*playback_topics, '/clock']:
+                    kind = 'rosgraph_msgs/msg/Clock' if topic == '/clock' else 'sensor_msgs/msg/Image'
+                    producer, consumer = '/' + paused_player, '/orbslam3_node'
+                    pubs = _check_publishers(node, topic, kind, producer, issues)
+                    subs = _endpoints(node.get_subscriptions_info_by_topic(topic), kind, consumer)
+                    issues.extend(_connection_issues(topic, pubs, subs, producer, consumer))
+                return issues
+
+            resume_when_connected(node, paused_player, args.ready_timeout, missing, check_children,
+                                  initialize=lambda: bootstrap.wait(check_children, args.ready_timeout))
         deadline = time.monotonic() + duration / args.rate * 2 + args.ready_timeout
         next_check = time.monotonic()
         while player.poll() is None:
@@ -130,18 +172,28 @@ def run_ros(args, meta, bag, topics, duration, report, output):
             if launch.poll() is not None or time.monotonic() > deadline:
                 raise ValueError('再生中に自己位置推定が終了、またはタイムアウトしました')
             if time.monotonic() >= next_check:
-                if (publisher_signature(node, [STATUS]) != identity
+                if (publisher_signature(node, feedback) != identity
                         or any(node.count_publishers(t) > 1 for t in [*topics, '/clock'])):
                     raise ValueError('再生中に入力または自己位置 publisher が変わりました')
                 next_check = time.monotonic() + 1.
         if player.returncode:
             raise ValueError(f'rosbag 再生が失敗しました（exit {player.returncode}）')
         deadline = time.monotonic() + args.drain_timeout
-        while time.monotonic() < deadline and not report.summary()['tail_tracked']:
+        def still_draining():
+            return (processed_stamp != report.stereo['last_stamp_ns'] if orb else not report.summary()['tail_tracked'])
+
+        while time.monotonic() < deadline and still_draining():
             rclpy.spin_once(node, timeout_sec=.05)
             if launch.poll() is not None:
                 raise ValueError('再生末尾の処理中に自己位置推定が終了しました')
-        if publisher_signature(node, [STATUS]) != identity or launch.poll() is not None:
+        if orb and still_draining():
+            raise ValueError(f"末尾の ORB-SLAM3 画像処理を確認できません: {processed_stamp} / {report.stereo['last_stamp_ns']} ns")
+        if orb:
+            # Separate DDS writers can deliver the final status just after the last processed-frame receipt.
+            deadline = time.monotonic() + .5
+            while time.monotonic() < deadline:
+                rclpy.spin_once(node, timeout_sec=.02)
+        if publisher_signature(node, feedback) != identity or launch.poll() is not None:
             raise ValueError('検証完了前に自己位置推定が終了・再起動しました')
         if not report.session_id:
             raise ValueError('状態ノードから検証結果を受信できませんでした')
@@ -149,7 +201,7 @@ def run_ros(args, meta, bag, topics, duration, report, output):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--map', dest='map_id', help='保存済み NVIDIA 地図の ID')
+    parser.add_argument('--map', dest='map_id', help='保存済み NVIDIA または ORB-SLAM3 地図の ID')
     parser.add_argument('--bag', help='記録ルートからの相対パス（地図作成とは別の走行）')
     parser.add_argument('--results-root', type=Path, default=Path('/data/results'))
     parser.add_argument('--record-root', type=Path, default=Path('/data/record/rosbags'))
@@ -174,8 +226,11 @@ def main(argv=None):
     try:
         if not args.map_id:
             args.map_id = choose('保存地図', (p.parent.parent.name for p in
-                (args.results_root / 'maps').glob('*/hdmap/map.json') if (p.parents[1] / 'nvidia/cuvgl_map').is_dir()))
+                (args.results_root / 'maps').glob('*/hdmap/map.json') if not p.parents[1].name.startswith('.') and
+                ((p.parents[1] / 'nvidia/cuvgl_map').is_dir() or (p.parents[1] / 'orbslam3/manifest.json').is_file())))
         meta = map_metadata(args.results_root, args.map_id)
+        if meta.get('backend') == 'orbslam3' and args.engine_dir:
+            raise ValueError('ORB-SLAM3 地図に VGL engine は使用しません')
         if not args.bag:
             ids = (p.parent.relative_to(args.record_root).as_posix() for p in args.record_root.rglob('metadata.yaml'))
             args.bag = choose('別走行の bag', (i for i in ids if i != meta['source_bag']))

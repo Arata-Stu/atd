@@ -227,6 +227,8 @@ exit 130
         self.assert_call('replay.sh', '--tracking', 'vio')
         self.menu('replay', picks=['vo'])
         self.assert_call('replay.sh', '--tracking', 'vo')
+        self.menu('replay', picks=['orbslam3'])
+        self.assert_call('replay.sh', '--backend', 'orbslam3')
         self.menu('replay', picks=['cancel'])
         self.assertFalse(self.calls.exists())
         self.menu('replay', '--tracking', 'vio', picks=[])

@@ -20,7 +20,7 @@ export default function MapLibraryDialog({ doc, action, busy, onClose, onSubmit 
   const target = scope === 'map' ? '地図全体' : 'HDMap編集内容';
   const description = duplicate
     ? scope === 'map' ? '地図フォルダー内の全資産を新しいIDにコピーします。' : '境界・走行ライン・校正制限と表示用点群を、新しい手動編集用HDMapにコピーします。'
-    : scope === 'map' ? 'このNotebookにある地図フォルダーを削除します。cuVSLAM・VGL地図、点群、HDMap、書き出し履歴が対象です。' : '境界・Custom点・生成ライン・採用した校正制限と書き出し履歴を削除します。地図ID・背景点群・cuVSLAM・VGL地図は引き続き使えます。';
+    : scope === 'map' ? 'このNotebookにある地図フォルダーを削除します。自己位置推定用の地図、点群、HDMap、書き出し履歴が対象です。' : '境界・Custom点・生成ライン・採用した校正制限と書き出し履歴を削除します。地図ID・背景点群・自己位置推定用の地図は引き続き使えます。';
   return <Modal title={duplicate ? '地図を複製' : '地図の削除'} subtitle={`対象地図　${doc.id}（${hasHdmap ? 'rev ' + doc.revision : 'Gazebo 保存地図'}）`} onClose={() => !busy && onClose()}>
     <form onSubmit={e => { e.preventDefault(); onSubmit(scope, destination); }}>
       {hasHdmap && <Field label={duplicate ? '複製する範囲' : '削除する範囲'}><select value={scope} onChange={e => setScope(e.target.value as MapScope)} disabled={busy}>

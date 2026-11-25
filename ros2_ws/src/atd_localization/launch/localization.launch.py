@@ -13,6 +13,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 from atd_mapping.capture_config import component_configuration
 from atd_localization.assets import prepare_runtime
+from atd_localization.orb_assets import is_orb_map, orb_map_metadata
 
 
 def setup(context):
@@ -26,6 +27,16 @@ def setup(context):
     gazebo_imu_frequency = value('gazebo_imu_frequency')
     if gazebo_imu_frequency and not sim_time:
         raise ValueError('Gazebo の統合 IMU にはシミュレーション時刻が必要です')
+    if is_orb_map(value('results_root'), value('map_id')):
+        if value('engine_dir') or gazebo_imu_frequency:
+            raise ValueError('ORB-SLAM3 の固定地図定位は stereo を使用します。engine_dir と IMU 指定を外してください')
+        assets = orb_map_metadata(value('results_root'), value('map_id'))
+        params = {key: ParameterValue(assets[key], value_type=str)
+                  for key in ('map_id', 'map_sha256', 'hdmap_sha256', 'atlas_path')}
+        params.update(mode='localization', camera_fps=float(assets['camera_fps']), use_sim_time=sim_time)
+        return [Node(package='atd_orbslam3', executable='orbslam3_node', name='orbslam3_node',
+                     parameters=[params], output='screen',
+                     on_exit=[Shutdown(reason='ORB-SLAM3 固定地図の自己位置推定が終了しました')])]
     work = tempfile.TemporaryDirectory(prefix='atd-localization-')
     try:
         assets = prepare_runtime(value('results_root'), value('map_id'), value('engine_dir'), work.name)

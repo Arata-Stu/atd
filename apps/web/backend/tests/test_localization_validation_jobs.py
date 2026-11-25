@@ -1,5 +1,6 @@
 """実 API と独立 worker を使い、ROS 実行先だけをテスト用 executable に置き換える。"""
 from hashlib import sha256
+import json
 import os
 from pathlib import Path
 import time
@@ -98,6 +99,24 @@ def test_options_and_preflight(api):
                      {'engine_dir':'models/vgl/unrelated'}]:
         body = dict(map_id='circuit', revision=1, bag='day2/lap') | override
         assert api.post('/api/localization/runs', json=body).status_code == 400
+
+
+def test_orb_map_selection_preserves_identity_without_a_vgl_engine(api):
+    store = api.app.state.store
+    doc = store.create_map('orb')
+    folder = store.folder('orb')
+    files = {'atlas.osa': 'a'*64, 'camera.yml': 'b'*64}
+    digest = sha256(json.dumps(files, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    doc['source'] = dict(kind='orbslam3', inputs=dict(base_frame='base_link'), map_sha256=digest,
+                         bag='day1/lap', metadata_sha256=sha256(b'mapping').hexdigest())
+    atomic_json(folder / 'hdmap/map.json', doc)
+    atomic_json(folder / 'orbslam3/manifest.json', dict(schema='atd.orbslam3.map.v1', files=files))
+    options = api.get('/api/localization/options', params={'map_id': 'orb'}).json()
+    row = next(m for m in options['maps'] if m['id'] == 'orb')
+    assert row['ready'] and row['backend'] == 'orbslam3'
+    assert options['engine_dirs'] == [] and store.live_reference('orb')['map_sha256'] == digest
+    body = dict(map_id='orb', revision=1, bag='day2/lap', engine_dir='unexpected')
+    assert api.post('/api/localization/runs', json=body).status_code == 400
 
 
 @pytest.mark.parametrize('outcome', ['tracked_to_end', 'partial_tracking', 'no_tracking'])

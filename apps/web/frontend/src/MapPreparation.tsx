@@ -44,7 +44,7 @@ export function PreparationPanel({ doc, options, loading, error, pointcloudReady
     <div className="section-top"><h3>地図を編集する準備</h3>{doc && <button className="icon-button"
       aria-label="地図の準備状態を更新" disabled={loading || busy} onClick={onRefresh}><Icon name="refresh" size={15}/></button>}</div>
     <ol className="preparation-steps">
-      <PreparationStep index="01" name="cuVSLAM地図" state={doc ? 'complete' : 'ready'}
+      <PreparationStep index="01" name={doc ? 'cuVSLAM地図' : 'ステレオ地図'} state={doc ? 'complete' : 'ready'}
         status={doc ? '作成済み' : '未作成'} job={stageJob?.action === 'map_build' ? stageJob : undefined}
         action={doc ? '別の地図を作成' : 'rosbag から地図を作成'} onAction={onBuild} disabled={workLocked}/>
       <PreparationStep index="02" name="VGL地図" state={vglState} status={vglStatus}

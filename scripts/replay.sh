@@ -14,9 +14,13 @@ while (($#)); do
     case "$1" in
         --help|-h)
             cat <<'EOF'
-使い方: atd replay [BAG] [--tracking vo|vio] [--headless] [--rate RATE] [--slam-max-map-size N] [--dry-run]
+使い方: atd replay [BAG] [--backend cuvslam|orbslam3] [--tracking vo|vio] [--headless] [--rate RATE] [--slam-max-map-size N] [--dry-run]
 
-Linux Notebook の Isaac ROS コンテナで cuVSLAM と RViz を起動し、rosbag を再生します。
+Linux Notebook の Isaac ROS コンテナで選択した SLAM と RViz を起動し、rosbag を再生します（既定 cuVSLAM）。
+ORB-SLAM3 によるステレオ地図作成: atd replay BAG --backend orbslam3 --save-map MAP_ID --headless
+保存地図で別走行の 15 秒地点から再定位: atd replay OTHER_BAG --backend orbslam3 --map MAP_ID --start-offset 15 --headless
+ORB-SLAM3 VIO 比較: atd replay BAG --backend orbslam3 --tracking vio --imu-calibration IMU.yaml --headless
+ORB-SLAM3 の状態と軌跡は /data/results/runs/orbslam3/ に保存します。
 対話端末で引数なしの atd replay を実行すると、VO（左右画像）・VIO（左右画像＋統合 IMU）を選んでから bag を選びます。
 BAG を省略すると対話端末で記録を選べます。直接指定する場合はコンテナ内の bag パスを使います。
 RViz では cuVSLAM の直近の推定姿勢を橙の矢印で表示します。Gazebo の正解軌跡は青で重ねます。

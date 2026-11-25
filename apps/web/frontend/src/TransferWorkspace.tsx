@@ -138,7 +138,7 @@ export function TransferWorkspace({ notify, onJob, jobs, onCalibration }: {
         <div className="card-heading"><div className="transfer-direction"><span className="direction-icon upload"><Icon name="upload"/></span><div><span className="eyebrow">NOTEBOOK → JETSON</span><h3>地図を送信</h3></div></div></div>
         <div className="send-content"><Field label="送信する地図"><select value={map} onChange={e => setMap(e.target.value)}><option value="">保存済みの地図を選択</option>{maps.map(item => <option key={item.id} value={item.id}>{item.title || item.id} · rev {item.revision}</option>)}</select></Field>
           <div className="transfer-route"><span>このPC<strong>地図・HDMap・ライン</strong></span><Icon name="arrow"/><span>Jetson<strong>{connection.host || '未設定'}</strong></span></div>
-          <p className="small-note">{map && !source?.cuvslam_ready && source?.kind !== 'nvidia_offline' && <strong>この地図はHDMapのみです。自己位置推定用のNVIDIA地図は含みません。<br/></strong>}地図を検証してから新しいディレクトリに配置します。転送した地図の走行への適用は別の操作です。</p>
+          <p className="small-note">{source?.kind === 'orbslam3' ? <strong>ORB-SLAM3 の Atlas とカメラ校正を含みます。<br/></strong> : map && !source?.cuvslam_ready && source?.kind !== 'nvidia_offline' && <strong>この地図はHDMapのみです。自己位置推定用のNVIDIA地図は含みません。<br/></strong>}地図を検証してから新しいディレクトリに配置します。転送した地図の走行への適用は別の操作です。</p>
           <button className="button primary full" disabled={!canTransfer || !map} onClick={() => transfer('push', map)}><Icon name="upload" size={17}/>地図を送信する</button>
         </div><div className="card-footnote">転送の進捗とログは右下の「ジョブ」から確認できます。</div>
       </section>

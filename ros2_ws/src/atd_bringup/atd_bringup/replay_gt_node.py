@@ -19,7 +19,8 @@ class ReplayObserver(NamedTuple):
 
 
 class GroundTruthPath:
-    def __init__(self, trace, make_pose, result=None):
+    def __init__(self, trace, make_pose, result=None, *, fixed_alignment=None):
+        self.fixed_alignment = fixed_alignment
         self.result = result
         self.trace = trace
         self.make_pose = make_pose
@@ -61,10 +62,10 @@ class GroundTruthPath:
         p, q = odom.pose.pose.position, odom.pose.pose.orientation
         position = (p.x, p.y, p.z)
         if not all(map(math.isfinite, position)):
-            raise ValueError('cuVSLAM の推定位置に非有限値があります')
+            raise ValueError('推定位置に非有限値があります')
         orientation = (q.x, q.y, q.z, q.w)
         if anchor:
-            self.alignment = Alignment.from_anchor(sample, position, orientation)
+            self.alignment = self.fixed_alignment or Alignment.from_anchor(sample, position, orientation)
             self.anchor_ns = stamp
             self.history = [self.make_pose(stamp, *self.alignment.apply(sample))]
             self.next_index = bisect_right(self.trace.stamps, stamp)
@@ -102,7 +103,7 @@ class GroundTruthPath:
 
 
 @contextmanager
-def ground_truth_viewer(trace, result=None, *, visualize=True):
+def ground_truth_viewer(trace, result=None, *, visualize=True, orb=None):
     import rclpy
     from geometry_msgs.msg import Point, PoseStamped
     from nav_msgs.msg import Odometry, Path
@@ -111,7 +112,6 @@ def ground_truth_viewer(trace, result=None, *, visualize=True):
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from rosgraph_msgs.msg import Clock
     from sensor_msgs.msg import PointCloud2
-    from visualization_msgs.msg import Marker
 
     from .replay_inputs import (
         GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, LOOP_CLOSURE_CLOUD, SLAM_ODOMETRY,
@@ -129,11 +129,12 @@ def ground_truth_viewer(trace, result=None, *, visualize=True):
         q.x, q.y, q.z, q.w = orientation
         return msg
 
-    path = GroundTruthPath(trace, make_pose, result)
+    path = GroundTruthPath(trace, make_pose, result, fixed_alignment=orb.fixed_alignment if orb else None)
     executor = SingleThreadedExecutor()
     node = rclpy.create_node(GROUND_TRUTH_NODE)
     try:
         if visualize:
+            from visualization_msgs.msg import Marker
             output_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                                     reliability=ReliabilityPolicy.RELIABLE)
             publisher = node.create_publisher(Path, GROUND_TRUTH_PATH, output_qos)
@@ -161,7 +162,7 @@ def ground_truth_viewer(trace, result=None, *, visualize=True):
         def on_odometry(msg):
             try:
                 if path.observe_odometry(msg):
-                    node.get_logger().info(f'Gazebo 正解軌跡と cuVSLAM の初期姿勢を照合しました '
+                    node.get_logger().info(f'Gazebo 正解軌跡と観測姿勢の比較を開始しました '
                                            f'(sim time {path.anchor_ns / 1e9:.9f} s)')
             except ValueError as exc:
                 node.get_logger().warning(str(exc), throttle_duration_sec=5.0)
@@ -178,7 +179,7 @@ def ground_truth_viewer(trace, result=None, *, visualize=True):
                     publish_error(stamp)
             if not warned and path.anchor_ns is None and stamp >= trace.stamps[-1]:
                 node.get_logger().warning('Gazebo 軌跡の末尾に到達しましたが、走行区間内の '
-                                          'cuVSLAM の map → base_link 姿勢がまだ届いていません')
+                                          'map → base_link 姿勢がまだ届いていません')
                 warned = True
 
         def on_timer():
@@ -196,7 +197,7 @@ def ground_truth_viewer(trace, result=None, *, visualize=True):
         node.create_subscription(Odometry, SLAM_ODOMETRY, on_odometry,
                                  QoSProfile(depth=256, reliability=ReliabilityPolicy.BEST_EFFORT))
         loop_graph = None
-        if result is not None:
+        if result is not None and not orb:
             def on_closure_cloud(msg):
                 if msg.header.frame_id != 'map':
                     return

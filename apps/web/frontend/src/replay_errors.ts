@@ -6,6 +6,9 @@ export interface ReplayRun {
   status: string;
   reason: string | null;
   sample_count: number;
+  backend?: 'cuvslam' | 'orbslam3';
+  mode?: 'mapping' | 'localization';
+  map_id?: string | null;
   slam_max_map_size?: number;
   tracking?: 'vo' | 'vio';
   imu_hz?: number;

@@ -518,6 +518,20 @@ class DevScriptTests(unittest.TestCase):
                 self.assertTrue(activation["generated_dockerfile"].startswith(
                     (PROJECT / "docker/Dockerfile.atd").read_text()))
 
+    def test_orbslam3_build_uses_its_own_generated_recipe(self):
+        result = self.invoke("pc", "--build", "--orbslam3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        experimental, = self.activations()
+        self.assertIn("bash /tmp/atd-orb-build/install.sh", experimental["generated_dockerfile"])
+        self.assertRegex(experimental["generated_dockerfile"], r"ENV ATD_ORBSLAM3_REV=[0-9a-f]{64}")
+        self.reset_calls()
+        result = self.invoke("pc")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        default, = self.activations()
+        self.assertNotIn("atd-orb-build", default["generated_dockerfile"])
+        self.assertNotEqual(default["generated_directory"], experimental["generated_directory"])
+        self.assertEqual(default["runtime"], experimental["runtime"])
+
     def test_one_invocation_environment_overrides_selected_host(self):
         record = self.root / "override record"
         results = self.root / "override results"

@@ -2,6 +2,8 @@
 
 D455 の左右 rectified IR と CameraInfo、実測した車体・カメラ間の静的 TF を使い、後輪軸中央の `base_link` を保存地図上で追跡する。cuVGL が初期姿勢候補を出し、cuVSLAM が保存地図への位置合わせとステレオ VO を担当する。ライブ・bag 再生ともに `localization.launch.py` を使用する。
 
+実験ブランチでは ORB-SLAM3 で作った地図も選択できる。Atlas の作成、別走行のコース途中からの初期定位、IMU 比較の手順は [ORB-SLAM3 の試験](../../../docs/orbslam3.md)を参照。
+
 ## Jetson で手動走行を観測する
 
 Notebook で作った cuVSLAM・VGL 地図と HDMap・Raceline を Jetson に転送し、同じモデル export から Jetson 用 engine を準備する。[起動・転送手順](../../../docs/bringup.md)・[VGL engine の準備](../../../docs/vgl_models.md)

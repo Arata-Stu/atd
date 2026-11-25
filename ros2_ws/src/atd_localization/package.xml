@@ -10,6 +10,7 @@
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>atd_mapping</exec_depend>
   <exec_depend>atd_interfaces</exec_depend>
+  <exec_depend>atd_orbslam3</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rclpy</exec_depend>
@@ -23,6 +24,8 @@
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>rosbag2_interfaces</exec_depend>
   <exec_depend>tf2_msgs</exec_depend>
   <exec_depend>rosbag2_py</exec_depend>
   <exec_depend>ros2bag</exec_depend>

@@ -13,6 +13,11 @@ function mapLimitLabel(limit?: number) {
   if (limit === undefined) return '地図上限 未記録';
   return limit === 0 ? '地図上限なし' : `地図上限 ${limit.toLocaleString()} 姿勢`;
 }
+function sourceLabel(run: ReplayRun) {
+  if (run.backend === 'orbslam3') return run.mode === 'localization' ? `固定地図 ${run.map_id}` : '地図作成';
+  return mapLimitLabel(run.slam_max_map_size);
+}
+function backendLabel(run: ReplayRun) { return run.backend === 'orbslam3' ? 'ORB-SLAM3' : 'cuVSLAM'; }
 function trackingLabel(run: ReplayRun) {
   if (run.tracking === 'vio' && run.imu_hz) return `VIO · IMU ${run.imu_hz.toFixed(0)} Hz`;
   return run.tracking?.toUpperCase() ?? '方式未記録';
@@ -69,7 +74,7 @@ function ReplayResult({run, picker}: {run: ReplayDetail; picker: ReactNode}) {
         <section className="replay-card">
           <header><h3>コース図</h3>{section && <button className="button small" aria-pressed={zoom} onClick={() => setZoom(z => !z)}>
             <Icon name="expand" size={14}/>{zoom ? '全体表示' : '区間拡大'}</button>}</header>
-          <div className="replay-legend"><span className="replay-truth">Gazebo 正解</span><span className="replay-estimate">cuVSLAM 推定</span></div>
+          <div className="replay-legend"><span className="replay-truth">Gazebo 正解</span><span className="replay-estimate">{backendLabel(run)} 推定</span></div>
           <CourseMap course={run.reference} view={view} zoom={zoom} selected={estimate?.point} reference={gt} select={setCursor}/>
           <label className="replay-slider"><span>比較地点 <b>{at.toFixed(2)} m</b></span>
             <input type="range" aria-label="比較地点（メートル）" min={view.min} max={view.max} step="any" disabled={view.min === view.max}
@@ -122,7 +127,7 @@ export default function ReplayErrorsWorkspace() {
   const picker = <div className="replay-picker"><Field label="保存した再生結果">
     <select aria-label="保存した再生結果" title={selected?.bag} value={selectedId} onChange={e => setId(e.target.value)}>
       {runs?.map(item => <option value={item.id} key={item.id}>
-        {trackingLabel(item)} · {mapLimitLabel(item.slam_max_map_size)} · {item.bag} · {dateLabel(item.created_at)} · {statusLabel(item.status)}
+        {backendLabel(item)} · {trackingLabel(item)} · {sourceLabel(item)} · {item.bag} · {dateLabel(item.created_at)} · {statusLabel(item.status)}
       </option>)}
     </select>
   </Field>
@@ -132,7 +137,7 @@ export default function ReplayErrorsWorkspace() {
       onDeleted={() => { setRuns(list => list?.filter(run => run.id !== selected.id) ?? null); setReload(n => n + 1); }}/>
     }</div>;
   return <div className="content-page replay-errors-page">
-    <div className="page-intro"><div><h2>VSLAM 軌跡誤差</h2><p>初期姿勢を合わせた Gazebo と cuVSLAM の車体位置・向きを、同じ画像時刻で比較します。</p></div>
+    <div className="page-intro"><div><h2>VSLAM 軌跡誤差</h2><p>Gazebo の正解軌跡と車体位置・向きを同じ画像時刻で比較します。固定地図の再定位には地図作成時に記録した座標変換を使います。</p></div>
       <button className="button" onClick={() => setReload(n => n+1)}><Icon name="refresh" size={16}/>更新</button></div>
     {listError ? <p role="alert" className="replay-error">{listError}</p> : runs === null ? <p role="status">保存結果を読み込んでいます…</p> :
       !runs.length ? <section className="content-card"><Empty icon="chart" title="再生結果はまだありません"

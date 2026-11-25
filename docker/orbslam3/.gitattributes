@@ -1,0 +1,2 @@
+# Unified-diff context preserves whitespace from the pinned upstream source.
+atd-orbslam3.patch whitespace=-trailing-space,-space-before-tab

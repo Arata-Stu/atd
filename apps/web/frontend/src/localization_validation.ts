@@ -1,7 +1,7 @@
 import type { MapDocument, Point } from './types';
 
 export interface ValidationOptions {
-  maps: {id: string; title: string; revision: number; source_bag: string; has_raceline: boolean; ready: boolean; issue: string | null}[];
+  maps: {id: string; title: string; revision: number; backend?: string; source_bag: string; has_raceline: boolean; ready: boolean; issue: string | null}[];
   bags: {id: string; eligible: boolean; issue: string | null}[];
   engine_dirs: string[];
   available: boolean;

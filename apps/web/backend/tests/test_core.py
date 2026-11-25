@@ -294,6 +294,70 @@ def test_gazebo_bag_becomes_available_for_offline_mapping_after_publication(clie
         base_frame='base_link', left_frame='camera_infra1_optical_frame', right_frame='camera_infra2_optical_frame'))
 
 
+def test_orb_build_preflight_pins_bag_and_uses_mapping_job_resources(client, monkeypatch):
+    from atd_api.offline import map_build
+    store = client.app.state.store
+    bag = store.record_root / 'day1' / 'mapping'
+    bag.mkdir(parents=True)
+    (bag / 'metadata.yaml').write_bytes(b'mapping')
+    request = dict(id='orb', bag='day1/mapping', backend='orbslam3')
+    monkeypatch.setattr('atd_api.offline.ros_program', lambda *_: None)
+    assert client.post('/api/maps/build', json=request).status_code == 400
+    monkeypatch.setattr('atd_api.offline.ros_program', lambda pkg, name: Path('/install/lib') / pkg / name)
+    monkeypatch.setattr(client.app.state.jobs, 'start',
+                        lambda kind, payload, resources, title: dict(kind=kind, payload=payload, resources=resources))
+    for invalid in (dict(left_image='/custom'), dict(base_frame='camera_link'), dict(rate=0),
+                    dict(tracking='vio'), dict(backend='unknown')):
+        assert client.post('/api/maps/build', json=dict(request, **invalid)).status_code in (400, 422)
+    job = client.post('/api/maps/build', json=request).json()
+    assert job['kind'] == 'map_build'
+    assert set(job['resources']) == {'map:orb', 'ros-domain:93', 'record:day1/mapping', 'offline-mapping'}
+    assert job['payload'] == dict(request, rate=.5, metadata_sha256=hashlib.sha256(b'mapping').hexdigest())
+    (bag / 'metadata.yaml').write_bytes(b'changed')
+    with pytest.raises(ValueError, match='metadata.yaml'):
+        map_build(store, None, job['payload'])
+
+
+@pytest.mark.parametrize('outcome', ['complete', 'cancel', 'missing'])
+def test_orb_map_job_executes_replay_and_requires_publication(tmp_path, monkeypatch, outcome):
+    from atd_api.offline import map_build
+    store = Store(tmp_path / 'bags', tmp_path / 'results')
+    bag = store.record_root / 'days' / 'lap'
+    bag.mkdir(parents=True)
+    (bag / 'metadata.yaml').write_text('bag source')
+    monkeypatch.setattr('atd_api.offline.ros_program', lambda pkg, name: Path('/install/lib') / pkg / name)
+
+    class Work:
+        def run(self, argv, *, env, ros):
+            assert argv == ['/install/lib/atd_bringup/replay_vslam', '--backend', 'orbslam3', '--save-map', 'built',
+                            '--tracking', 'vo', '--headless', '--rate', '0.25', '--', str(bag)]
+            assert ros and env['ROS_DOMAIN_ID'] == '93' and env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
+            assert Path(env['ATD_REPLAY_RECORD_ROOT']) == store.record_root
+            assert Path(env['ATD_REPLAY_RESULTS_ROOT']) == store.result_root
+            if outcome == 'cancel':
+                raise Cancelled('中止')
+            if outcome == 'missing':
+                return
+            # The CLI commits while holding the same catalog lock as the Web editor.
+            doc = store.create_map('built')
+            folder = store.folder('built')
+            files = {'atlas.osa': 'a'*64, 'camera.yml': 'b'*64}
+            digest = hashlib.sha256(json.dumps(files, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            doc['source'] = dict(kind='orbslam3', map_sha256=digest, bag='days/lap', pointcloud_status='ready',
+                                 metadata_sha256=hashlib.sha256(b'bag source').hexdigest())
+            atomic_json(folder / 'orbslam3/manifest.json', dict(schema='atd.orbslam3.map.v1', files=files))
+            atomic_json(folder / 'hdmap/map.json', doc)
+            atomic_json(folder / 'hdmap/cloud.json', dict(frame='map', points=[[0., 0., 1.]]))
+
+    payload = dict(id='built', bag='days/lap', backend='orbslam3', rate=.25)
+    if outcome == 'complete':
+        assert map_build(store, Work(), payload) == dict(map='built', orbslam3_ready=True, pointcloud_ready=True)
+    else:
+        with pytest.raises(Cancelled if outcome == 'cancel' else ValueError):
+            map_build(store, Work(), payload)
+        assert not store.list_maps()
+
+
 @pytest.mark.parametrize('odom', [b'0.0 0 0 0 0 0 0 1\n', b'', None], ids=['trajectory', 'empty', 'missing'])
 def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch, odom):
     from atd_api.offline import map_build

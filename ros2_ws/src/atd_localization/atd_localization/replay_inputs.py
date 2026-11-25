@@ -36,15 +36,15 @@ def independent_bag(root, bag_id, source_id, source_hash):
     return bag, digest
 
 
-def stereo_window(left, right, tolerance_ns=5_000_000):
-    """cuVSLAM の 5 ms 同期許容で一対一のステレオ入力区間を求める。"""
+def stereo_window(left, right, tolerance_ns=5_000_000, *, left_stamp=False):
+    """Tracker の許容時間差と出力時刻で、対応するステレオ入力区間を求める。"""
     i = j = pairs = 0
     first = previous = None
     max_gap = 0
     while i < len(left) and j < len(right):
         delta = left[i] - right[j]
         if abs(delta) <= tolerance_ns:
-            stamp = max(left[i], right[j])
+            stamp = left[i] if left_stamp else max(left[i], right[j])
             if previous is None:
                 first = stamp
             else:
@@ -58,7 +58,7 @@ def stereo_window(left, right, tolerance_ns=5_000_000):
         else:
             j += 1
     if pairs < 2 or first == previous:
-        raise ValueError('左右の画像が 5 ms 以内で対応するステレオ観測が不足しています')
+        raise ValueError(f'左右の画像が {tolerance_ns/1e6:g} ms 以内で対応するステレオ観測が不足しています')
     return dict(stereo_pairs=pairs, left_images=len(left), right_images=len(right),
                 first_stamp_ns=first, last_stamp_ns=previous, largest_pair_gap_s=max_gap / 1e9)
 
@@ -93,7 +93,11 @@ def inspect_inputs(bag, meta):
         topic, raw, _ = reader.read_next()
         side, frame, cls = settings[topic]
         message = deserialize_message(raw, cls)
-        if message.header.frame_id != frame or [message.height, message.width] != list(meta['input_shape'][-2:]):
+        allowed_frames = {frame}
+        if meta.get('backend') == 'orbslam3' and side == 'right' and cls is CameraInfo:
+            # D455 can express the right projection matrix in the left optical frame.
+            allowed_frames.add(frames[0])
+        if message.header.frame_id not in allowed_frames or [message.height, message.width] != list(meta['input_shape'][-2:]):
             raise ValueError(f'地図の入力フレームまたはモデル解像度と異なります: {topic}')
         stamp = stamp_ns(message.header.stamp)
         if stamp <= 0:
@@ -113,4 +117,6 @@ def inspect_inputs(bag, meta):
     duration = metadata.get('duration', {}).get('nanoseconds')
     if type(duration) is not int or duration <= 0:
         raise ValueError('bag の再生時間を確認できません')
-    return topics, duration / 1e9, stereo_window(stamps['left'], stamps['right'])
+    orb = meta.get('backend') == 'orbslam3'
+    stereo = stereo_window(stamps['left'], stamps['right'], 1_000_000 if orb else 5_000_000, left_stamp=orb)
+    return topics, duration / 1e9, stereo

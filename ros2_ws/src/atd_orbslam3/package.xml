@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>atd_orbslam3</name><version>0.1.0</version>
+  <description>Experimental ROS 2 stereo mapping and fixed-map localization for ATD.</description>
+  <maintainer email="carbuncle01@users.noreply.github.com">carbuncle01</maintainer>
+  <license>GPL-3.0-or-later</license>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
+  <depend>rclcpp</depend><depend>rclcpp_components</depend>
+  <depend>sensor_msgs</depend><depend>geometry_msgs</depend><depend>nav_msgs</depend>
+  <depend>std_msgs</depend><depend>std_srvs</depend><depend>atd_interfaces</depend>
+  <depend>tf2</depend><depend>tf2_msgs</depend><depend>tf2_ros</depend>
+  <depend>libopencv-dev</depend><depend>eigen</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

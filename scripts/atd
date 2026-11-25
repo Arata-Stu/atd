@@ -43,7 +43,7 @@ elif [[ "$location" = ホスト || "$(uname -m)" = x86_64 ]]; then
     add_command web webui.sh 'Notebook の Web UI を起動・準備'
     if [[ "$(uname -s)/$(uname -m)" = Linux/x86_64 ]]; then
         add_command bringup bringup.sh 'Gazebo の時計とステレオ画像で Visual Odometry を起動'
-        add_command replay replay.sh 'ステレオ rosbag を再生し cuVSLAM を RViz で表示'
+        add_command replay replay.sh 'ステレオ rosbag で cuVSLAM・ORB-SLAM3 を評価'
         if [[ "$location" = ホスト ]]; then
             add_command gazebo gazebo.sh 'サーキットの周回・rosbag 記録・ステレオ動画・受信計測'
         fi
@@ -224,7 +224,8 @@ run_from_menu() {
         gazebo) gazebo_from_menu "$title" "$@"; return ;;
         replay)
             title="$title / 追跡方式"
-            options=(vo 'VO（左右画像）' vio 'VIO（左右画像＋統合 IMU）') ;;
+            options=(vo 'cuVSLAM VO（左右画像）' vio 'cuVSLAM VIO（左右画像＋統合 IMU）'
+                     orbslam3 'ORB-SLAM3（ステレオ精度比較）') ;;
         display)
             options=(status '現在の設定を表示' cui '次回起動を CUI に設定' gui '次回起動を GUI に設定') ;;
         performance)
@@ -238,6 +239,7 @@ run_from_menu() {
     case "$key/$action" in
         build/all|performance/apply|cache/prune) "$@" ;;
         build/*) "$@" --packages-up-to "$action" ;;
+        replay/orbslam3) "$@" --backend orbslam3 ;;
         replay/*) "$@" --tracking "$action" ;;
         hotspot/2.4|hotspot/5) "$@" on --band "$action" ;;
         performance/check) "$@" --check ;;

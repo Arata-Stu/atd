@@ -139,6 +139,8 @@ class ReplayResult:
         row = self.progress.point(stamp, truth)
         row.update(compare(alignment, truth, position, orientation))
         if self.last_stamp is None:
+            if self.summary.get('alignment_source') == 'saved_map':
+                self.summary['initial_error'] = {name: row[name] for name in ('along_m', 'lateral_m', 'heading_deg')}
             self.summary['anchor_stamp_ns'] = str(stamp)
             self.summary['alignment'] = dict(world_origin_xy_yaw=alignment.world_origin,
                                              map_origin_xyz=alignment.map_origin,

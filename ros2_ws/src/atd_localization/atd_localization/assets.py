@@ -82,6 +82,9 @@ def _source(results_root, map_id):
 
 def map_metadata(results_root, map_id):
     """Read the persisted identities and stereo settings, without using CUDA."""
+    from .orb_assets import is_orb_map, orb_map_metadata
+    if is_orb_map(results_root, map_id):
+        return orb_map_metadata(results_root, map_id)
     return _source(results_root, map_id)[2]
 
 

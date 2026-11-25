@@ -10,6 +10,8 @@
 ./scripts/dev.sh --build --orbslam3
 ```
 
+ORB-SLAM3 本体の修正を取り込むときも、ホストで実験ブランチを更新し、上のコマンドでイメージを再構築する。Notebook の `atd_pc_dev` が稼働中なら、使用中の処理を終了してからホストで `docker stop atd_pc_dev` を実行する。`atd-build` はイメージ内に導入済みの ORB ライブラリを使う。
+
 起動したコンテナ内で ROS パッケージをビルドする。この指定では ORB ライブラリが見つからなければビルドに失敗する。通常の cuVSLAM イメージでは追加ノードのビルドを省略できる。
 
 ```bash
@@ -64,6 +66,10 @@ atd replay day2/lap --backend orbslam3 --tracking vio --imu-calibration /path/to
 
 macOS arm64 のネイティブ ROS 2 Lyrical で、奥行きの異なる模様を投影した 640×480、20 Hz の合成 MCAP を使った。100 組のステレオ画像で地図を作成し、Web API から同じ地図座標の特徴点 870 点を読み出せた。撮影開始位置と経路を変えた別 bag を 0.4 秒地点から再生したところ、26 組を処理し、3 組目で初期位置が確定した。地図作成時の座標変換を固定して既知の軌跡と比較した平面位置の RMS 誤差は 24 姿勢で 4.5 mm。0.10 秒という確定時間は画像のタイムスタンプ間隔で、語彙・地図の読み込み時間は含まない。
 
-別の合成試験で、未観測の風景・無地画像での喪失と別地点での再定位、ステレオ 25 Hz ＋ IMU 200 Hz の初期化と姿勢出力も確認した。Linux コンテナのビルド、実機 D455、Jetson での処理速度、cuVSLAM との実走行精度比較は今後の検証項目。
+別の合成試験で、未観測の風景・無地画像での喪失と別地点での再定位、ステレオ 25 Hz ＋ IMU 200 Hz の初期化と姿勢出力も確認した。実機 D455、Jetson での処理速度、cuVSLAM との実走行精度比較は今後の検証項目。
+
+Linux Notebook の Odaiba 90 Hz・2周の bag ではステレオ地図を549点で初期化し、再生約8.1秒で `SO3::exp failed! omega: -nan -nan -nan` により停止した。上流の `Sim3Solver` では、回転を伴わない平行移動でゼロ除算が起き、同じ例外を再現できた。ATD 版では推定した単位クォータニオンから回転行列を直接求め、回転を一意に決められない点の組は棄却する。
+
+修正後の macOS ネイティブ試験では、正常な変換の推定と不正な対応点の棄却を確認した。合成ステレオ画像で作成した地図を別プロセスで読み込み、2か所で各8姿勢の再定位にも成功した。元の Odaiba bag での完走は未確認。[Sim3 の回帰試験](../docker/orbslam3/test/sim3.cpp)
 
 ATD 版は headless で実行する。固定地図モードでは Atlas の単一地図を選び、地図更新を停止して追跡・再定位する。[公式リポジトリの使用リビジョン](https://github.com/UZ-SLAMLab/ORB_SLAM3/tree/4452a3c4ab75b1cde34e5505a36ec3f9edcdc4c4)・[上流への変更](../docker/orbslam3/atd-orbslam3.patch)・[地図保存・再定位の再現試験](../docker/orbslam3/test/fixed_map.cpp)

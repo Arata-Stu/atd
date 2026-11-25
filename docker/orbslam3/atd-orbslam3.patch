@@ -250,6 +250,19 @@ index 635fb21..1a63f30 100644
  
  #include<mutex>
  
+diff --git a/include/Sim3Solver.h b/include/Sim3Solver.h
+index 5539987..a9d51e2 100644
+--- a/include/Sim3Solver.h
++++ b/include/Sim3Solver.h
+@@ -53,7 +53,7 @@ protected:
+ 
+     void ComputeCentroid(Eigen::Matrix3f &P, Eigen::Matrix3f &Pr, Eigen::Vector3f &C);
+ 
+-    void ComputeSim3(Eigen::Matrix3f &P1, Eigen::Matrix3f &P2);
++    bool ComputeSim3(Eigen::Matrix3f &P1, Eigen::Matrix3f &P2);
+ 
+     void CheckInliers();
+ 
 diff --git a/include/System.h b/include/System.h
 index 872c86e..7415800 100644
 --- a/include/System.h
@@ -540,6 +553,160 @@ index 93a50be..16bc6d1 100644
              output << "\t-Camera 2 parameters (";
              if(settings.cameraType_ == Settings::PinHole || settings.cameraType_ ==  Settings::Rectified){
                  output << "Pinhole";
+diff --git a/src/Sim3Solver.cc b/src/Sim3Solver.cc
+index b8d3abf..a7d5efb 100644
+--- a/src/Sim3Solver.cc
++++ b/src/Sim3Solver.cc
+@@ -21,6 +21,8 @@
+ 
+ #include <vector>
+ #include <cmath>
++#include <limits>
++#include <Eigen/Eigenvalues>
+ #include <opencv2/core/core.hpp>
+ 
+ #include "KeyFrame.h"
+@@ -130,6 +132,13 @@ void Sim3Solver::SetRansacParameters(double probability, int minInliers, int max
+ 
+     mvbInliersi.resize(N);
+ 
++    mnIterations = 0;
++    if(N < mRansacMinInliers)
++    {
++        mRansacMaxIts = 0;
++        return;
++    }
++
+     // Adjust Parameters according to number of correspondences
+     float epsilon = (float)mRansacMinInliers/N;
+ 
+@@ -142,8 +151,6 @@ void Sim3Solver::SetRansacParameters(double probability, int minInliers, int max
+         nIterations = ceil(log(1-mRansacProb)/log(1-pow(epsilon,3)));
+ 
+     mRansacMaxIts = max(1,min(nIterations,mRansacMaxIts));
+-
+-    mnIterations = 0;
+ }
+ 
+ Eigen::Matrix4f Sim3Solver::iterate(int nIterations, bool &bNoMore, vector<bool> &vbInliers, int &nInliers)
+@@ -185,7 +192,8 @@ Eigen::Matrix4f Sim3Solver::iterate(int nIterations, bool &bNoMore, vector<bool>
+             vAvailableIndices.pop_back();
+         }
+ 
+-        ComputeSim3(P3Dc1i,P3Dc2i);
++        if(!ComputeSim3(P3Dc1i,P3Dc2i))
++            continue;
+ 
+         CheckInliers();
+ 
+@@ -235,7 +243,7 @@ Eigen::Matrix4f Sim3Solver::iterate(int nIterations, bool &bNoMore, vector<bool>
+ 
+     int nCurrentIterations = 0;
+ 
+-    Eigen::Matrix4f bestSim3;
++    Eigen::Matrix4f bestSim3 = Eigen::Matrix4f::Identity();
+ 
+     while(mnIterations<mRansacMaxIts && nCurrentIterations<nIterations)
+     {
+@@ -258,7 +266,8 @@ Eigen::Matrix4f Sim3Solver::iterate(int nIterations, bool &bNoMore, vector<bool>
+             vAvailableIndices.pop_back();
+         }
+ 
+-        ComputeSim3(P3Dc1i,P3Dc2i);
++        if(!ComputeSim3(P3Dc1i,P3Dc2i))
++            continue;
+ 
+         CheckInliers();
+ 
+@@ -308,11 +317,14 @@ void Sim3Solver::ComputeCentroid(Eigen::Matrix3f &P, Eigen::Matrix3f &Pr, Eigen:
+ }
+ 
+ 
+-void Sim3Solver::ComputeSim3(Eigen::Matrix3f &P1, Eigen::Matrix3f &P2)
++bool Sim3Solver::ComputeSim3(Eigen::Matrix3f &P1, Eigen::Matrix3f &P2)
+ {
+     // Custom implementation of:
+     // Horn 1987, Closed-form solution of absolute orientataion using unit quaternions
+ 
++    if(!P1.allFinite() || !P2.allFinite())
++        return false;
++
+     // Step 1: Centroid and relative coordinates
+ 
+     Eigen::Matrix3f Pr1; // Relative coordinates to centroid (set 1)
+@@ -349,23 +361,25 @@ void Sim3Solver::ComputeSim3(Eigen::Matrix3f &P1, Eigen::Matrix3f &P2)
+          N14, N24, N34, N44;
+ 
+ 
+-    // Step 4: Eigenvector of the highest eigenvalue
+-    Eigen::EigenSolver<Eigen::Matrix4f> eigSolver;
+-    eigSolver.compute(N);
+-
+-    Eigen::Vector4f eval = eigSolver.eigenvalues().real();
+-    Eigen::Matrix4f evec = eigSolver.eigenvectors().real(); //evec[0] is the quaternion of the desired rotation
+-
+-    int maxIndex; // should be zero
+-    eval.maxCoeff(&maxIndex);
+-
+-    Eigen::Vector3f vec = evec.block<3,1>(1,maxIndex); //extract imaginary part of the quaternion (sin*axis)
+-
+-    // Rotation angle. sin is the norm of the imaginary part, cos is the real part
+-    double ang=atan2(vec.norm(),evec(0,maxIndex));
+-
+-    vec = 2*ang*vec/vec.norm(); //Angle-axis representation. quaternion angle is the half
+-    mR12i = Sophus::SO3f::exp(vec).matrix();
++    // Horn's symmetric matrix encodes the quaternion in (w,x,y,z) order.
++    // A repeated maximum has no unique rotation (e.g. a collinear triplet).
++    if(!N.allFinite())
++        return false;
++    Eigen::SelfAdjointEigenSolver<Eigen::Matrix4f> eigSolver(N);
++    if(eigSolver.info() != Eigen::Success)
++        return false;
++    const auto &values = eigSolver.eigenvalues();  // ascending
++    const float maxValue = values[3];
++    if(!values.allFinite() || !(maxValue > 0.0f) ||
++       maxValue - values[2] <= 8.0f * std::numeric_limits<float>::epsilon() * maxValue)
++        return false;
++
++    const Eigen::Vector4f coeffs = eigSolver.eigenvectors().col(3);
++    const Eigen::Quaternionf rotation(coeffs[0], coeffs[1], coeffs[2], coeffs[3]);
++    if(!coeffs.allFinite() || !(rotation.squaredNorm() > 0.0f))
++        return false;
++    // Use the quaternion directly, including identity rotations with zero imaginary part.
++    mR12i = rotation.normalized().toRotationMatrix();
+ 
+     // Step 5: Rotate set 2
+     Eigen::Matrix3f P3 = mR12i*Pr2;
+@@ -374,15 +388,13 @@ void Sim3Solver::ComputeSim3(Eigen::Matrix3f &P1, Eigen::Matrix3f &P2)
+ 
+     if(!mbFixScale)
+     {
+-        double cvnom = Converter::toCvMat(Pr1).dot(Converter::toCvMat(P3));
+-        double nom = (Pr1.array() * P3.array()).sum();
+-        if (abs(nom-cvnom)>1e-3)
+-            std::cout << "sim3 solver: " << abs(nom-cvnom) << std::endl << nom << std::endl;
+-        Eigen::Array<float,3,3> aux_P3;
+-        aux_P3 = P3.array() * P3.array();
+-        double den = aux_P3.sum();
+-
++        const double den = P3.cast<double>().squaredNorm();
++        if(!(den > 0.0))
++            return false;
++        const double nom = (Pr1.cast<double>().array() * P3.cast<double>().array()).sum();
+         ms12i = nom/den;
++        if(!std::isfinite(ms12i) || !(ms12i > 0.0f))
++            return false;
+     }
+     else
+         ms12i = 1.0f;
+@@ -409,6 +421,7 @@ void Sim3Solver::ComputeSim3(Eigen::Matrix3f &P1, Eigen::Matrix3f &P2)
+ 
+     Eigen::Vector3f tinv = -sRinv * mt12i;
+     mT21i.block<3,1>(0,3) = tinv;
++    return mT12i.allFinite() && mT21i.allFinite();
+ }
+ 
+ 
 diff --git a/src/System.cc b/src/System.cc
 index 60d9c51..54b2ca1 100644
 --- a/src/System.cc

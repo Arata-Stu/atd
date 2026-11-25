@@ -155,6 +155,10 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
 
 
 def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_options=None):
+    if orb_options:
+        from .replay_orbslam3 import OrbReplay, orb_executable
+        executable = orb_executable()
+
     from ament_index_python.packages import get_package_share_directory
     import rclpy
     from rclpy.signals import SignalHandlerOptions
@@ -210,8 +214,7 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_op
         orb = None
         hidden = set()
         if orb_options:
-            from .replay_orbslam3 import OrbReplay
-            orb = OrbReplay(stack, root, node, bag, orb_options, imu, course)
+            orb = OrbReplay(stack, root, node, bag, orb_options, imu, course, executable)
             hidden.update(('/visual_slam/vis/landmarks_cloud', '/visual_slam/vis/loop_closure_cloud'))
             if trace and orb.metadata and not orb.fixed_alignment:
                 print('このコースと照合できる地図作成時の GT 座標変換がないため、絶対誤差は評価しません。', flush=True)

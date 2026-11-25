@@ -14,6 +14,14 @@
 
 ```bash
 atd-build --packages-up-to atd_orbslam3 atd_bringup --cmake-args -DATD_REQUIRE_ORBSLAM3=ON
+atd-shell ros2 pkg executables atd_orbslam3
+```
+
+最後の出力に `atd_orbslam3 orbslam3_node` があれば replay を開始できる。通常版から同じ workspace を引き継ぎ、パッケージが表示されても実行ファイルの一覧が空の場合は、ORB 対応コンテナ内でノードを再構成する。
+
+```bash
+atd-build --packages-up-to atd_orbslam3 --cmake-clean-cache --cmake-args -DATD_REQUIRE_ORBSLAM3=ON
+atd-shell ros2 pkg executables atd_orbslam3
 ```
 
 以後のコンテナ起動は `./scripts/dev.sh --orbslam3`。次の `atd replay` は Notebook で実行する。例の `day1/mapping` と `day2/lap` は、手元の `/data/record/rosbags` からの相対パスに置き換える。

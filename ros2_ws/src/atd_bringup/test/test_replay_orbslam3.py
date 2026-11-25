@@ -14,11 +14,29 @@ from atd_bringup import replay_vslam
 from atd_bringup.replay_gt_geometry import Alignment, PlanarPose, Trace
 from atd_bringup.replay_gt_node import GroundTruthPath
 from atd_bringup.replay_orb_inputs import noise_settings
-from atd_bringup.replay_orbslam3 import saved_alignment
+from atd_bringup.replay_orbslam3 import orb_executable, saved_alignment
 from atd_bringup.replay_result import ReplayResult
 
 
 class OrbReplayTests(unittest.TestCase):
+    def test_node_is_required_before_bag_scan_or_child_processes(self):
+        with TemporaryDirectory() as folder:
+            index = NS(get_package_prefix=lambda package: folder, PackageNotFoundError=KeyError)
+            with patch.dict('sys.modules', {'ament_index_python.packages': index}), \
+                    patch.object(replay_vslam, 'validate_bag') as scan, \
+                    patch.object(replay_vslam.subprocess, 'Popen') as spawn:
+                with self.assertRaisesRegex(RuntimeError, 'atd-build --packages-up-to atd_orbslam3'):
+                    replay_vslam.run('course', .5, orb_options=NS())
+                scan.assert_not_called()
+                spawn.assert_not_called()
+                node = Path(folder) / 'lib/atd_orbslam3/orbslam3_node'
+                node.parent.mkdir(parents=True)
+                node.touch(mode=0o644)
+                with self.assertRaisesRegex(RuntimeError, 'orbslam3_node'):
+                    orb_executable()
+                node.chmod(0o755)
+                self.assertEqual(orb_executable(), str(node))
+
     def test_fixed_origin_survives_midlap_start_and_reports_wrong_relocalization(self):
         trace = Trace((10, 20), (PlanarPose(10, 0, 0), PlanarPose(20, 0, 0)))
         fixed = Alignment.from_anchor(PlanarPose(2, 0, 0), (0, 0, 0), (0, 0, 0, 1))

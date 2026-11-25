@@ -17,6 +17,24 @@ from .replay_inputs import SLAM_ODOMETRY
 from .replay_orb_inputs import inputs_from_bag, noise_settings
 
 
+def orb_executable():
+    from ament_index_python.packages import get_package_prefix, PackageNotFoundError
+
+    try:
+        prefix = Path(get_package_prefix('atd_orbslam3'))
+    except PackageNotFoundError:
+        issue = '現在の ROS 2 環境に atd_orbslam3 が見つかりません'
+    else:
+        executable = prefix / 'lib/atd_orbslam3/orbslam3_node'
+        if executable.is_file() and os.access(executable, os.X_OK):
+            return str(executable)
+        issue = f'現在の ROS 2 環境で {executable} を実行できません'
+    raise RuntimeError(
+        f'{issue}。ORB 対応コンテナ内で次を実行してください。\n'
+        'atd-build --packages-up-to atd_orbslam3 --cmake-clean-cache --cmake-args -DATD_REQUIRE_ORBSLAM3=ON\n'
+        'atd-shell ros2 pkg executables atd_orbslam3')
+
+
 def saved_alignment(atlas_path, circuit):
     path = Path(atlas_path).with_name('gazebo_alignment.json')
     if not path.is_file() or not circuit:
@@ -38,7 +56,7 @@ class OrbReplay:
     tracker = '/orbslam3_node'
     seed_source = '/atd_bag_replay'
 
-    def __init__(self, stack, root, node, bag, options, imu, course):
+    def __init__(self, stack, root, node, bag, options, imu, course, executable):
         import rclpy
         from atd_interfaces.msg import LocalizationStatus
         from atd_localization.orb_assets import map_workspace, orb_map_metadata
@@ -87,7 +105,7 @@ class OrbReplay:
         self.directory.mkdir(parents=True)
         params_path = self.directory / 'parameters.yaml'
         params_path.write_text(yaml.safe_dump({self.tracker: {'ros__parameters': self.params}}))
-        self.command = ['ros2', 'run', 'atd_orbslam3', 'orbslam3_node', '--ros-args', '--params-file', str(params_path)]
+        self.command = [executable, '--ros-args', '--params-file', str(params_path)]
         self.summary = dict(backend='orbslam3', bag=str(bag), metadata_sha256=self.bag_hash,
                             tracking=options.tracking, rate=options.rate, map_id=options.map or options.save_map,
                             map_sha256=self.metadata['map_sha256'] if self.metadata else None,

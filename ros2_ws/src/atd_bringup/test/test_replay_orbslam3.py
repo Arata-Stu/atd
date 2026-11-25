@@ -1,16 +1,16 @@
 """保存地図の誤一致を初期座標合わせで消さず、画像時刻・資産指定を確認する。"""
-from contextlib import redirect_stderr
+from contextlib import ExitStack, redirect_stderr
 from io import StringIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace as NS
 
 from atd_localization.replay_inputs import stereo_window
 
-from atd_bringup import replay_vslam
+from atd_bringup import replay_orbslam3, replay_vslam
 from atd_bringup.replay_gt_geometry import Alignment, PlanarPose, Trace
 from atd_bringup.replay_gt_node import GroundTruthPath
 from atd_bringup.replay_orb_inputs import noise_settings
@@ -19,6 +19,51 @@ from atd_bringup.replay_result import ReplayResult
 
 
 class OrbReplayTests(unittest.TestCase):
+    def test_final_csvs_are_readable_while_rviz_remains_open(self):
+        subscriptions = {}
+
+        def subscribe(kind, topic, callback, qos):
+            subscriptions[topic] = callback
+            return topic
+
+        node = NS(create_subscription=subscribe, destroy_subscription=subscriptions.pop)
+        modules = {name: Mock() for name in ('rclpy', 'rclpy.qos', 'atd_interfaces.msg', 'nav_msgs.msg',
+                                              'std_msgs.msg', 'std_srvs.srv')}
+        with TemporaryDirectory() as temp, ExitStack() as mocks:
+            root = Path(temp)
+            bag = root / 'second-bag'
+            bag.mkdir()
+            (bag / 'metadata.yaml').write_text('test bag')
+            options = NS(map='track', save_map=None, tracking='vo', rate=1., start_offset=0.)
+            meta = dict(map_id='track', map_sha256='hash', hdmap_sha256='hd', tracking='vo',
+                        source_metadata_sha256='other', atlas_path=root / 'atlas.osa')
+            inputs = NS(camera_fps=90., first_left_ns=1, last_left_ns=1, pairs=1)
+            mocks.enter_context(patch.dict('sys.modules', modules))
+            mocks.enter_context(patch.dict('os.environ', ATD_REPLAY_RECORD_ROOT=str(root / 'record')))
+            mocks.enter_context(patch.object(replay_orbslam3, 'inputs_from_bag', return_value=inputs))
+            mocks.enter_context(patch('atd_localization.orb_assets.orb_map_metadata', return_value=meta))
+            mocks.enter_context(patch('atd_localization.orb_replay.recorded_calibration',
+                                      return_value=({}, (640, 480))))
+            mocks.enter_context(patch('atd_localization.orb_replay.OrbBootstrap'))
+            with ExitStack() as viewer:
+                orb = replay_orbslam3.OrbReplay(viewer, root, node, bag, options, None, {}, 'orb')
+                stamp = NS(sec=0, nanosec=1)
+                header = NS(stamp=stamp, frame_id='map')
+                pose = NS(position=NS(x=1, y=0, z=0), orientation=NS(x=0, y=0, z=0, w=1))
+                subscriptions['/orbslam3/processed'](header)
+                odom = NS(header=header, child_frame_id='base_link', pose=NS(pose=pose))
+                subscriptions[replay_orbslam3.SLAM_ODOMETRY](odom)
+                subscriptions['/localization/status'](NS(header=header, state='tracking', epoch=0, reason='ok',
+                                                         map_id='track', map_sha256='hash'))
+                with patch.object(replay_orbslam3, 'time', NS(monotonic=iter((0, 1, 2)).__next__)):
+                    orb.finish(Mock(), Mock(), None)
+
+                self.assertFalse(subscriptions)  # Late status heartbeats cannot append after EOF.
+                summary = json.loads((orb.directory / 'summary.json').read_text())
+                self.assertEqual((summary['status'], summary['trajectory_samples']), ('complete', 1))
+                self.assertEqual((orb.directory / 'trajectory.csv').read_text().splitlines()[1:], ['1,1,0,0,0,0,0,1'])
+                self.assertEqual((orb.directory / 'status.csv').read_text().splitlines()[1:], ['1,tracking,0,ok'])
+
     def test_node_is_required_before_bag_scan_or_child_processes(self):
         with TemporaryDirectory() as folder:
             index = NS(get_package_prefix=lambda package: folder, PackageNotFoundError=KeyError)

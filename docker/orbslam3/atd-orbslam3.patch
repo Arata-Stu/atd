@@ -306,7 +306,7 @@ index 872c86e..7415800 100644
      // Tracking state
      int mTrackingState;
 diff --git a/include/Tracking.h b/include/Tracking.h
-index 863c98e..d13347f 100644
+index 863c98e..835d268 100644
 --- a/include/Tracking.h
 +++ b/include/Tracking.h
 @@ -40,6 +40,7 @@
@@ -334,6 +334,22 @@ index 863c98e..d13347f 100644
      void Track();
  
      // Map initialization for stereo and RGB-D
+@@ -209,6 +213,7 @@ protected:
+     bool TrackReferenceKeyFrame();
+     void UpdateLastFrame();
+     bool TrackWithMotionModel();
++    bool TrackByProjection(const Sophus::SE3f &predictedPose);
+     bool PredictStateIMU();
+ 
+     bool Relocalization();
+@@ -331,6 +336,7 @@ protected:
+     //Motion Model
+     bool mbVelocity{false};
+     Sophus::SE3f mVelocity;
++    double mFixedMotionInterval = 0.0;
+ 
+     //Color order (true RGB, false BGR, ignored if grayscale)
+     bool mbRGB;
 diff --git a/src/Frame.cc b/src/Frame.cc
 index a04c312..94f75ae 100644
 --- a/src/Frame.cc
@@ -1076,10 +1092,10 @@ index 60d9c51..54b2ca1 100644
      if(type == TEXT_FILE) // File text
      {
 diff --git a/src/Tracking.cc b/src/Tracking.cc
-index 5191451..b219f60 100644
+index 5191451..8fe7b66 100644
 --- a/src/Tracking.cc
 +++ b/src/Tracking.cc
-@@ -1791,8 +1791,38 @@ void Tracking::ResetFrameIMU()
+@@ -1791,8 +1791,52 @@ void Tracking::ResetFrameIMU()
  }
  
  
@@ -1087,26 +1103,40 @@ index 5191451..b219f60 100644
 +{
 +    Map* map = mpAtlas->GetCurrentMap();
 +    unique_lock<mutex> lock(map->mMutexMapUpdate);
-+    const bool hasPrior = mState == OK && mCurrentFrame.mTimeStamp > mLastFrame.mTimeStamp &&
-+                          mCurrentFrame.mTimeStamp - mLastFrame.mTimeStamp < 1.0;
-+    bool tracked = false;
-+    if (mCurrentFrame.N > 0) {
-+        // No temporary VO points, no new keyframes, and no identity pose initialization.
-+        if (hasPrior && mpReferenceKF && !mpReferenceKF->isBad())
-+            tracked = TrackReferenceKeyFrame() && TrackLocalMap();
-+        if (!tracked) {
-+            std::fill(mCurrentFrame.mvpMapPoints.begin(), mCurrentFrame.mvpMapPoints.end(), nullptr);
-+            std::fill(mCurrentFrame.mvbOutlier.begin(), mCurrentFrame.mvbOutlier.end(), false);
-+            tracked = Relocalization() && TrackLocalMap();
++    const double dt = mState == OK ? mCurrentFrame.mTimeStamp - mLastFrame.mTimeStamp : 0.0;
++    bool continued = false;
++    if (mCurrentFrame.N > 0 && dt > 0.0 && dt < 1.0) {
++        // Only project landmarks validated in the Atlas. UpdateLastFrame would create temporary VO points.
++        Sophus::SE3f prediction = mLastFrame.GetPose();
++        if (mFixedMotionInterval > 0.0 && dt <= 2.0 * mFixedMotionInterval) {
++            const float ratio = static_cast<float>(dt / mFixedMotionInterval);
++            prediction = Sophus::SE3f::exp(ratio * mVelocity.log()) * prediction;
 +        }
++        continued = TrackByProjection(prediction);
++        if (!continued && mpReferenceKF && !mpReferenceKF->isBad())
++            continued = TrackReferenceKeyFrame();
 +    }
-+    mState = tracked ? OK : LOST;
-+    if (tracked) {
-+        mLastFrame = Frame(mCurrentFrame);
-+    } else {
++    bool matched = continued;
++    if (!matched && mCurrentFrame.N > 0) {
++        std::fill(mCurrentFrame.mvpMapPoints.begin(), mCurrentFrame.mvpMapPoints.end(), nullptr);
++        std::fill(mCurrentFrame.mvbOutlier.begin(), mCurrentFrame.mvbOutlier.end(), false);
++        matched = Relocalization();
++    }
++
++    // Local map searches mark candidates with this frame ID and must run only once per image.
++    mFixedMotionInterval = 0.0;
++    if (!matched || !TrackLocalMap() || !mCurrentFrame.GetPose().matrix().allFinite()) {
++        mState = LOST;
 +        mnMatchesInliers = 0;
 +        mpReferenceKF = nullptr;
++        return;
 +    }
++    if (continued) {
++        mVelocity = mCurrentFrame.GetPose() * mLastFrame.GetPose().inverse();
++        mFixedMotionInterval = dt;
++    }
++    mLastFrame = Frame(mCurrentFrame);
++    mState = OK;
 +}
 +
  void Tracking::Track()
@@ -1118,7 +1148,7 @@ index 5191451..b219f60 100644
  
      if (bStepByStep)
      {
-@@ -2197,11 +2227,6 @@ void Tracking::Track()
+@@ -2197,11 +2241,6 @@ void Tracking::Track()
          vdLMTrack_ms.push_back(timeLMTrack);
  #endif
  
@@ -1130,7 +1160,7 @@ index 5191451..b219f60 100644
          if(bOK || mState==RECENTLY_LOST)
          {
              // Update motion model
-@@ -2215,8 +2240,6 @@ void Tracking::Track()
+@@ -2215,8 +2254,6 @@ void Tracking::Track()
                  mbVelocity = false;
              }
  
@@ -1139,7 +1169,7 @@ index 5191451..b219f60 100644
  
              // Clean VO matches
              for(int i=0; i<mCurrentFrame.N; i++)
-@@ -2334,6 +2357,12 @@ void Tracking::Track()
+@@ -2334,6 +2371,12 @@ void Tracking::Track()
  
  void Tracking::StereoInitialization()
  {
@@ -1152,7 +1182,7 @@ index 5191451..b219f60 100644
      if(mCurrentFrame.N>500)
      {
          if (mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
-@@ -2438,7 +2467,6 @@ void Tracking::StereoInitialization()
+@@ -2438,7 +2481,6 @@ void Tracking::StereoInitialization()
  
          mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.push_back(pKFini);
  
@@ -1160,7 +1190,7 @@ index 5191451..b219f60 100644
  
          mState=OK;
      }
-@@ -2649,7 +2677,6 @@ void Tracking::CreateInitialMapMonocular()
+@@ -2649,7 +2691,6 @@ void Tracking::CreateInitialMapMonocular()
  
      mpAtlas->SetReferenceMapPoints(mvpLocalMapPoints);
  
@@ -1168,7 +1198,46 @@ index 5191451..b219f60 100644
  
      mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.push_back(pKFini);
  
-@@ -3627,7 +3654,7 @@ bool Tracking::Relocalization()
+@@ -2853,8 +2894,6 @@ void Tracking::UpdateLastFrame()
+ 
+ bool Tracking::TrackWithMotionModel()
+ {
+-    ORBmatcher matcher(0.9,true);
+-
+     // Update last frame pose according to its reference keyframe
+     // Create "visual odometry" points if in Localization Mode
+     UpdateLastFrame();
+@@ -2865,14 +2904,13 @@ bool Tracking::TrackWithMotionModel()
+         PredictStateIMU();
+         return true;
+     }
+-    else
+-    {
+-        mCurrentFrame.SetPose(mVelocity * mLastFrame.GetPose());
+-    }
+-
+-
+-
++    return TrackByProjection(mVelocity * mLastFrame.GetPose());
++}
+ 
++bool Tracking::TrackByProjection(const Sophus::SE3f &predictedPose)
++{
++    ORBmatcher matcher(0.9,true);
++    mCurrentFrame.SetPose(predictedPose);
+     fill(mCurrentFrame.mvpMapPoints.begin(),mCurrentFrame.mvpMapPoints.end(),static_cast<MapPoint*>(NULL));
+ 
+     // Project points seen in previous frame
+@@ -2934,7 +2972,7 @@ bool Tracking::TrackWithMotionModel()
+         }
+     }
+ 
+-    if(mbOnlyTracking)
++    if(mbOnlyTracking && !mbFixedMap)
+     {
+         mbVO = nmatchesMap<10;
+         return nmatches>20;
+@@ -3627,7 +3665,7 @@ bool Tracking::Relocalization()
      // If enough matches are found we setup a PnP solver
      ORBmatcher matcher(0.75,true);
  
@@ -1177,7 +1246,7 @@ index 5191451..b219f60 100644
      vpMLPnPsolvers.resize(nKFs);
  
      vector<vector<MapPoint*> > vvpMapPointMatches;
-@@ -3655,7 +3682,7 @@ bool Tracking::Relocalization()
+@@ -3655,7 +3693,7 @@ bool Tracking::Relocalization()
              {
                  MLPnPsolver* pSolver = new MLPnPsolver(mCurrentFrame,vvpMapPointMatches[i]);
                  pSolver->SetRansacParameters(0.99,10,300,6,0.5,5.991);  //This solver needs at least 6 points
@@ -1186,7 +1255,7 @@ index 5191451..b219f60 100644
                  nCandidates++;
              }
          }
-@@ -3678,7 +3705,7 @@ bool Tracking::Relocalization()
+@@ -3678,7 +3716,7 @@ bool Tracking::Relocalization()
              int nInliers;
              bool bNoMore;
  
@@ -1195,7 +1264,7 @@ index 5191451..b219f60 100644
              Eigen::Matrix4f eigTcw;
              bool bTcw = pSolver->iterate(5,bNoMore,vbInliers,nInliers, eigTcw);
  
-@@ -3780,12 +3807,6 @@ void Tracking::Reset(bool bLocMap)
+@@ -3780,12 +3818,6 @@ void Tracking::Reset(bool bLocMap)
  {
      Verbose::PrintMess("System Reseting", Verbose::VERBOSITY_NORMAL);
  
@@ -1208,7 +1277,7 @@ index 5191451..b219f60 100644
  
      // Reset Local Mapping
      if (!bLocMap)
-@@ -3831,8 +3852,6 @@ void Tracking::Reset(bool bLocMap)
+@@ -3831,8 +3863,6 @@ void Tracking::Reset(bool bLocMap)
      mpLastKeyFrame = static_cast<KeyFrame*>(NULL);
      mvIniMatches.clear();
  
@@ -1217,7 +1286,7 @@ index 5191451..b219f60 100644
  
      Verbose::PrintMess("   End reseting! ", Verbose::VERBOSITY_NORMAL);
  }
-@@ -3840,12 +3859,6 @@ void Tracking::Reset(bool bLocMap)
+@@ -3840,12 +3870,6 @@ void Tracking::Reset(bool bLocMap)
  void Tracking::ResetActiveMap(bool bLocMap)
  {
      Verbose::PrintMess("Active map Reseting", Verbose::VERBOSITY_NORMAL);
@@ -1230,7 +1299,7 @@ index 5191451..b219f60 100644
  
      Map* pMap = mpAtlas->GetCurrentMap();
  
-@@ -3922,8 +3935,6 @@ void Tracking::ResetActiveMap(bool bLocMap)
+@@ -3922,8 +3946,6 @@ void Tracking::ResetActiveMap(bool bLocMap)
  
      mbVelocity = false;
  

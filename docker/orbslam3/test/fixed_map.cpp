@@ -9,6 +9,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace fs = std::filesystem;
 
@@ -114,7 +115,7 @@ int main(int argc, char** argv) {
         } else {
             cv::Mat unrelated(height, 2000, CV_8U);
             rng.fill(unrelated, cv::RNG::UNIFORM, 0, 255);
-            for (float start : {0.91F, 0.37F}) {
+            for (const auto [start, step] : {std::pair{0.91F, -0.03F}, std::pair{0.37F, 0.03F}}) {
                 // At startup and again after tracking loss, a blank stereo pair cannot localize.
                 system.TrackStereo(blank, blank, ++stamp / 25.0);
                 if (system.GetFixedMapInliers() != 0 || system.GetTrackingState() == ORB_SLAM3::Tracking::OK)
@@ -124,18 +125,37 @@ int main(int argc, char** argv) {
                     throw std::runtime_error("Localized unrelated texture in the saved map");
                 int verified = 0;
                 float worst_error = 0;
-                for (int i = 0; i < 8; ++i) {
-                    const float x = start + i * 0.01F;
-                    const auto pose = system.TrackStereo(render(texture, x), render(texture, x + baseline), ++stamp / 25.0);
-                    if (system.GetFixedMapInliers() <= 0) continue;
-                    const float error = (pose.inverse().translation() - Eigen::Vector3f(x, 0, 0)).norm();
+                // Move towards the other end of the mapped area after each acquisition.
+                // A tracker must sustain the known motion, including across reference keyframes.
+                float x = start - step;
+                Eigen::Vector3f previous_position = Eigen::Vector3f::Zero();
+                constexpr int acquisition_frames = 8, continuous_frames = 20;
+                for (int i = 0; i < acquisition_frames + continuous_frames; ++i) {
+                    // Skip one stereo pair while preserving the true timestamp and displacement.
+                    const int ticks = i == acquisition_frames + 6 ? 2 : 1;
+                    stamp += ticks;
+                    x += ticks * step;
+                    const auto pose = system.TrackStereo(render(texture, x), render(texture, x + baseline), stamp / 25.0);
+                    if (system.GetFixedMapInliers() <= 0 || system.GetTrackingState() != ORB_SLAM3::Tracking::OK) {
+                        if (i >= acquisition_frames)
+                            throw std::runtime_error("Lost the fixed map during continuous motion");
+                        continue;
+                    }
+                    const Eigen::Vector3f position = pose.inverse().translation();
+                    const float error = (position - Eigen::Vector3f(x, 0, 0)).norm();
                     worst_error = std::max(worst_error, error);
                     if (!std::isfinite(error) || error > 0.10F) throw std::runtime_error("Returned a pose in the wrong coordinate frame");
+                    if (i > acquisition_frames) {
+                        const float step_error = (position - previous_position - Eigen::Vector3f(ticks * step, 0, 0)).norm();
+                        if (step_error > 0.02F)
+                            throw std::runtime_error("Fixed-map pose jumped between consecutive frames");
+                    }
+                    previous_position = position;
                     ++verified;
                 }
-                if (verified < 3) throw std::runtime_error("Failed to recognize the requested course segment");
+                if (verified < continuous_frames + 3) throw std::runtime_error("Failed to recognize the requested course segment");
                 std::cout << "Verified " << verified << " fixed-map poses starting at x=" << start
-                          << " maximum error=" << worst_error << " m\n";
+                          << " including " << continuous_frames << " consecutive poses, maximum error=" << worst_error << " m\n";
             }
         }
         bool premature_export = false;

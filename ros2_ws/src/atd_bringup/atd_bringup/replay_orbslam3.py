@@ -1,4 +1,5 @@
 """ORB-SLAM3 の再生ジョブ、保存地図の確定、計測時刻付きの再定位結果。"""
+from contextlib import ExitStack
 import csv
 from datetime import datetime, timezone
 import hashlib
@@ -115,9 +116,10 @@ class OrbReplay:
                             status='running')
         self._summary()
         stack.push(self._exit)
-        trajectory = csv.writer(stack.enter_context((self.directory / 'trajectory.csv').open('x', newline='')))
+        self.recording = stack.enter_context(ExitStack())
+        trajectory = csv.writer(self.recording.enter_context((self.directory / 'trajectory.csv').open('x', newline='')))
         trajectory.writerow(('image_stamp_ns', 'x', 'y', 'z', 'qx', 'qy', 'qz', 'qw'))
-        events = csv.writer(stack.enter_context((self.directory / 'status.csv').open('x', newline='')))
+        events = csv.writer(self.recording.enter_context((self.directory / 'status.csv').open('x', newline='')))
         events.writerow(('stamp_ns', 'state', 'epoch', 'reason'))
         calibration, self.image_size = recorded_calibration(bag)
         bootstrap = OrbBootstrap(node, calibration)
@@ -148,11 +150,15 @@ class OrbReplay:
                 self.first_tracking = stamp
             events.writerow((stamp, msg.state, msg.epoch, msg.reason))
 
-        node.create_subscription(Header, '/orbslam3/processed', processed,
-                                 QoSProfile(depth=256, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-        node.create_subscription(Odometry, SLAM_ODOMETRY, odometry, QoSProfile(depth=256))
+        def subscribe(kind, topic, callback, qos):
+            sub = node.create_subscription(kind, topic, callback, qos)
+            self.recording.callback(node.destroy_subscription, sub)
+
+        subscribe(Header, '/orbslam3/processed', processed,
+                  QoSProfile(depth=256, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        subscribe(Odometry, SLAM_ODOMETRY, odometry, QoSProfile(depth=256))
         if self.metadata:
-            node.create_subscription(LocalizationStatus, '/localization/status', status, QoSProfile(depth=256))
+            subscribe(LocalizationStatus, '/localization/status', status, QoSProfile(depth=256))
         self.spin = lambda timeout_sec: rclpy.spin_once(node, timeout_sec=timeout_sec)
         print(f'ORB-SLAM3 の入力 {self.inputs.camera_fps:g} Hz、対象 {self.inputs.pairs} 対。'
               f'状態と軌跡の保存先: {self.directory}', flush=True)
@@ -199,6 +205,8 @@ class OrbReplay:
             raise RuntimeError('GT と画像時刻を照合できた ORB-SLAM3 の姿勢が 0 件です')
         if result and self.metadata:
             self.summary['initial_error'] = result.summary['initial_error']
+        # RViz can stay open after EOF. Stop sampling and close both CSVs before publishing the result.
+        self.recording.close()
         if self.save_client is not None:
             if not self.save_client.wait_for_service(timeout_sec=5.):
                 raise RuntimeError('/orbslam3/save_map が利用できません')

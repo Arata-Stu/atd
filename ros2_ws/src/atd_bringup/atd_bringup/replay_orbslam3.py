@@ -15,7 +15,7 @@ from atd_localization.replay_dds import replay_dds_profile
 from atd_mapping.frames import stamp_ns
 
 from .replay_gt_geometry import Alignment, PlanarPose
-from .replay_inputs import IMU_TOPIC, SLAM_ODOMETRY, STEREO_WORKFLOW, recorded_imu
+from .replay_inputs import IMU_TOPIC, ORB_MAP_MATCH, ORB_VIO_ODOMETRY, SLAM_ODOMETRY, STEREO_WORKFLOW, recorded_imu
 from .replay_orb_inputs import inputs_from_bag, resolve_imu_noise
 
 
@@ -89,6 +89,8 @@ class OrbReplay:
         self.stage = self.fixed_alignment = self.save_client = None
         self.last_processed = self.last_imu_skipped = self.first_pose = self.first_tracking = None
         self.poses = self.processed = self.imu_skipped = 0
+        self.first_local_vio = self.last_local_vio = self.first_map_match = self.last_map_match = None
+        self.local_vio_poses = self.map_matches = 0
         folder = Path(os.environ.get('ATD_REPLAY_RECORD_ROOT', '/data/record/rosbags')).expanduser().resolve()
         self.bag_id = str(bag.relative_to(folder)) if bag.is_relative_to(folder) else bag.name
         self.bag_hash = hashlib.sha256((bag / 'metadata.yaml').read_bytes()).hexdigest()
@@ -134,6 +136,7 @@ class OrbReplay:
                             status='running')
         if self.metadata:
             self.summary['source_metadata_sha256'] = self.metadata['source_metadata_sha256']
+            self.summary['localization_method'] = 'fixed_stereo_atlas_vio' if imu else 'fixed_stereo_atlas'
         if imu:
             self.summary.update(imu_noise=imu_noise, imu_frame=imu.frame, imu_frequency_hz=imu.frequency)
         self._summary()
@@ -198,11 +201,31 @@ class OrbReplay:
             self.poses += 1
             if self.first_pose is None:
                 self.first_pose = stamp
-                if imu:
-                    # The ORB node gates VIO odometry on tracking OK and initialized inertial mapping.
+                if imu and not self.metadata:
                     seconds = (stamp - self.inputs.first_left_ns) / 1e9
                     self.summary['time_to_first_vio_pose_s'] = seconds
                     print(f'ORB-SLAM3 慣性初期化後の最初の有効姿勢: 先頭の対象画像から {seconds:.3f} 秒', flush=True)
+
+        def local_vio(msg):
+            stamp = stamp_ns(msg.header.stamp)
+            if (msg.header.frame_id != 'odom' or msg.child_frame_id != 'base_link' or
+                    not self.inputs.first_left_ns <= stamp <= self.inputs.last_left_ns or
+                    (self.last_local_vio is not None and stamp <= self.last_local_vio)):
+                return
+            self.local_vio_poses += 1
+            self.last_local_vio = stamp
+            if self.first_local_vio is None:
+                self.first_local_vio = stamp
+                self.summary['time_to_first_vio_pose_s'] = (stamp - self.inputs.first_left_ns) / 1e9
+
+        def map_match(msg):
+            stamp = stamp_ns(msg.stamp)
+            if (self.inputs.first_left_ns <= stamp <= self.inputs.last_left_ns and
+                    (self.last_map_match is None or stamp > self.last_map_match)):
+                self.map_matches += 1
+                self.last_map_match = stamp
+                if self.first_map_match is None:
+                    self.first_map_match = stamp
 
         def status(msg):
             if not self.metadata or msg.map_id != options.map or msg.map_sha256 != self.metadata['map_sha256']:
@@ -224,6 +247,9 @@ class OrbReplay:
             subscribe(Header, '/orbslam3/imu_skipped', imu_skipped,
                       QoSProfile(depth=256, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         subscribe(Odometry, SLAM_ODOMETRY, odometry, QoSProfile(depth=256))
+        if imu and self.metadata:
+            subscribe(Odometry, ORB_VIO_ODOMETRY, local_vio, QoSProfile(depth=256))
+            subscribe(Header, ORB_MAP_MATCH, map_match, QoSProfile(depth=256))
         if self.metadata:
             subscribe(LocalizationStatus, '/localization/status', status, QoSProfile(depth=256))
         self.spin = lambda timeout_sec: rclpy.spin_once(node, timeout_sec=timeout_sec)
@@ -250,6 +276,9 @@ class OrbReplay:
         if self.options.tracking == 'vio':
             self.summary.update(imu_skipped_frames_observed=self.imu_skipped,
                                 last_imu_skipped_stamp_ns=self.last_imu_skipped)
+            if self.metadata:
+                self.summary.update(local_vio_samples=self.local_vio_poses, first_local_vio_stamp_ns=self.first_local_vio,
+                                    map_matches_observed=self.map_matches, first_map_match_stamp_ns=self.first_map_match)
         if self.first_tracking is not None:
             self.summary['time_to_tracking_s'] = (self.first_tracking - self.inputs.first_left_ns) / 1e9
         self._summary()
@@ -277,25 +306,49 @@ class OrbReplay:
         if bridge_pending():
             raise RuntimeError(f'ジャイロ補完で末尾画像を確認できません: {self.bridge.last_frame_ns} / '
                                f'{self.inputs.last_left_ns} ns')
+        fixed_vio = self.options.tracking == 'vio' and self.metadata is not None
+
+        def feedback_progress():
+            counts = (self.poses, self.processed, self.imu_skipped, self.first_tracking)
+            return counts + (self.local_vio_poses, self.map_matches) if fixed_vio else counts
+
         deadline = time.monotonic() + .75
         while time.monotonic() < deadline:
+            previous = feedback_progress()
             check_running()
             spin(.01)
+            if feedback_progress() != previous:
+                deadline = time.monotonic() + .75
         check_running()
-        if not self.poses and self.options.tracking == 'vio':
-            raise RuntimeError('慣性初期化後の有効な ORB-SLAM3 姿勢を観測できませんでした。'
-                               'IMU の時刻・固定 TF と、移動開始・旋回時の初期化ログを確認してください')
-        if not self.poses or (self.metadata and self.first_tracking is None):
-            raise RuntimeError('対象地図への再定位を確認できません' if self.metadata else '有効なステレオ姿勢がありません')
-        if result and not result.summary['sample_count']:
+        if self.metadata:
+            if bool(self.poses) != (self.first_tracking is not None):
+                raise RuntimeError('保存地図に対する tracking 状態と姿勢出力が一致しません')
+            if fixed_vio and (bool(self.poses) != bool(self.map_matches) or (self.poses and not self.local_vio_poses)):
+                raise RuntimeError('地図基準の VIO 姿勢と、固定地図の照合・局所 VIO の観測が一致しません')
+            if self.poses:
+                self.summary['outcome'] = 'tracking_observed'
+            else:
+                reason = 'no_local_vio_pose' if fixed_vio and not self.local_vio_poses else 'no_map_match'
+                self.summary.update(outcome='no_tracking', no_tracking_reason=reason)
+                print(f'末尾まで再生しました。固定地図基準の姿勢は 0 件です ({reason})。', flush=True)
+        elif not self.poses:
+            if self.options.tracking == 'vio':
+                raise RuntimeError('慣性初期化後の有効な ORB-SLAM3 姿勢を観測できませんでした。'
+                                   'IMU の時刻・固定 TF と、移動開始・旋回時の初期化ログを確認してください')
+            raise RuntimeError('有効なステレオ姿勢がありません')
+        if result and self.poses and not result.summary['sample_count']:
             raise RuntimeError('GT と画像時刻を照合できた ORB-SLAM3 の姿勢が 0 件です')
         if result and self.metadata:
-            self.summary['initial_error'] = result.summary['initial_error']
+            result.summary['outcome'] = self.summary['outcome']
+            if self.poses:
+                self.summary['initial_error'] = result.summary['initial_error']
         # RViz can stay open after EOF. Finalize all outputs while the graph is still alive.
         self.recording.close()
         if self.options.tracking == 'vio':
+            poses = (f'局所 VIO 姿勢 {self.local_vio_poses} 件、固定地図の照合 {self.map_matches} 件、'
+                     f'地図基準の VIO 姿勢 {self.poses} 件' if fixed_vio else f'慣性初期化後の有効姿勢 {self.poses} 件')
             print(f'ORB-SLAM3 Stereo-Inertial: 対象 {self.inputs.pairs} 対、処理完了通知 {self.processed} 件、'
-                  f'IMU 不足で見送った画像対の通知 {self.imu_skipped} 件、慣性初期化後の有効姿勢 {self.poses} 件', flush=True)
+                  f'IMU 不足で見送った画像対の通知 {self.imu_skipped} 件、{poses}', flush=True)
         if self.bridge:
             report = self.bridge.summary
             if not report['counts'].get('gyro_samples'):

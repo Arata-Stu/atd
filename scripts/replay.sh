@@ -20,9 +20,10 @@ ORB-SLAM3 によるステレオ地図作成: atd replay BAG --backend orbslam3 -
 保存地図で別走行の 15 秒地点から再定位: atd replay OTHER_BAG --backend orbslam3 --map MAP_ID --start-offset 15 --headless
 固定地図でジャイロ補完と再取得時の段差を計測: atd replay BAG --backend orbslam3 --map MAP_ID --gyro-bridge on
 cuVSLAM の保存地図で画像の途絶を診断: atd replay --validate-map MAP_ID --bag BAG --diagnose-frame-gaps
---gyro-bridge auto（既定）は収録ジャイロがあれば補完し、off は画像で確認できた姿勢だけを表示します。
+固定地図のステレオ VO では --gyro-bridge off で画像観測のみ、on で収録ジャイロによる途絶補完を選べます。
 cuVSLAM と ORB-SLAM3 の同条件の run を比較: atd replay --compare CUV_RUN_ID ORB_RUN_ID
-固定地図で cuVSLAM・ORB 観測・ORB ジャイロ補完を比較: atd replay --compare CU_VALIDATION_ID ORB_GYRO_RUN_ID --record-root /data/record/rosbags
+固定地図で cuVSLAM、ORB ステレオ、ORB Stereo-Inertial を比較: atd replay --compare CU_VALIDATION_ID ORB_STEREO_ID ORB_VIO_ID --record-root /data/record/rosbags
+ORB 固定地図で VIO を地図座標に合わせる: atd replay BAG --backend orbslam3 --map MAP_ID --tracking vio --gyro-bridge off --headless
 ORB-SLAM3 Stereo-Inertial を Gazebo bag で試す: atd replay BAG --backend orbslam3 --tracking vio --headless
 実センサーの ORB-SLAM3 VIO には --imu-calibration IMU.yaml を追加します。
 固定地図の姿勢途絶を収録済みジャイロで評価: atd replay --imu-gaps RUN_ID [--bag DIR] [--results-root DIR]

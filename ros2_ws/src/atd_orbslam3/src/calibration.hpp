@@ -34,5 +34,6 @@ struct MapCamera {
 };
 
 void write_settings(const std::filesystem::path & path, const Calibration & camera, int fps,
-                    const Inertial * imu, const std::filesystem::path & atlas_stem, bool fixed);
+                    const Inertial * imu, const std::filesystem::path & atlas_stem, bool fixed,
+                    bool loop_closing = true);
 }  // namespace atd_orbslam3

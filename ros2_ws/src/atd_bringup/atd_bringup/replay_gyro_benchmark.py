@@ -1,52 +1,22 @@
 """同じ固定地図試験の ORB 観測とジャイロ補完を、別に再生した cuVSLAM と比較する。"""
 import csv
-from itertools import pairwise
 import json
-import math
 from pathlib import Path
-
-from atd_localization.orb_assets import orb_map_metadata
 
 from .orb_gap_eval import run_dir
 from .replay_benchmark import (
-    PAIR_TOLERANCE_NS, Sample, _accuracy, _backend, _coverage, _fixed, _paired, _sensor_input_transports, _sha,
+    PAIR_TOLERANCE_NS, Sample, _accuracy, _backend, _fixed, _paired, _sensor_input_transports,
 )
-from .replay_gt_geometry import Alignment, Trace
-from .replay_gt_source import find_ground_truth
-from .replay_inputs import STEREO_TOPICS
-from .replay_result import GAP_NS, compare
+from .replay_fixed_benchmark import (
+    _check_orb_conditions, _dds_profiles, _ground_truth, _orb_observations, _orb_pose, _output_stats, _score, _window,
+)
+from .replay_gt_geometry import Alignment
+from .replay_result import GAP_NS
 
 
 def _orb_series(folder, meta):
-    epochs = {}
-    tracking_entries = 0
-    previous_state = None
-    with (folder / 'status.csv').open(newline='') as stream:
-        for row in csv.DictReader(stream):
-            state = row['state'], int(row['epoch'])
-            if row['state'] == 'tracking':
-                tracking_entries += state != previous_state
-                stamp = int(row['stamp_ns'])
-                if epochs.setdefault(stamp, state[1]) != state[1]:
-                    epochs[stamp] = None
-            previous_state = state
-
-    def pose(row):
-        result = tuple(float(row[k]) for k in ('x', 'y', 'z', 'qx', 'qy', 'qz', 'qw'))
-        if not all(map(math.isfinite, result)):
-            raise ValueError('ORB の姿勢に非有限値があります')
-        return result
-
-    raw, continuous, predicted = [], [], set()
-    with (folder / 'trajectory.csv').open(newline='') as stream:
-        for row in csv.DictReader(stream):
-            stamp = int(row['image_stamp_ns'])
-            epoch = epochs.get(stamp)
-            # DDS で status が欠けた姿勢は残し、隣の姿勢への追跡継続だけを未確認とする。
-            raw.append(Sample(stamp, epoch, pose=pose(row)))
-    if len(raw) != meta['trajectory_samples']:
-        raise ValueError('ORB 観測の保存件数が summary.json と一致しません')
-
+    raw, reacquisitions = _orb_observations(folder, meta)
+    continuous, predicted = [], set()
     if (meta.get('gyro_bridge') or {}).get('report') != 'gyro_bridge_summary.json':
         raise ValueError('--gyro-bridge on で完走した ORB 固定地図 run を指定してください')
     bridge = json.loads((folder / 'gyro_bridge_summary.json').read_bytes())
@@ -57,56 +27,10 @@ def _orb_series(folder, meta):
                 predicted.add(stamp)
             elif row['source'] != 'observed':
                 raise ValueError(f"補完軌跡に未知の出力種別があります: {row['source']}")
-            continuous.append(Sample(stamp, 0, pose=pose(row)))
+            continuous.append(Sample(stamp, 0, pose=_orb_pose(row)))
     if len(predicted) != bridge['predicted'] or len(continuous) - len(predicted) != bridge['observed']:
         raise ValueError('ジャイロ補完の保存件数が gyro_bridge_summary.json と一致しません')
-    return raw, continuous, predicted, bridge, max(0, tracking_entries-1)
-
-
-def _window(rows, start, end):
-    if any(b.stamp <= a.stamp for a, b in pairwise(rows)):
-        raise ValueError('姿勢の計測時刻が単調増加していません')
-    return [row for row in rows if start <= row.stamp <= end]
-
-
-def _output_stats(rows, start, end, *, visual):
-    info = _coverage(rows, start, end)
-    duration = sum(b.stamp - a.stamp for a, b in pairwise(rows) if b.stamp - a.stamp <= GAP_NS)
-    info['output_time_fraction'] = duration / (end - start)
-    if not visual:
-        del info['observed_time_fraction']
-    return info
-
-
-def _score(rows, trace, alignment, anchor_stamp):
-    for row in rows:
-        if row.stamp <= anchor_stamp:
-            continue
-        truth = trace.at(row.stamp)
-        if truth is not None:
-            err = compare(alignment, truth, row.pose[:3], row.pose[3:])
-            row.error = math.hypot(err['along_m'], err['lateral_m']), abs(err['heading_deg'])
-
-
-def _dds_profiles(cu, orb):
-    def recorded(run):
-        profile = run.get('dds_profile')
-        if not isinstance(profile, dict):
-            profile = {'path': profile}  # 旧 run はパスだけ、または未記録。
-        return {key: profile.get(key) for key in ('rmw_implementation', 'path', 'sha256', 'discovery_range')}
-
-    a, b = recorded(cu), recorded(orb)
-    keys = ('rmw_implementation', 'sha256', 'discovery_range')
-    known = [key for key in keys if a[key] and b[key]]
-    differences = [key for key in known if a[key] != b[key]]
-    comparison = 'unknown'
-    warning = None
-    if differences:
-        comparison = 'different'
-        warning = 'cuVSLAM と ORB の再生時の DDS 設定が異なります（' + '、'.join(differences) + '）。'
-    elif len(known) == len(keys):
-        comparison = 'match'
-    return dict(cuvslam=a, orbslam3=b, comparison=comparison, warning=warning)
+    return raw, continuous, predicted, bridge, reacquisitions
 
 
 def compare_gyro_run(root, cu_id, orb_id, record_root=None):
@@ -118,22 +42,7 @@ def compare_gyro_run(root, cu_id, orb_id, record_root=None):
     orb = json.loads((orb_dir / 'summary.json').read_bytes())
     if _backend('localization', cu_dir, cu) != 'cuvslam':
         raise ValueError('最初の run には cuVSLAM 地図の validate_bag 結果を指定してください')
-    if (orb.get('backend'), orb.get('mode'), orb.get('status'), orb.get('tracking')) != (
-            'orbslam3', 'localization', 'complete', 'vo'):
-        raise ValueError('ステレオ固定地図を使って完走した ORB run を指定してください')
-    source_hash = orb.get('source_metadata_sha256')
-    if not source_hash:
-        asset = orb_map_metadata(root, orb['map_id'])
-        if asset['map_sha256'] != orb['map_sha256']:
-            raise ValueError('旧 ORB run が参照した地図と現在の地図の SHA-256 が異なります')
-        source_hash = asset['source_metadata_sha256']
-    if not cu.get('metadata_sha256') or cu['metadata_sha256'] != orb['metadata_sha256']:
-        raise ValueError('評価 bag の metadata.yaml が一致しません')
-    if not source_hash or source_hash != cu['source_metadata_sha256']:
-        raise ValueError('地図作成 bag の metadata.yaml が一致しません')
-    if (orb['rate'] != cu['replay_rate'] or orb['start_offset_s'] != 0
-            or set(cu['inputs']) != set(STEREO_TOPICS)):
-        raise ValueError('再生倍率、開始位置、ステレオ入力を揃えてください')
+    source_hash = _check_orb_conditions(root, cu, orb, 'vo')
 
     cu_rows, cu_bounds, cu_info = _fixed(cu_dir, cu)
     raw, continuous, predicted, bridge, raw_reacquisitions = _orb_series(orb_dir, orb)
@@ -158,14 +67,7 @@ def compare_gyro_run(root, cu_id, orb_id, record_root=None):
     triples = [(a, b, by_stamp[b.stamp]) for a, b in pairs if b.stamp in by_stamp]
     anchor = None
     if record_root is not None:
-        record_root = Path(record_root).resolve()
-        bag = (record_root / cu['bag']).resolve()
-        if not bag.is_relative_to(record_root) or _sha(bag / 'metadata.yaml') != cu['metadata_sha256']:
-            raise ValueError('指定した評価 bag の metadata.yaml が run と一致しません')
-        path = find_ground_truth(bag, root)
-        if path is None:
-            raise ValueError('指定した bag の Gazebo 正解軌跡がありません')
-        trace = Trace.from_file(path)
+        trace = _ground_truth(root, record_root, cu)
         for a, b in pairs:
             origins = trace.at(a.stamp), trace.at(b.stamp)
             if None in origins:

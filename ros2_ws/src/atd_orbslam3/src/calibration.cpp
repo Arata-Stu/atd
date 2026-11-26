@@ -150,7 +150,7 @@ MapCamera MapCamera::load(const std::filesystem::path & path)
 }
 
 void write_settings(const std::filesystem::path & path, const Calibration & camera, int fps,
-                    const Inertial * imu, const std::filesystem::path & atlas_stem, bool fixed)
+                    const Inertial * imu, const std::filesystem::path & atlas_stem, bool fixed, bool loop_closing)
 {
   std::ofstream out;
   out.exceptions(std::ios::badbit | std::ios::failbit);
@@ -162,6 +162,7 @@ void write_settings(const std::filesystem::path & path, const Calibration & came
       << "\nCamera1.cx: " << camera.intrinsics[2] << "\nCamera1.cy: " << camera.intrinsics[3]
       << "\nStereo.b: " << camera.baseline << "\nCamera.width: " << camera.width
       << "\nCamera.height: " << camera.height << "\nCamera.fps: " << fps << '\n' << settings_defaults;
+  if (!loop_closing) { out << "loopClosing: 0\n"; }
   if (!atlas_stem.empty()) {
     const auto stem = atlas_stem.string();
     if (stem.find_first_of("\r\n\"\\") != std::string::npos) { throw std::invalid_argument("invalid atlas path"); }

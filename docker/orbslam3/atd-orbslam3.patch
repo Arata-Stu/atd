@@ -181,6 +181,18 @@ index eb9042c..7f72f93 100644
  
        SparseBlockMatrixHashMap(const std::vector<int>& rowIndices, const std::vector<int>& colIndices) :
          _rowBlockIndices(rowIndices), _colBlockIndices(colIndices)
+diff --git a/include/Frame.h b/include/Frame.h
+index 572073f..cde0f79 100644
+--- a/include/Frame.h
++++ b/include/Frame.h
+@@ -57,6 +57,7 @@ public:
+ 
+     // Copy constructor.
+     Frame(const Frame &frame);
++    Frame(const Frame& stereo, ORBVocabulary* vocabulary, GeometricCamera* camera, unsigned long frameId);
+ 
+     // Constructor for stereo cameras.
+     Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeStamp, ORBextractor* extractorLeft, ORBextractor* extractorRight, ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera,Frame* pPrevF = static_cast<Frame*>(NULL), const IMU::Calib &ImuCalib = IMU::Calib());
 diff --git a/include/LocalMapping.h b/include/LocalMapping.h
 index dd04a3d..1623a1f 100644
 --- a/include/LocalMapping.h
@@ -295,22 +307,32 @@ index 5539987..a9d51e2 100644
      void CheckInliers();
  
 diff --git a/include/System.h b/include/System.h
-index 872c86e..7415800 100644
+index 872c86e..58ef7ab 100644
 --- a/include/System.h
 +++ b/include/System.h
-@@ -102,7 +102,7 @@ public:
+@@ -26,6 +26,7 @@
+ #include<stdlib.h>
+ #include<string>
+ #include<thread>
++#include<memory>
+ #include<opencv2/core/core.hpp>
+ 
+ #include "Tracking.h"
+@@ -102,7 +103,7 @@ public:
  public:
      EIGEN_MAKE_ALIGNED_OPERATOR_NEW
      // Initialize the SLAM system. It launches the Local Mapping, Loop Closing and Viewer threads.
 -    System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true, const int initFr = 0, const string &strSequence = std::string());
-+    System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true, const int initFr = 0, const string &strSequence = std::string(), bool fixedMap = false);
++    System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true, const int initFr = 0, const string &strSequence = std::string(), bool fixedMap = false, const System* vocabularySource = nullptr);
  
      // Proccess the given stereo frame. Images must be synchronized and rectified.
      // Input images: RGB (CV_8UC3) or grayscale (CV_8U). RGB is converted to grayscale.
-@@ -174,6 +174,10 @@ public:
+@@ -174,6 +175,12 @@ public:
      // Information from most recent processed frame
      // You can call this right after TrackMonocular (or stereo or RGBD)
      int GetTrackingState();
++    // Match the most recent rectified stereo observations without rerunning the image frontend.
++    Sophus::SE3f TrackFixedFrameFrom(System& vio);
 +    int GetFixedMapInliers();
 +    long GetTrackingMapOriginId();
 +    // After Shutdown returns, copy the finite landmarks of the saved (or reloaded) Atlas.
@@ -318,7 +340,7 @@ index 872c86e..7415800 100644
      std::vector<MapPoint*> GetTrackedMapPoints();
      std::vector<cv::KeyPoint> GetTrackedKeyPointsUn();
  
-@@ -201,6 +205,8 @@ private:
+@@ -201,9 +208,11 @@ private:
  
      // Input sensor
      eSensor mSensor;
@@ -326,8 +348,12 @@ index 872c86e..7415800 100644
 +    int mnFixedMapInliers = 0;
  
      // ORB vocabulary used for place recognition and feature matching.
-     ORBVocabulary* mpVocabulary;
-@@ -248,6 +254,8 @@ private:
+-    ORBVocabulary* mpVocabulary;
++    std::shared_ptr<ORBVocabulary> mpVocabulary;
+ 
+     // KeyFrame database for place recognition (relocalization and loop detection).
+     KeyFrameDatabase* mpKeyFrameDatabase;
+@@ -248,6 +257,8 @@ private:
  
      // Shutdown flag
      bool mbShutDown;
@@ -337,7 +363,7 @@ index 872c86e..7415800 100644
      // Tracking state
      int mTrackingState;
 diff --git a/include/Tracking.h b/include/Tracking.h
-index 863c98e..835d268 100644
+index 863c98e..6bcdf2f 100644
 --- a/include/Tracking.h
 +++ b/include/Tracking.h
 @@ -40,6 +40,7 @@
@@ -348,15 +374,16 @@ index 863c98e..835d268 100644
  #include <unordered_set>
  
  namespace ORB_SLAM3
-@@ -87,6 +88,7 @@ public:
+@@ -87,6 +88,8 @@ public:
  
      // Use this function if you have deactivated local mapping and you only want to localize the camera.
      void InformOnlyTracking(const bool &flag);
-+    void UseFixedMap() { mbFixedMap = true; mbOnlyTracking = true; }
++    void UseFixedMap() { mbFixedMap = true; mbOnlyTracking = true; mnFixedFrameId = Frame::nNextId; }
++    void TrackFixedStereoFeatures(const Frame& source);
  
      void UpdateFrameIMU(const float s, const IMU::Bias &b, KeyFrame* pCurrentKeyFrame);
      KeyFrame* GetLastKeyFrame()
-@@ -195,6 +197,8 @@ public:
+@@ -195,6 +198,8 @@ public:
  protected:
  
      // Main tracking function. It is independent of the input sensor.
@@ -365,7 +392,7 @@ index 863c98e..835d268 100644
      void Track();
  
      // Map initialization for stereo and RGB-D
-@@ -209,6 +213,7 @@ protected:
+@@ -209,6 +214,7 @@ protected:
      bool TrackReferenceKeyFrame();
      void UpdateLastFrame();
      bool TrackWithMotionModel();
@@ -373,19 +400,49 @@ index 863c98e..835d268 100644
      bool PredictStateIMU();
  
      bool Relocalization();
-@@ -331,6 +336,7 @@ protected:
+@@ -331,6 +337,8 @@ protected:
      //Motion Model
      bool mbVelocity{false};
      Sophus::SE3f mVelocity;
 +    double mFixedMotionInterval = 0.0;
++    unsigned long mnFixedFrameId = 0;
  
      //Color order (true RGB, false BGR, ignored if grayscale)
      bool mbRGB;
 diff --git a/src/Frame.cc b/src/Frame.cc
-index a04c312..78c5d9c 100644
+index a04c312..6e3561f 100644
 --- a/src/Frame.cc
 +++ b/src/Frame.cc
-@@ -130,15 +130,16 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
+@@ -51,6 +51,28 @@ Frame::Frame(): mpcpi(NULL), mpImuPreintegrated(NULL), mpPrevFrame(NULL), mpImuP
+ }
+ 
+ 
++// Only visual measurements cross from VIO to the fixed Atlas. Landmark associations,
++// poses, temporal keyframes and preintegrated IMU state belong to their own tracker.
++Frame::Frame(const Frame& stereo, ORBVocabulary* vocabulary, GeometricCamera* camera, unsigned long frameId)
++    : mbHasPose(false), mbHasVelocity(false), mpcpi(nullptr), mpORBvocabulary(vocabulary),
++      mpORBextractorLeft(nullptr), mpORBextractorRight(nullptr), mTimeStamp(stereo.mTimeStamp),
++      mK(stereo.mK), mK_(stereo.mK_), mDistCoef(stereo.mDistCoef), mbf(stereo.mbf), mb(stereo.mb),
++      mThDepth(stereo.mThDepth), N(stereo.N), mvKeys(stereo.mvKeys), mvKeysRight(stereo.mvKeysRight),
++      mvKeysUn(stereo.mvKeysUn), mvpMapPoints(N, nullptr), mvuRight(stereo.mvuRight), mvDepth(stereo.mvDepth),
++      mDescriptors(stereo.mDescriptors), mDescriptorsRight(stereo.mDescriptorsRight), mvbOutlier(N, false),
++      mnCloseMPs(0), mpImuPreintegrated(nullptr), mpLastKeyFrame(nullptr), mpPrevFrame(nullptr),
++      mpImuPreintegratedFrame(nullptr), mnId(frameId), mpReferenceKF(nullptr), mnScaleLevels(stereo.mnScaleLevels),
++      mfScaleFactor(stereo.mfScaleFactor), mfLogScaleFactor(stereo.mfLogScaleFactor),
++      mvScaleFactors(stereo.mvScaleFactors), mvInvScaleFactors(stereo.mvInvScaleFactors),
++      mvLevelSigma2(stereo.mvLevelSigma2), mvInvLevelSigma2(stereo.mvInvLevelSigma2), mnDataset(0),
++      mbIsSet(false), mbImuPreintegrated(false), mpMutexImu(nullptr), mpCamera(camera), mpCamera2(nullptr),
++      Nleft(-1), Nright(-1), monoLeft(-1), monoRight(-1)
++{
++    if (stereo.Nleft != -1 || stereo.mpCamera2)
++        throw std::invalid_argument("Shared features require rectified pinhole stereo");
++    AssignFeaturesToGrid();
++}
++
+ //Copy Constructor
+ Frame::Frame(const Frame &frame)
+     :mpcpi(frame.mpcpi),mpORBvocabulary(frame.mpORBvocabulary), mpORBextractorLeft(frame.mpORBextractorLeft), mpORBextractorRight(frame.mpORBextractorRight),
+@@ -130,15 +152,16 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
  #endif
  
      N = mvKeys.size();
@@ -407,7 +464,7 @@ index a04c312..78c5d9c 100644
  #ifdef REGISTER_TIMES
      std::chrono::steady_clock::time_point time_EndStereoMatches = std::chrono::steady_clock::now();
  
-@@ -838,9 +839,9 @@ void Frame::ComputeStereoMatches()
+@@ -838,9 +861,9 @@ void Frame::ComputeStereoMatches()
      }
  
      // Set limits for search
@@ -419,7 +476,7 @@ index a04c312..78c5d9c 100644
  
      // For each left keypoint search a match in the right image
      vector<pair<int, int> > vDistIdx;
-@@ -964,13 +965,14 @@ void Frame::ComputeStereoMatches()
+@@ -964,13 +987,14 @@ void Frame::ComputeStereoMatches()
          }
      }
  
@@ -472,7 +529,7 @@ index 53df332..b27f1e0 100644
  
  KeyFrame* LocalMapping::GetCurrKF()
 diff --git a/src/LoopClosing.cc b/src/LoopClosing.cc
-index 319afb5..b793d76 100644
+index 319afb5..f7080aa 100644
 --- a/src/LoopClosing.cc
 +++ b/src/LoopClosing.cc
 @@ -298,7 +298,7 @@ void LoopClosing::Run()
@@ -484,7 +541,15 @@ index 319afb5..b793d76 100644
              break;
          }
  
-@@ -979,16 +979,7 @@ void LoopClosing::CorrectLoop()
+@@ -310,6 +310,7 @@ void LoopClosing::Run()
+ 
+ void LoopClosing::InsertKeyFrame(KeyFrame *pKF)
+ {
++    if (!mbActiveLC) return;
+     unique_lock<mutex> lock(mMutexLoopQueue);
+     if(pKF->mnId!=0)
+         mlpLoopKeyFrameQueue.push_back(pKF);
+@@ -979,16 +980,7 @@ void LoopClosing::CorrectLoop()
      if(isRunningGBA())
      {
          cout << "Stoping Global Bundle Adjustment...";
@@ -502,7 +567,7 @@ index 319afb5..b793d76 100644
          cout << "  Done!!" << endl;
      }
  
-@@ -1198,6 +1189,7 @@ void LoopClosing::CorrectLoop()
+@@ -1198,6 +1190,7 @@ void LoopClosing::CorrectLoop()
      // Launch a new thread to perform Global Bundle Adjustment (Only if few keyframes, if not it would take too much time)
      if(!pLoopMap->isImuInitialized() || (pLoopMap->KeyFramesInMap()<200 && mpAtlas->CountMaps()==1))
      {
@@ -510,7 +575,7 @@ index 319afb5..b793d76 100644
          mbRunningGBA = true;
          mbFinishedGBA = false;
          mbStopGBA = false;
-@@ -1230,16 +1222,7 @@ void LoopClosing::MergeLocal()
+@@ -1230,16 +1223,7 @@ void LoopClosing::MergeLocal()
      // If a Global Bundle Adjustment is running, abort it
      if(isRunningGBA())
      {
@@ -528,7 +593,7 @@ index 319afb5..b793d76 100644
          bRelaunchBA = true;
      }
  
-@@ -1763,6 +1746,7 @@ void LoopClosing::MergeLocal()
+@@ -1763,6 +1747,7 @@ void LoopClosing::MergeLocal()
      if(bRelaunchBA && (!pCurrentMap->isImuInitialized() || (pCurrentMap->KeyFramesInMap()<200 && mpAtlas->CountMaps()==1)))
      {
          // Launch a new thread to perform Global Bundle Adjustment
@@ -536,7 +601,7 @@ index 319afb5..b793d76 100644
          mbRunningGBA = true;
          mbFinishedGBA = false;
          mbStopGBA = false;
-@@ -1803,16 +1787,7 @@ void LoopClosing::MergeLocal2()
+@@ -1803,16 +1788,7 @@ void LoopClosing::MergeLocal2()
      // If a Global Bundle Adjustment is running, abort it
      if(isRunningGBA())
      {
@@ -554,7 +619,7 @@ index 319afb5..b793d76 100644
          bRelaunchBA = true;
      }
  
-@@ -2510,6 +2485,23 @@ void LoopClosing::RunGlobalBundleAdjustment(Map* pActiveMap, unsigned long nLoop
+@@ -2510,6 +2486,23 @@ void LoopClosing::RunGlobalBundleAdjustment(Map* pActiveMap, unsigned long nLoop
      }
  }
  
@@ -800,7 +865,7 @@ index b8d3abf..a7d5efb 100644
  
  
 diff --git a/src/System.cc b/src/System.cc
-index 60d9c51..ebb352e 100644
+index 60d9c51..8b3df9a 100644
 --- a/src/System.cc
 +++ b/src/System.cc
 @@ -21,7 +21,7 @@
@@ -818,7 +883,7 @@ index 60d9c51..ebb352e 100644
  System::System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor,
 -               const bool bUseViewer, const int initFr, const string &strSequence):
 -    mSensor(sensor), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false), mbResetActiveMap(false),
-+               const bool bUseViewer, const int initFr, const string &strSequence, bool fixedMap):
++               const bool bUseViewer, const int initFr, const string &strSequence, bool fixedMap, const System* vocabularySource):
 +    mSensor(sensor), mbFixedMap(fixedMap), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false), mbResetActiveMap(false),
      mbActivateLocalizationMode(false), mbDeactivateLocalizationMode(false), mbShutDown(false)
  {
@@ -836,39 +901,79 @@ index 60d9c51..ebb352e 100644
      }
  
      cv::FileNode node = fsSettings["File.version"];
-@@ -107,7 +107,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+@@ -107,48 +107,37 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
  
      mStrVocabularyFilePath = strVocFile;
  
 -    bool loadedAtlas = false;
+-
+-    if(mStrLoadAtlasFromFile.empty())
+-    {
+-        //Load ORB Vocabulary
 +    if (mbFixedMap && (sensor != STEREO || mStrLoadAtlasFromFile.empty() || !mStrSaveAtlasToFile.empty()))
 +        throw std::invalid_argument("Fixed-map tracking requires stereo and a read-only input Atlas");
++
++    if (vocabularySource) {
++        if (!vocabularySource->mbFixedMap || mSensor != IMU_STEREO ||
++            !mStrLoadAtlasFromFile.empty() || !mStrSaveAtlasToFile.empty() ||
++            vocabularySource->mStrVocabularyFilePath != strVocFile)
++            throw std::invalid_argument("Expected a fresh VIO session paired with a fixed stereo Atlas");
++        mpVocabulary = vocabularySource->mpVocabulary;
++        // Atlas deserialization restores process-global counters. The read-only
++        // tracker has reserved its own frame sequence and creates no landmarks or
++        // keyframes. Give the independent inertial session its usual initial IDs.
++        Frame::nNextId = 0;
++        KeyFrame::nNextId = 0;
++        MapPoint::nNextId = 0;
++    } else {
+         cout << endl << "Loading ORB Vocabulary. This could take a while..." << endl;
+-
+-        mpVocabulary = new ORBVocabulary();
+-        bool bVocLoad = mpVocabulary->loadFromTextFile(strVocFile);
+-        if(!bVocLoad)
+-        {
+-            cerr << "Wrong path to vocabulary. " << endl;
+-            cerr << "Falied to open at: " << strVocFile << endl;
+-            exit(-1);
+-        }
++        mpVocabulary = std::make_shared<ORBVocabulary>();
++        if (!mpVocabulary->loadFromTextFile(strVocFile))
++            throw std::runtime_error("Failed to load ORB vocabulary: " + strVocFile);
+         cout << "Vocabulary loaded!" << endl << endl;
++    }
++    mpKeyFrameDatabase = new KeyFrameDatabase(*mpVocabulary);
  
-     if(mStrLoadAtlasFromFile.empty())
+-        //Create KeyFrame Database
+-        mpKeyFrameDatabase = new KeyFrameDatabase(*mpVocabulary);
+-
+-        //Create the Atlas
++    if(mStrLoadAtlasFromFile.empty())
++    {
+         cout << "Initialization of Atlas from scratch " << endl;
+         mpAtlas = new Atlas(0);
+     }
+     else
      {
-@@ -118,9 +119,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
-         bool bVocLoad = mpVocabulary->loadFromTextFile(strVocFile);
-         if(!bVocLoad)
-         {
+-        //Load ORB Vocabulary
+-        cout << endl << "Loading ORB Vocabulary. This could take a while..." << endl;
+-
+-        mpVocabulary = new ORBVocabulary();
+-        bool bVocLoad = mpVocabulary->loadFromTextFile(strVocFile);
+-        if(!bVocLoad)
+-        {
 -            cerr << "Wrong path to vocabulary. " << endl;
 -            cerr << "Falied to open at: " << strVocFile << endl;
 -            exit(-1);
-+            throw std::runtime_error("Failed to load ORB vocabulary: " + strVocFile);
-         }
-         cout << "Vocabulary loaded!" << endl << endl;
+-        }
+-        cout << "Vocabulary loaded!" << endl << endl;
+-
+-        //Create KeyFrame Database
+-        mpKeyFrameDatabase = new KeyFrameDatabase(*mpVocabulary);
+-
+         cout << "Load File" << endl;
  
-@@ -140,9 +139,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
-         bool bVocLoad = mpVocabulary->loadFromTextFile(strVocFile);
-         if(!bVocLoad)
-         {
--            cerr << "Wrong path to vocabulary. " << endl;
--            cerr << "Falied to open at: " << strVocFile << endl;
--            exit(-1);
-+            throw std::runtime_error("Failed to load ORB vocabulary: " + strVocFile);
-         }
-         cout << "Vocabulary loaded!" << endl << endl;
- 
-@@ -158,17 +155,22 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+         // Load the file with an earlier session
+@@ -158,17 +147,22 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
  
          if(!isRead)
          {
@@ -896,7 +1001,7 @@ index 60d9c51..ebb352e 100644
  
          //clock_t timeElapsed = clock() - start;
          //unsigned msElapsed = timeElapsed / (CLOCKS_PER_SEC / 1000);
-@@ -183,7 +185,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+@@ -183,18 +177,18 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
  
      //Create Drawers. These are used by the Viewer
      mpFrameDrawer = new FrameDrawer(mpAtlas);
@@ -905,7 +1010,11 @@ index 60d9c51..ebb352e 100644
  
      //Initialize the Tracking thread
      //(it will live in the main thread of execution, the one that called this constructor)
-@@ -194,7 +196,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+     cout << "Seq. Name: " << strSequence << endl;
+-    mpTracker = new Tracking(this, mpVocabulary, mpFrameDrawer, mpMapDrawer,
++    mpTracker = new Tracking(this, mpVocabulary.get(), mpFrameDrawer, mpMapDrawer,
+                              mpAtlas, mpKeyFrameDatabase, strSettingsFile, mSensor, settings_, strSequence);
+ 
      //Initialize the Local Mapping thread and launch
      mpLocalMapper = new LocalMapping(this, mpAtlas, mSensor==MONOCULAR || mSensor==IMU_MONOCULAR,
                                       mSensor==IMU_MONOCULAR || mSensor==IMU_STEREO || mSensor==IMU_RGBD, strSequence);
@@ -914,16 +1023,18 @@ index 60d9c51..ebb352e 100644
      mpLocalMapper->mInitFr = initFr;
      if(settings_)
          mpLocalMapper->mThFarPoints = settings_->thFarPoints();
-@@ -211,7 +213,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+@@ -210,8 +204,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+ 
      //Initialize the Loop Closing thread and launch
      // mSensor!=MONOCULAR && mSensor!=IMU_MONOCULAR
-     mpLoopCloser = new LoopClosing(mpAtlas, mpKeyFrameDatabase, mpVocabulary, mSensor!=MONOCULAR, activeLC); // mSensor!=MONOCULAR);
+-    mpLoopCloser = new LoopClosing(mpAtlas, mpKeyFrameDatabase, mpVocabulary, mSensor!=MONOCULAR, activeLC); // mSensor!=MONOCULAR);
 -    mptLoopClosing = new thread(&ORB_SLAM3::LoopClosing::Run, mpLoopCloser);
++    mpLoopCloser = new LoopClosing(mpAtlas, mpKeyFrameDatabase, mpVocabulary.get(), mSensor!=MONOCULAR, activeLC); // mSensor!=MONOCULAR);
 +
  
      //Set pointers between threads
      mpTracker->SetLocalMapper(mpLocalMapper);
-@@ -223,17 +225,11 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+@@ -223,17 +217,11 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
      mpLoopCloser->SetTracker(mpTracker);
      mpLoopCloser->SetLocalMapper(mpLocalMapper);
  
@@ -946,7 +1057,7 @@ index 60d9c51..ebb352e 100644
      }
  
      // Fix verbosity
-@@ -243,6 +239,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
+@@ -243,6 +231,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
  
  Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timestamp, const vector<IMU::Point>& vImuMeas, string filename)
  {
@@ -955,7 +1066,7 @@ index 60d9c51..ebb352e 100644
      if(mSensor!=STEREO && mSensor!=IMU_STEREO)
      {
          cerr << "ERROR: you called TrackStereo but input sensor was not set to Stereo nor Stereo-Inertial." << endl;
-@@ -315,9 +313,9 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight,
+@@ -315,9 +305,9 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight,
      // std::cout << "start GrabImageStereo" << std::endl;
      Sophus::SE3f Tcw = mpTracker->GrabImageStereo(imLeftToFeed,imRightToFeed,timestamp,filename);
  
@@ -967,7 +1078,7 @@ index 60d9c51..ebb352e 100644
      mTrackingState = mpTracker->mState;
      mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
      mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
-@@ -327,6 +325,8 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight,
+@@ -327,6 +317,8 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight,
  
  Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const double &timestamp, const vector<IMU::Point>& vImuMeas, string filename)
  {
@@ -976,7 +1087,7 @@ index 60d9c51..ebb352e 100644
      if(mSensor!=RGBD  && mSensor!=IMU_RGBD)
      {
          cerr << "ERROR: you called TrackRGBD but input sensor was not set to RGBD." << endl;
-@@ -398,6 +398,8 @@ Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const
+@@ -398,6 +390,8 @@ Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const
  
  Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp, const vector<IMU::Point>& vImuMeas, string filename)
  {
@@ -985,7 +1096,7 @@ index 60d9c51..ebb352e 100644
  
      {
          unique_lock<mutex> lock(mMutexReset);
-@@ -477,12 +479,14 @@ Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp,
+@@ -477,12 +471,14 @@ Sophus::SE3f System::TrackMonocular(const cv::Mat &im, const double &timestamp,
  
  void System::ActivateLocalizationMode()
  {
@@ -1000,7 +1111,7 @@ index 60d9c51..ebb352e 100644
      unique_lock<mutex> lock(mMutexMode);
      mbDeactivateLocalizationMode = true;
  }
-@@ -502,53 +506,45 @@ bool System::MapChanged()
+@@ -502,53 +498,45 @@ bool System::MapChanged()
  
  void System::Reset()
  {
@@ -1067,10 +1178,26 @@ index 60d9c51..ebb352e 100644
      }
  
      /*if(mpViewer)
-@@ -1318,6 +1314,42 @@ void System::SaveDebugData(const int &initIdx)
+@@ -1318,6 +1306,58 @@ void System::SaveDebugData(const int &initIdx)
  }
  
  
++Sophus::SE3f System::TrackFixedFrameFrom(System& vio)
++{
++    if (!mbFixedMap || vio.mSensor != IMU_STEREO || mpVocabulary != vio.mpVocabulary)
++        throw std::logic_error("Expected a fixed stereo Atlas and a VIO tracker using its vocabulary");
++    std::scoped_lock sessions(mMutexSession, vio.mMutexSession);
++    if (mbShutDown || vio.mbShutDown)
++        throw std::logic_error("Cannot track after Shutdown");
++    mpTracker->TrackFixedStereoFeatures(vio.mpTracker->mCurrentFrame);
++    unique_lock<mutex> lock(mMutexState);
++    mTrackingState = mpTracker->mState;
++    mnFixedMapInliers = mTrackingState == Tracking::OK ? mpTracker->GetMatchesInliers() : 0;
++    mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
++    mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
++    return mpTracker->mCurrentFrame.GetPose();
++}
++
 +int System::GetFixedMapInliers()
 +{
 +    unique_lock<mutex> lock(mMutexState);
@@ -1110,7 +1237,7 @@ index 60d9c51..ebb352e 100644
  int System::GetTrackingState()
  {
      unique_lock<mutex> lock(mMutexState);
-@@ -1338,11 +1370,10 @@ vector<cv::KeyPoint> System::GetTrackedKeyPointsUn()
+@@ -1338,11 +1378,10 @@ vector<cv::KeyPoint> System::GetTrackedKeyPointsUn()
  
  double System::GetTimeFromIMUInit()
  {
@@ -1126,7 +1253,7 @@ index 60d9c51..ebb352e 100644
  }
  
  bool System::isLost()
-@@ -1406,11 +1437,13 @@ void System::SaveAtlas(int type){
+@@ -1406,11 +1445,13 @@ void System::SaveAtlas(int type){
          //clock_t start = clock();
  
          // Save the current session
@@ -1143,7 +1270,7 @@ index 60d9c51..ebb352e 100644
  
          string strVocabularyChecksum = CalculateCheckSum(mStrVocabularyFilePath,TEXT_FILE);
          std::size_t found = mStrVocabularyFilePath.find_last_of("/\\");
-@@ -1419,24 +1452,26 @@ void System::SaveAtlas(int type){
+@@ -1419,24 +1460,26 @@ void System::SaveAtlas(int type){
          if(type == TEXT_FILE) // File text
          {
              cout << "Starting to write the save text file " << endl;
@@ -1172,7 +1299,7 @@ index 60d9c51..ebb352e 100644
              cout << "End to write save binary file" << endl;
          }
      }
-@@ -1447,9 +1482,7 @@ bool System::LoadAtlas(int type)
+@@ -1447,9 +1490,7 @@ bool System::LoadAtlas(int type)
      string strFileVoc, strVocChecksum;
      bool isRead = false;
  
@@ -1183,8 +1310,17 @@ index 60d9c51..ebb352e 100644
  
      if(type == TEXT_FILE) // File text
      {
+@@ -1497,7 +1538,7 @@ bool System::LoadAtlas(int type)
+         }
+ 
+         mpAtlas->SetKeyFrameDababase(mpKeyFrameDatabase);
+-        mpAtlas->SetORBVocabulary(mpVocabulary);
++        mpAtlas->SetORBVocabulary(mpVocabulary.get());
+         mpAtlas->PostLoad();
+ 
+         return true;
 diff --git a/src/Tracking.cc b/src/Tracking.cc
-index 5191451..0c1995f 100644
+index 5191451..1de1881 100644
 --- a/src/Tracking.cc
 +++ b/src/Tracking.cc
 @@ -1490,14 +1490,15 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat
@@ -1205,10 +1341,25 @@ index 5191451..0c1995f 100644
  
      //cout << "Incoming frame ended" << endl;
  
-@@ -1791,8 +1792,52 @@ void Tracking::ResetFrameIMU()
+@@ -1791,8 +1792,68 @@ void Tracking::ResetFrameIMU()
  }
  
  
++void Tracking::TrackFixedStereoFeatures(const Frame& source)
++{
++    // Creating a fresh VIO submap can discard the current frame during TrackStereo.
++    if (source.mK.empty()) {
++        mCurrentFrame = Frame();
++        mState = LOST;
++        mnMatchesInliers = 0;
++        mpReferenceKF = nullptr;
++        mFixedMotionInterval = 0.0;
++        return;
++    }
++    mCurrentFrame = Frame(source, mpORBVocabulary, mpCamera, mnFixedFrameId++);
++    TrackFixedMap();
++}
++
 +void Tracking::TrackFixedMap()
 +{
 +    Map* map = mpAtlas->GetCurrentMap();
@@ -1245,7 +1396,8 @@ index 5191451..0c1995f 100644
 +        mVelocity = mCurrentFrame.GetPose() * mLastFrame.GetPose().inverse();
 +        mFixedMotionInterval = dt;
 +    }
-+    mLastFrame = Frame(mCurrentFrame);
++    // Descriptor matrices are immutable and reference-counted. The next image gets a new frame.
++    mLastFrame = mCurrentFrame;
 +    mState = OK;
 +}
 +
@@ -1258,7 +1410,7 @@ index 5191451..0c1995f 100644
  
      if (bStepByStep)
      {
-@@ -2197,11 +2242,6 @@ void Tracking::Track()
+@@ -2197,11 +2258,6 @@ void Tracking::Track()
          vdLMTrack_ms.push_back(timeLMTrack);
  #endif
  
@@ -1270,7 +1422,7 @@ index 5191451..0c1995f 100644
          if(bOK || mState==RECENTLY_LOST)
          {
              // Update motion model
-@@ -2215,8 +2255,6 @@ void Tracking::Track()
+@@ -2215,8 +2271,6 @@ void Tracking::Track()
                  mbVelocity = false;
              }
  
@@ -1279,7 +1431,7 @@ index 5191451..0c1995f 100644
  
              // Clean VO matches
              for(int i=0; i<mCurrentFrame.N; i++)
-@@ -2334,6 +2372,12 @@ void Tracking::Track()
+@@ -2334,6 +2388,12 @@ void Tracking::Track()
  
  void Tracking::StereoInitialization()
  {
@@ -1292,7 +1444,7 @@ index 5191451..0c1995f 100644
      if(mCurrentFrame.N>500)
      {
          if (mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
-@@ -2438,7 +2482,6 @@ void Tracking::StereoInitialization()
+@@ -2438,7 +2498,6 @@ void Tracking::StereoInitialization()
  
          mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.push_back(pKFini);
  
@@ -1300,7 +1452,7 @@ index 5191451..0c1995f 100644
  
          mState=OK;
      }
-@@ -2649,7 +2692,6 @@ void Tracking::CreateInitialMapMonocular()
+@@ -2649,7 +2708,6 @@ void Tracking::CreateInitialMapMonocular()
  
      mpAtlas->SetReferenceMapPoints(mvpLocalMapPoints);
  
@@ -1308,7 +1460,7 @@ index 5191451..0c1995f 100644
  
      mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.push_back(pKFini);
  
-@@ -2853,8 +2895,6 @@ void Tracking::UpdateLastFrame()
+@@ -2853,8 +2911,6 @@ void Tracking::UpdateLastFrame()
  
  bool Tracking::TrackWithMotionModel()
  {
@@ -1317,7 +1469,7 @@ index 5191451..0c1995f 100644
      // Update last frame pose according to its reference keyframe
      // Create "visual odometry" points if in Localization Mode
      UpdateLastFrame();
-@@ -2865,14 +2905,13 @@ bool Tracking::TrackWithMotionModel()
+@@ -2865,14 +2921,13 @@ bool Tracking::TrackWithMotionModel()
          PredictStateIMU();
          return true;
      }
@@ -1338,7 +1490,7 @@ index 5191451..0c1995f 100644
      fill(mCurrentFrame.mvpMapPoints.begin(),mCurrentFrame.mvpMapPoints.end(),static_cast<MapPoint*>(NULL));
  
      // Project points seen in previous frame
-@@ -2934,7 +2973,7 @@ bool Tracking::TrackWithMotionModel()
+@@ -2934,7 +2989,7 @@ bool Tracking::TrackWithMotionModel()
          }
      }
  
@@ -1347,7 +1499,7 @@ index 5191451..0c1995f 100644
      {
          mbVO = nmatchesMap<10;
          return nmatches>20;
-@@ -3627,7 +3666,7 @@ bool Tracking::Relocalization()
+@@ -3627,7 +3682,7 @@ bool Tracking::Relocalization()
      // If enough matches are found we setup a PnP solver
      ORBmatcher matcher(0.75,true);
  
@@ -1356,7 +1508,7 @@ index 5191451..0c1995f 100644
      vpMLPnPsolvers.resize(nKFs);
  
      vector<vector<MapPoint*> > vvpMapPointMatches;
-@@ -3655,7 +3694,7 @@ bool Tracking::Relocalization()
+@@ -3655,7 +3710,7 @@ bool Tracking::Relocalization()
              {
                  MLPnPsolver* pSolver = new MLPnPsolver(mCurrentFrame,vvpMapPointMatches[i]);
                  pSolver->SetRansacParameters(0.99,10,300,6,0.5,5.991);  //This solver needs at least 6 points
@@ -1365,7 +1517,7 @@ index 5191451..0c1995f 100644
                  nCandidates++;
              }
          }
-@@ -3678,7 +3717,7 @@ bool Tracking::Relocalization()
+@@ -3678,7 +3733,7 @@ bool Tracking::Relocalization()
              int nInliers;
              bool bNoMore;
  
@@ -1374,7 +1526,7 @@ index 5191451..0c1995f 100644
              Eigen::Matrix4f eigTcw;
              bool bTcw = pSolver->iterate(5,bNoMore,vbInliers,nInliers, eigTcw);
  
-@@ -3780,12 +3819,6 @@ void Tracking::Reset(bool bLocMap)
+@@ -3780,12 +3835,6 @@ void Tracking::Reset(bool bLocMap)
  {
      Verbose::PrintMess("System Reseting", Verbose::VERBOSITY_NORMAL);
  
@@ -1387,7 +1539,7 @@ index 5191451..0c1995f 100644
  
      // Reset Local Mapping
      if (!bLocMap)
-@@ -3831,8 +3864,6 @@ void Tracking::Reset(bool bLocMap)
+@@ -3831,8 +3880,6 @@ void Tracking::Reset(bool bLocMap)
      mpLastKeyFrame = static_cast<KeyFrame*>(NULL);
      mvIniMatches.clear();
  
@@ -1396,7 +1548,7 @@ index 5191451..0c1995f 100644
  
      Verbose::PrintMess("   End reseting! ", Verbose::VERBOSITY_NORMAL);
  }
-@@ -3840,12 +3871,6 @@ void Tracking::Reset(bool bLocMap)
+@@ -3840,12 +3887,6 @@ void Tracking::Reset(bool bLocMap)
  void Tracking::ResetActiveMap(bool bLocMap)
  {
      Verbose::PrintMess("Active map Reseting", Verbose::VERBOSITY_NORMAL);
@@ -1409,7 +1561,7 @@ index 5191451..0c1995f 100644
  
      Map* pMap = mpAtlas->GetCurrentMap();
  
-@@ -3922,8 +3947,6 @@ void Tracking::ResetActiveMap(bool bLocMap)
+@@ -3922,8 +3963,6 @@ void Tracking::ResetActiveMap(bool bLocMap)
  
      mbVelocity = false;
  

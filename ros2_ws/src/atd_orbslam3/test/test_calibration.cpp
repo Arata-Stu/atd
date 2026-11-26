@@ -61,5 +61,10 @@ int main()
   cv::FileStorage fixed((dir / "fixed.yml").string(), cv::FileStorage::READ);
   check(std::string(fixed["System.LoadAtlasFromFile"]) == (dir / "atlas").string());
   check(fixed["System.SaveAtlasToFile"].empty());
+  atd_orbslam3::write_settings(dir / "vio.yml", stereo, 90, &imu, {}, false, false);
+  cv::FileStorage vio((dir / "vio.yml").string(), cv::FileStorage::READ);
+  check(vio["loopClosing"].isInt() && int(vio["loopClosing"]) == 0);
+  check(vio["System.SaveAtlasToFile"].empty() && vio["System.LoadAtlasFromFile"].empty());
+  check(settings["loopClosing"].empty());
   fs::remove_all(dir);
 }

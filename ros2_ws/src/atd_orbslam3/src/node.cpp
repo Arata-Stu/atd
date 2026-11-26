@@ -2,6 +2,7 @@
 #include "confirmation.hpp"
 #include "node.hpp"
 #include "stereo_imu_buffer.hpp"
+#include "vio_map_alignment.hpp"
 
 #include <algorithm>
 #include <array>
@@ -97,6 +98,12 @@ geometry_msgs::msg::TransformStamped tf_msg(const Rigid & value, const Header & 
   return tf;
 }
 
+Rigid rigid(const Sophus::SE3f & pose)
+{
+  return Eigen::Translation3d(pose.translation().cast<double>()) *
+         pose.unit_quaternion().cast<double>().normalized();
+}
+
 cv::Mat view(const Image & image, const Calibration & camera)
 {
   if ((image.encoding != "mono8" && image.encoding != "8UC1") ||
@@ -116,7 +123,7 @@ public:
   explicit OrbslamNode(const rclcpp::NodeOptions & options)
     : Node("orbslam3_node", options),
       confirm_(param("confirm_frames", 3), param("max_pose_gap_s", .25),
-               param("max_speed_mps", 12.), param("max_angular_speed_rps", 12.))
+               param("max_speed_mps", 12.), param("max_angular_speed_rps", 12.)), alignment_(confirm_)
   {
     const auto mode = param<std::string>("mode", "mapping");
     fixed_ = mode == "localization";
@@ -142,8 +149,8 @@ public:
     map_sha_ = param<std::string>("map_sha256", "");
     hdmap_sha_ = param<std::string>("hdmap_sha256", "");
     if (!fs::is_regular_file(vocab_)) { throw std::invalid_argument("missing ORB-SLAM3 vocabulary: " + vocab_); }
-    if (vio && (fixed_ || !atlas_.empty())) {
-      throw std::invalid_argument("stereo-inertial supports replay; fixed map assets require stereo mapping");
+    if (vio && !fixed_ && !atlas_.empty()) {
+      throw std::invalid_argument("reusable visual stereo atlases require stereo-only mapping");
     }
     if (!atlas_.empty() && (!atlas_.is_absolute() || atlas_.filename() != "atlas.osa")) {
       throw std::invalid_argument("atlas_path must be an absolute path ending in atlas.osa");
@@ -232,6 +239,10 @@ public:
       frame_status_ = create_publisher<Status>("/orbslam3/frame_status", 128);
       transforms_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
       timer_ = create_wall_timer(100ms, [this]() { watch(); });
+      if (vio) {
+        vio_odometry_ = create_publisher<Odometry>("/orbslam3/vio_odometry", 128);
+        map_match_ = create_publisher<Header>("/orbslam3/map_match", 128);
+      }
     } else if (!atlas_.empty()) {
       save_ = create_service<Trigger>("/orbslam3/save_map",
         [this](Trigger::Request::SharedPtr, Trigger::Response::SharedPtr response) { save_map(*response); });
@@ -251,9 +262,17 @@ public:
         "撮影周期 (%.2f ms) を超えた呼び出し %zu 回",
         received_images_[0], received_images_[1], tracked_pairs_, tracking_total_ms_ / tracked_pairs_,
         tracking_max_ms_, 1000.0 / fps_, over_camera_period_);
+      if (fixed_core_) {
+        RCLCPP_INFO(get_logger(), "1 対の平均処理時間の内訳: Stereo-Inertial %.2f ms、固定地図照合 %.2f ms",
+          (tracking_total_ms_ - match_total_ms_) / tracked_pairs_, match_total_ms_ / tracked_pairs_);
+      }
     }
     if (core_ && !shutdown_) {
       try { core_->Shutdown(); }
+      catch (const std::exception & e) { RCLCPP_WARN(get_logger(), "%s", e.what()); }
+    }
+    if (fixed_core_) {
+      try { fixed_core_->Shutdown(); }
       catch (const std::exception & e) { RCLCPP_WARN(get_logger(), "%s", e.what()); }
     }
   }
@@ -330,9 +349,20 @@ private:
     if (fixed_) { stem = atlas_; stem.replace_extension(); }
     else if (!atlas_.empty()) { stem = work_.path / "atlas"; }
     const auto settings = work_.path / "settings.yml";
-    write_settings(settings, calibration, fps_, inertial_ ? &*inertial_ : nullptr, stem, fixed_);
-    core_ = std::make_unique<ORB_SLAM3::System>(vocab_, settings.string(),
-      inertial_ ? ORB_SLAM3::System::IMU_STEREO : ORB_SLAM3::System::STEREO, false, 0, "", fixed_);
+    if (fixed_ && inertial_) {
+      // Atlas deserialization restores ORB's static ID counters. Load it before starting VIO.
+      const auto fixed_settings = work_.path / "fixed.yml";
+      write_settings(fixed_settings, calibration, fps_, nullptr, stem, true);
+      fixed_core_ = std::make_unique<ORB_SLAM3::System>(vocab_, fixed_settings.string(),
+        ORB_SLAM3::System::STEREO, false, 0, "", true);
+      write_settings(settings, calibration, fps_, &*inertial_, {}, false, false);
+      core_ = std::make_unique<ORB_SLAM3::System>(vocab_, settings.string(),
+        ORB_SLAM3::System::IMU_STEREO, false, 0, "", false, fixed_core_.get());
+    } else {
+      write_settings(settings, calibration, fps_, inertial_ ? &*inertial_ : nullptr, stem, fixed_);
+      core_ = std::make_unique<ORB_SLAM3::System>(vocab_, settings.string(),
+        inertial_ ? ORB_SLAM3::System::IMU_STEREO : ORB_SLAM3::System::STEREO, false, 0, "", fixed_);
+    }
     camera_ = calibration;
     calibration_dirty_ = false;
     std_msgs::msg::Bool ready;
@@ -356,6 +386,17 @@ private:
     const auto input_right = view(right, *camera_);
     const auto begin = std::chrono::steady_clock::now();
     const auto tcw = core_->TrackStereo(input_left, input_right, stamp * 1e-9, measurements);
+    std::optional<Rigid> matched_pose;
+    if (fixed_core_) {
+      const auto match_start = std::chrono::steady_clock::now();
+      const auto camera_from_map_atlas = fixed_core_->TrackFixedFrameFrom(*core_);
+      if (fixed_core_->GetTrackingState() == ORB_SLAM3::Tracking::OK &&
+          fixed_core_->GetFixedMapInliers() > 0 && camera_from_map_atlas.matrix().allFinite()) {
+        matched_pose = reference_->map_from_atlas * rigid(camera_from_map_atlas).inverse() * base_from_camera_.inverse();
+      }
+      match_total_ms_ += std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - match_start).count();
+    }
     const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - begin;
     ++tracked_pairs_;
     tracking_total_ms_ += elapsed.count();
@@ -364,8 +405,15 @@ private:
     last_stamp_ = stamp;
     const bool ok = core_->GetTrackingState() == ORB_SLAM3::Tracking::OK &&
                     (!inertial_ || core_->GetTimeFromIMUInit() > 0.) &&
-                    tcw.matrix().allFinite() && (!fixed_ || core_->GetFixedMapInliers() > 0);
-    if (!ok) {
+                    tcw.matrix().allFinite() && (!fixed_ || fixed_core_ || core_->GetFixedMapInliers() > 0);
+    if (fixed_core_) {
+      const long origin = ok ? core_->GetTrackingMapOriginId() : -1;
+      if (origin < 0) {
+        clear_tracking("慣性初期化済みの VIO 追跡を待っています", ever_tracked_ ? "lost" : "localizing", &left.header);
+      } else {
+        observe_vio(left.header, origin, rigid(tcw).inverse() * base_from_camera_.inverse(), matched_pose);
+      }
+    } else if (!ok) {
       clear_tracking("選択した地図への画像照合を待っています", ever_tracked_ ? "lost" : "localizing", &left.header);
     } else {
       const long origin = core_->GetTrackingMapOriginId();
@@ -381,8 +429,7 @@ private:
           return;
         }
         origin_ = origin;
-        Rigid camera_from_atlas;
-        camera_from_atlas.matrix() = tcw.matrix().cast<double>();
+        const auto camera_from_atlas = rigid(tcw);
         if (!reference_) { reference_ = MapCamera{*camera_, base_from_camera_ * camera_from_atlas}; }
         const Rigid pose = reference_->map_from_atlas * camera_from_atlas.inverse() * base_from_camera_.inverse();
         observe(left.header, pose);
@@ -404,11 +451,7 @@ private:
     if (!fixed_) { odometry_->publish(odom); return; }
 
     const auto stamp = ns(image);
-    const double age = (now().nanoseconds() - stamp) * 1e-9;
-    if (age > max_age_ || age < -.1) {
-      clear_tracking("画像時刻が現在のROS時刻と一致しません", "stale", &image);
-      return;
-    }
+    if (!fresh(image)) { return; }
     const auto delta = previous_pose_ ? Rigid(previous_pose_->inverse() * pose) : Rigid::Identity();
     const Eigen::AngleAxisd rotation(delta.linear());
     const bool was_tracking = confirm_.tracking();
@@ -432,13 +475,56 @@ private:
       tf_msg(map_from_odom, h, "odom"), tf_msg(odom_from_base_, odom_header, "base_link")});
     odom.twist.twist.linear.x = delta.translation().x() / dt;
     odom.twist.twist.angular.z = rotation.angle() * rotation.axis().z() / dt;
-    odometry_->publish(odom);
+    publish_tracking(odom, "保存地図の特徴点と連続する画像の姿勢が整合しました");
+  }
 
+  void observe_vio(const Header & image, long origin, const Rigid & vio_from_base,
+                   const std::optional<Rigid> & matched_pose)
+  {
+    if (!fresh(image)) { return; }
+    const bool corrected = alignment_.observe(ns(image), origin, vio_from_base, matched_pose);
+    Odometry odom;
+    odom.header = image;
+    odom.header.frame_id = "odom";
+    odom.child_frame_id = "base_link";
+    odom.pose.pose = pose_msg(alignment_.odom_from_base());
+    odom.twist.twist.linear.x = alignment_.speed();
+    odom.twist.twist.angular.z = alignment_.yaw_rate();
+    vio_odometry_->publish(odom);
+    const auto local_tf = tf_msg(alignment_.odom_from_base(), odom.header, "base_link");
+    if (!alignment_.map_from_odom()) {
+      transforms_->sendTransform(local_tf);
+      state_ = ever_tracked_ ? "lost" : "localizing";
+      reason_ = "VIO と同じ画像時刻の保存地図照合を確認しています";
+      publish_invalid(&image);
+      return;
+    }
+    odom.header.frame_id = "map";
+    if (corrected) { map_match_->publish(odom.header); }
+    const Rigid & map_from_odom = *alignment_.map_from_odom();
+    transforms_->sendTransform(std::vector<geometry_msgs::msg::TransformStamped>{
+      tf_msg(map_from_odom, odom.header, "odom"), local_tf});
+    odom.pose.pose = pose_msg(map_from_odom * alignment_.odom_from_base());
+    publish_tracking(odom, corrected ? "保存地図との画像照合で VIO の地図座標を補正しました" :
+                                       "直近の保存地図照合を基準に Stereo-Inertial で追跡しています");
+  }
+
+  bool fresh(const Header & image)
+  {
+    const double age = (now().nanoseconds() - ns(image)) * 1e-9;
+    if (age >= -.1 && age <= max_age_) { return true; }
+    clear_tracking("画像時刻が現在の ROS 時刻と一致しません", "stale", &image);
+    return false;
+  }
+
+  void publish_tracking(const Odometry & odom, const char * reason)
+  {
+    odometry_->publish(odom);
     state_ = "tracking";
-    reason_ = "保存地図の特徴点と連続する画像の姿勢が整合しました";
+    reason_ = reason;
     ever_tracked_ = true;
     auto status = status_message();
-    status.header = h;
+    status.header = odom.header;
     status.pose = odom.pose.pose;
     status.speed_mps = odom.twist.twist.linear.x;
     status.yaw_rate_rps = odom.twist.twist.angular.z;
@@ -450,7 +536,8 @@ private:
   {
     Status status;
     status.map_id = map_id_; status.map_sha256 = map_sha_; status.hdmap_sha256 = hdmap_sha_;
-    status.session_id = session_; status.epoch = confirm_.epoch(); status.state = state_; status.reason = reason_;
+    status.session_id = session_; status.epoch = fixed_core_ ? alignment_.epoch() : confirm_.epoch();
+    status.state = state_; status.reason = reason_;
     return status;
   }
 
@@ -476,6 +563,7 @@ private:
   void clear_tracking(const std::string & reason, const std::string & state, const Header * image = nullptr)
   {
     confirm_.invalidate();
+    if (fixed_core_) { alignment_.invalidate(); }
     previous_pose_.reset();
     state_ = state;
     reason_ = reason;
@@ -490,7 +578,7 @@ private:
       clear_tracking("ROS時刻が巻き戻りました。再起動してください", "stale");
     } else if (!finished_ && last_stamp_ > 0 && (clock - last_stamp_) * 1e-9 > max_age_) {
       clear_tracking("新しいステレオ観測が途絶えました", "stale");
-    } else if (!confirm_.tracking()) {
+    } else if (state_ != "tracking") {
       publish_invalid();
     }
     last_clock_ = clock;
@@ -535,8 +623,9 @@ private:
   std::array<std::size_t, 2> received_images_{}, ipc_images_{};
   std::size_t received_imu_ = 0, ipc_imu_ = 0;
   std::size_t tracked_pairs_{}, over_camera_period_{};
-  double tracking_total_ms_{}, tracking_max_ms_{};
+  double tracking_total_ms_{}, tracking_max_ms_{}, match_total_ms_{};
   Confirmation confirm_;
+  VioMapAlignment alignment_;
   tf2::BufferCore tf_;
   std::optional<Calibration> camera_;
   std::optional<Inertial> inertial_;
@@ -548,15 +637,15 @@ private:
   std::array<Info::ConstSharedPtr, 2> camera_info_;
   std::array<std::deque<Image::ConstSharedPtr>, 2> image_queue_;
   StereoImuBuffer imu_buffer_;
-  std::unique_ptr<ORB_SLAM3::System> core_;
+  std::unique_ptr<ORB_SLAM3::System> fixed_core_, core_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> transforms_;
   std::array<rclcpp::Subscription<Image>::SharedPtr, 2> images_;
   std::array<rclcpp::Subscription<Info>::SharedPtr, 2> infos_;
   rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr static_sub_;
   rclcpp::Subscription<Imu>::SharedPtr imu_sub_;
-  rclcpp::Publisher<Odometry>::SharedPtr odometry_;
+  rclcpp::Publisher<Odometry>::SharedPtr odometry_, vio_odometry_;
   rclcpp::Publisher<Status>::SharedPtr status_, frame_status_;
-  rclcpp::Publisher<Header>::SharedPtr processed_, imu_skipped_;
+  rclcpp::Publisher<Header>::SharedPtr processed_, imu_skipped_, map_match_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_;
   rclcpp::Service<Trigger>::SharedPtr save_;
   rclcpp::TimerBase::SharedPtr timer_;

@@ -192,8 +192,107 @@ def test_old_orb_run_uses_provenance_only_from_its_matching_saved_atlas(tmp_path
     def load(root, map_id):
         assert root == tmp_path and map_id == 'orb-map'
         return metadata
-    monkeypatch.setattr('atd_bringup.replay_gyro_benchmark.orb_map_metadata', load)
+    monkeypatch.setattr('atd_bringup.replay_fixed_benchmark.orb_map_metadata', load)
     assert compare_gyro_run(tmp_path, 'cu', 'orb')['source_metadata_sha256'] == metadata['source_metadata_sha256']
     metadata['map_sha256'] = '0'*64
     with pytest.raises(ValueError, match='地図'):
         compare_gyro_run(tmp_path, 'cu', 'orb')
+
+
+def fixed_vio_runs(root, cu_ms=OBSERVED_MS):
+    # Start from the same recorded bag and stereo atlas, with the optional
+    # gyro bridge disabled on both independent ORB runs.
+    records, stereo_dir = fixture_runs(root, cu_ms)
+    stereo_path = stereo_dir / 'summary.json'
+    stereo = json.loads(stereo_path.read_text())
+    del stereo['gyro_bridge']
+    stereo_path.write_text(json.dumps(stereo))
+    vio_dir = stereo_dir.with_name('vio')
+    vio_dir.mkdir()
+    times = range(0, 601, 100)
+    (vio_dir / 'summary.json').write_text(json.dumps(dict(
+        stereo, tracking='vio', localization_method='fixed_stereo_atlas_vio', local_vio_samples=7,
+        map_matches_observed=3, trajectory_samples=len(times))))
+    write_csv(vio_dir/'trajectory.csv', ('image_stamp_ns', *POSE_COLUMNS),
+              [(stamp(t), *pose(t, -16)) for t in times])
+    write_csv(vio_dir/'status.csv', ('stamp_ns', 'state', 'epoch', 'reason'),
+              [(stamp(t), 'tracking', 0, '') for t in times])
+    return records, stereo_dir, vio_dir
+
+
+def test_three_fixed_runs_align_the_two_orb_trajectories_in_one_atlas(tmp_path, capsys):
+    records, _, _ = fixed_vio_runs(tmp_path)
+    assert replay_benchmark.main(['cu', 'orb', 'vio', '--results-root', str(tmp_path),
+                                  '--record-root', str(records)]) == 0
+    saved, = tmp_path.glob('runs/vslam_benchmark/*/report.json')
+    result = json.loads(saved.read_text())
+    assert list(result['backends']) == ['cuvslam', 'orbslam3', 'orbslam3_vio']
+    cu, orb, vio = result['backends'].values()
+    assert result['paired_observations'] == 4
+    assert [r['paired_accuracy']['samples'] for r in (cu, orb, vio)] == [3, 3, 3]
+    assert cu['paired_accuracy']['xy_rmse_m'] == pytest.approx(0., abs=1e-12)
+    assert orb['output_time_fraction'] == pytest.approx(1/3)
+    assert vio['output_time_fraction'] == 1
+    assert vio['paired_accuracy']['xy_rmse_m'] == pytest.approx(1.)
+    assert vio['output_accuracy']['samples'] == 6
+    assert vio['map_matches_observed'] == 3
+    assert 'orbslam3_gyro' not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('name,key,value', [
+    ('orb', 'gyro_bridge', {'report': 'gyro_bridge_summary.json'}),
+    ('vio', 'tracking', 'vo'), ('vio', 'mode', 'mapping'), ('vio', 'localization_method', None),
+    ('vio', 'map_sha256', 'another-atlas'), ('vio', 'metadata_sha256', 'another-evaluation'),
+    ('vio', 'source_metadata_sha256', 'another-mapping'), ('vio', 'rate', .5),
+    ('vio', 'status', 'failed'),
+])
+def test_three_fixed_runs_require_matching_inputs_and_completed_modes(tmp_path, name, key, value):
+    _, stereo_dir, vio_dir = fixed_vio_runs(tmp_path)
+    path = (stereo_dir if name == 'orb' else vio_dir) / 'summary.json'
+    path.write_text(json.dumps({**json.loads(path.read_text()), key: value}))
+    with pytest.raises(ValueError):
+        replay_benchmark.compare_runs(tmp_path, 'cu', 'orb', vio_id='vio')
+
+
+def test_three_fixed_runs_with_no_common_pose_still_report_coverage(tmp_path):
+    records, _, _ = fixed_vio_runs(tmp_path, cu_ms=(80, 300))
+    result = replay_benchmark.compare_runs(tmp_path, 'cu', 'orb', records, vio_id='vio')
+    assert result['paired_observations'] == 0
+    assert result['backends']['orbslam3_vio']['output_time_fraction'] == 1
+    assert result['accuracy_frame'] is None
+    assert all(s['paired_accuracy'] is None for s in result['backends'].values())
+
+
+@pytest.mark.parametrize('run_id,reason,local_samples', [
+    ('cu', None, None), ('orb', 'no_map_match', None),
+    ('vio', 'vio_not_initialized', 0), ('vio', 'no_map_match', 7),
+])
+def test_eof_without_tracking_counts_as_zero_output(tmp_path, run_id, reason, local_samples):
+    records, stereo, vio = fixed_vio_runs(tmp_path)
+    folder = dict(cu=tmp_path/'runs/localization/cu', orb=stereo, vio=vio)[run_id]
+    trajectory = folder/'trajectory.csv'
+    trajectory.write_text(trajectory.read_text().splitlines()[0] + '\n')
+    if run_id == 'cu':
+        path = folder/'report.json'
+        fields = dict(outcome='no_tracking', pose_samples=0, state_changes=[dict(state='localizing')])
+    else:
+        path = folder/'summary.json'
+        fields = dict(outcome='no_tracking', no_tracking_reason=reason, trajectory_samples=0)
+        (folder/'status.csv').write_text('stamp_ns,state,epoch,reason\n')
+        if run_id == 'vio':
+            fields.update(local_vio_samples=local_samples, map_matches_observed=0)
+    path.write_text(json.dumps({**json.loads(path.read_text()), **fields}))
+    result = replay_benchmark.compare_runs(tmp_path, 'cu', 'orb', records, vio_id='vio')
+    empty = result['backends'][dict(cu='cuvslam', orb='orbslam3', vio='orbslam3_vio')[run_id]]
+    assert empty['output_time_fraction'] == 0 and empty['observations'] == 0
+    assert empty['outcome'] == 'no_tracking'
+    assert empty['output_accuracy'] is None and result['paired_observations'] == 0
+    assert all(item['paired_accuracy'] is None for item in result['backends'].values())
+    if run_id == 'vio':
+        assert empty['no_tracking_reason'] == reason and empty['local_vio_samples'] == local_samples
+    # Interrupted/aborted runs can also have empty trajectories. They did not
+    # reach a successful EOF and must never count as a localization outcome.
+    failure = dict(outcome='failed') if run_id == 'cu' else dict(status='interrupted')
+    path.write_text(json.dumps({**json.loads(path.read_text()), **failure}))
+    with pytest.raises(ValueError):
+        replay_benchmark.compare_runs(tmp_path, 'cu', 'orb', records, vio_id='vio')

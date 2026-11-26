@@ -60,7 +60,7 @@ BAG=gazebo-odaiba-2026-11-23_01-19-26_640x480-90Hz_imu-400Hz_1lap_3mps
 atd replay "$BAG" --backend orbslam3 --tracking vio --rate 0.5 --headless
 ```
 
-ORB 本体の `IMU_STEREO` に左右画像・加速度・角速度を入力し、新規地図で走行を追跡する。半速は同じ走行・撮影時刻を保ったまま処理の余裕を増やす。画像のみとの比較は上のコマンドで `--tracking vo` に変え、同じ bag・倍率で別々に再生する。保存済み Atlas への定位はステレオ専用。
+ORB 本体の `IMU_STEREO` に左右画像・加速度・角速度を入力し、新規地図で走行を追跡する。半速は同じ走行・撮影時刻を保ったまま処理の余裕を増やす。画像のみとの比較は上のコマンドで `--tracking vo` に変え、同じ bag・倍率で別々に再生する。既存のステレオ Atlas を使って同じ走行を地図座標で評価する場合は、下記の3方式比較の手順を使う。
 
 ATD Gazebo の記録と照合できた bag では、公式 EuRoC 例のノイズ密度とバイアスのランダムウォークを試験用の重みとして使う。シミュレーターは加法雑音を入れていない。IMU 周波数と外部姿勢は bag の観測と固定 TF を使う。使用した重みは `runs/orbslam3/<run>/summary.json` の `imu_noise` に残る。[ATD の設定](../ros2_ws/src/atd_bringup/config/orb_imu_gazebo.yaml)・[ORB-SLAM3 の公式設定](https://github.com/UZ-SLAMLab/ORB_SLAM3/blob/4452a3c4ab75b1cde34e5505a36ec3f9edcdc4c4/Examples/Stereo-Inertial/EuRoC.yaml)
 
@@ -111,48 +111,40 @@ ROS 2 では `/orbslam3/continuous_odometry` に姿勢、対応する `/orbslam3
 
 ## cuVSLAM と ORB-SLAM3 の比較
 
-### お台場で 1 m/s の地図を作り、3 m/s で3方式を比べる
+### お台場の固定地図で3方式を比較する
 
-地図作成と評価には別々の bag を使う。下の例では評価走行を2周とした。両方とも片眼 640×480・90 Hz、ジャイロと統合 IMU は 400 Hz、加速度は 200 Hz。
+同じ 1 m/s・1 周の走行から作った `odaiba_s1_cu`（VGL 準備済み）と `odaiba_s1_orb`（ステレオ Atlas）を使う。今回の追加には ORB 本体の変更を含むため、Linux Notebook ホストで実験ブランチを更新して、[ORB 対応イメージと ROS パッケージを再ビルド](#linux-notebookjetson-の準備)する。既存地図はそのまま使える。
 
-1. Linux Notebook **ホスト**で地図作成用の1周を記録する。
+ORB 対応コンテナ内で、下の3回を順に実行する。評価用の bag は地図作成とは別のお台場 3 m/s・1 周、ステレオ 640×480・90 Hz、統合 IMU 400 Hz。等速の処理性能を比較する例で、`RATE=0.5` にすると全方式を半速で比較できる。
 
-   ```bash
-   atd gazebo bag --course odaiba --speed 1 --laps 1 --resolution 640x480 --camera-hz 90 --imu 400
-   ```
+```bash
+TEST_BAG=gazebo-odaiba-2026-11-23_01-19-26_640x480-90Hz_imu-400Hz_1lap_3mps
+RATE=1
+atd replay --validate-map odaiba_s1_cu --bag "$TEST_BAG" --rate "$RATE"
+atd replay "$TEST_BAG" --backend orbslam3 --map odaiba_s1_orb --tracking vo --gyro-bridge off --rate "$RATE" --headless
+atd replay "$TEST_BAG" --backend orbslam3 --map odaiba_s1_orb --tracking vio --gyro-bridge off --rate "$RATE" --headless
+```
 
-2. Notebook の **ORB 対応コンテナ**内で1周の bag から固定地図を作る。`MAP_BAG` は収録時に表示された `rosbags/` 以下の bag 名。ORB は Atlas を保存する。同じ bag を Web UI の「地図とライン」→「rosbag から地図を作成」で選び、cuVSLAM 地図を別 ID の `odaiba_s1_cu` として作成する。続いて「VGL地図を作成」で 640×480 対応の export を選び、Notebook 用 engine と VGL 地図の準備を完了する。
+1. **cuVSLAM baseline** はステレオ VO と保存地図を使う。cuVGL が初期位置候補を渡し、cuVSLAM が地図上で追跡する。
+2. **ORB ステレオ**は保存した Atlas と画像を照合し、地図上で確認できた姿勢を出す。
+3. **ORB ステレオ＋IMU** は ORB-SLAM3 の `IMU_STEREO` で `odom → base_link` を推定する。同じ画像から抽出した特徴とステレオ対応を固定地図のトラッカーでも使う。複数画像で確認した地図姿勢と同じ撮影時刻の VIO 姿勢から `map → odom` を更新する。次の地図照合までは、この変換で VIO の出力を地図座標に写す。VIO を失った場合や新しいサブマップに切り替わった場合は、再び地図照合が確定するまで地図姿勢の出力を止める。
 
-   ```bash
-   read -rp '地図作成用の bag 名: ' MAP_BAG
-   atd replay "$MAP_BAG" --backend orbslam3 --save-map odaiba_s1_orb --rate 0.5 --headless
-   ```
+ORB の2方式とも rosbag2 Player と追跡ノードを同じプロセスで動かす。3番目では画像の DDS 再配信や特徴の二重抽出を要しない。cuVSLAM baseline の地図検証は従来どおり別プロセスの Player を使う。結果の `dds_profiles` と `sensor_input_transports` で入力条件を確認できる。
 
-3. Notebook **ホスト**で評価走行を記録する。
+各実行が表示した run ID を入力する。cuVSLAM には `runs/localization/`、ORB の2方式には `runs/orbslam3/` の ID を使う。
 
-   ```bash
-   atd gazebo bag --course odaiba --speed 3 --laps 2 --resolution 640x480 --camera-hz 90 --imu 400
-   ```
+```bash
+read -rp 'cuVSLAM の run ID: ' CU_RUN
+read -rp 'ORB ステレオの run ID: ' ORB_RUN
+read -rp 'ORB ステレオ＋IMU の run ID: ' VIO_RUN
+atd replay --compare "$CU_RUN" "$ORB_RUN" "$VIO_RUN" --record-root /data/record/rosbags
+```
 
-4. Linux Notebook ホストまたは ORB 対応コンテナで、テスト bag を等速で2回、順に再生する。1回目で画像で確定した ORB 姿勢とジャイロ補完後の姿勢の両方が残る。2回目は保存済み NVIDIA 地図に対する cuVSLAM のステレオ定位。既定の DDS は両方ともループバック UDP。以前の計測と同じ共有メモリ＋UDP の XML を使うときは、同じ端末で両方の実行前に `export ATD_REPLAY_DDS=shm` を指定し、終了後に `unset ATD_REPLAY_DDS` で戻す。ORB の `atd replay BAG --backend orbslam3` は rosbag2 Player と追跡ノードを同じプロセスで動かし、型付きの左右画像と VIO 用 IMU をプロセス内で渡す。cuVSLAM の地図検証では rosbag2 Player が別プロセスで動く。
+`runs/vslam_benchmark/<RUN>/report.json` に、3方式の出力カバー率（0.25 秒以下で続いた時間の割合）、出力途絶、GT に対する誤差を保存する。`paired_accuracy` は3方式の共通時刻、`output_accuracy` は各方式が地図姿勢を出した時刻で集計する。初回の座標合わせに使った共通時刻は誤差の集計から除く。2つの ORB は同じ Atlas と地図座標変換を共有する。VIO の地図補正を採用した時刻には、その画像の固定地図姿勢と VIO の地図上の姿勢が一致する。次の補正までの動きは VIO で決まるため、連続性と精度の評価にはカバー率と両方の誤差を使う。
 
-   ```bash
-   read -rp '評価用の bag 名: ' TEST_BAG
-   atd replay "$TEST_BAG" --backend orbslam3 --map odaiba_s1_orb --gyro-bridge on --rate 1 --headless
-   atd replay --validate-map odaiba_s1_cu --bag "$TEST_BAG" --rate 1
-   ```
+VIO の `summary.json` には `local_vio_samples`（慣性初期化後のローカル姿勢）、`map_matches_observed`（採用した地図補正）、`trajectory_samples`（地図上の出力）の件数が残る。末尾まで処理して地図上の姿勢が 0 件だった場合もカバー率 0% として比較できる。
 
-5. 端末に表示された run ID を入力して、3方式の結果を保存する。ORB 側には `runs/orbslam3/` の ID を使う。
-
-   ```bash
-   read -rp 'cuVSLAM の runs/localization/ の ID: ' CU_RUN
-   read -rp 'ORB の runs/orbslam3/ の ID: ' ORB_RUN
-   atd replay --compare "$CU_RUN" "$ORB_RUN" --record-root /data/record/rosbags
-   ```
-
-結果は `runs/vslam_benchmark/<RUN>/report.json`。`output_time_fraction` は、隣り合う出力の間隔が 0.25 秒以下だった時間の合計を共通の評価区間の長さで割った値。3方式で同じ定義を使う。位置・方位は両バックエンドの最初の共通観測で Gazebo 正解に合わせる。ジャイロ補完には ORB と同じ座標変換を使う。`paired_accuracy` で画像を追跡できた共通時刻の精度を、`orbslam3_gyro.predicted_accuracy` で補完中の出力だけの対 GT 誤差を確認する。再取得の段差とその直前・直後の値は ORB run の `reacquisitions.csv` に残る。
-
-`dds_profiles` には各 run の RMW 実装、Fast DDS 設定ファイルのパスと SHA-256、ROS の探索範囲が入る。RMW、設定内容、ROS の探索範囲が揃えば `comparison` は `match`、記録値が異なれば `different` となり、端末にも警告を表示する。必要な情報が残っていない過去の run は `unknown` として比較できる。`sensor_input_transports` には、各 run でセンサー入力が追跡ノードと同じプロセスかどうかを記録する。DDS 設定が一致していても、センサー入力経路が異なる場合は比較時に表示する。
+macOS のネイティブ ROS 2 で、地図作成とは別の合成走行を 0.25 倍速で再生した。ステレオ 1,260 対と IMU 5,605 件をプロセス内で受け取り、全対を処理した。慣性初期化後のローカル姿勢は 939 件、地図補正は 413 件、地図上の姿勢は 937 件。地図を外れて戻る区間では、新しい照合が途切れた 5.81 秒間にも 524 件を出力し、再び地図上で照合できた。937 件すべてで同時刻の TF を合成した姿勢と出力が一致した（変換行列の要素の最大絶対差 8.9×10⁻¹⁶）。Atlas・HDMap を含む地図資産のハッシュは実行前後で一致した。お台場の3方式比較は Linux Notebook で計測する。
 
 cuVSLAM の処理フレームが飛んだときは、同じ地図・bag・倍率で画像到達と追跡処理を記録する。追加の画像購読を伴う診断は、通常のベンチマークと別に `runs/cuvslam_frame_gaps/<run>/` に保存する。
 

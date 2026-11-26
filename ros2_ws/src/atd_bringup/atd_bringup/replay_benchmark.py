@@ -28,12 +28,18 @@ TRANSPORT_NAMES = {
 }
 
 
-def _sensor_input_transports(cu, orb):
-    a, b = (run.get('sensor_input_transport') for run in (cu, orb))
-    comparison = 'unknown'
-    if a in TRANSPORT_NAMES and b in TRANSPORT_NAMES:
-        comparison = 'match' if a == b else 'different'
-    return dict(cuvslam=a, orbslam3=b, comparison=comparison)
+def _sensor_input_transports(cu, orb, vio=None):
+    routes = dict(cuvslam=cu.get('sensor_input_transport'), orbslam3=orb.get('sensor_input_transport'))
+    if vio is not None:
+        routes['orbslam3_vio'] = vio.get('sensor_input_transport')
+    known = {value for value in routes.values() if value in TRANSPORT_NAMES}
+    if len(known) > 1:
+        comparison = 'different'
+    elif all(value in TRANSPORT_NAMES for value in routes.values()):
+        comparison = 'match'
+    else:
+        comparison = 'unknown'
+    return dict(**routes, comparison=comparison)
 
 
 def _sha(path):
@@ -174,14 +180,19 @@ def _relative_errors(pairs, trace):
             row.error = (math.hypot(result['along_m'], result['lateral_m']), abs(result['heading_deg']))
 
 
-def compare_runs(root, cu_id, orb_id, record_root=None):
+def compare_runs(root, cu_id, orb_id, record_root=None, *, vio_id=None):
     runs = [_load_run(root, run_id) for run_id in (cu_id, orb_id)]
+    if vio_id is not None:
+        from .replay_fixed_benchmark import compare_fixed_runs
+        runs.append(_load_run(root, vio_id))
+        return compare_fixed_runs(root, runs, record_root)
     if [r[0] for r in runs] == ['localization', 'orbslam3']:
+        if not (runs[1][2].get('gyro_bridge') or {}).get('report'):
+            raise ValueError('3方式を比較するには、cuVSLAM、固定地図 ORB ステレオ、固定地図 ORB VIO の3つの run ID を指定してください')
         from .replay_gyro_benchmark import compare_gyro_run
         return compare_gyro_run(root, cu_id, orb_id, record_root)
     if any(r[0] == 'orbslam3' for r in runs):
-        raise ValueError('3方式の固定地図比較では runs/localization の cuVSLAM ID、'
-                         'runs/orbslam3 のジャイロ補完 ID の順に指定してください')
+        raise ValueError('固定地図の3方式比較は cuVSLAM の検証 ID、ORB のステレオと VIO の run ID の順に指定してください')
     if runs[0][0] != runs[1][0]:
         raise ValueError('2本とも同じ検証手順（atd replay または validate_bag）で作成してください')
     kind = runs[0][0]
@@ -251,12 +262,14 @@ def compare_runs(root, cu_id, orb_id, record_root=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('cuvslam_run', help='固定地図では runs/localization の cuVSLAM 検証 ID')
-    parser.add_argument('orbslam3_run', help='3方式の固定地図比較には runs/orbslam3 の補完あり run ID')
+    parser.add_argument('orbslam3_run', help='固定地図で再生したステレオ ORB の run ID')
+    parser.add_argument('orbslam3_vio_run', nargs='?', help='同じ固定地図で再生した ORB VIO の run ID')
     parser.add_argument('--results-root', type=Path, default=Path(os.environ.get('ATD_REPLAY_RESULTS_ROOT', '/data/results')))
     parser.add_argument('--record-root', type=Path, help='固定地図の位置・方位を Gazebo 正解と照合する bag ルート')
     args = parser.parse_args(argv)
     try:
-        report = compare_runs(args.results_root, args.cuvslam_run, args.orbslam3_run, args.record_root)
+        report = compare_runs(args.results_root, args.cuvslam_run, args.orbslam3_run, args.record_root,
+                              vio_id=args.orbslam3_vio_run)
         name = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid4().hex[:12]
         path = args.results_root / 'runs' / 'vslam_benchmark' / name / 'report.json'
         payload = json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2) + '\n'
@@ -273,18 +286,33 @@ def main(argv=None):
         elif dds['comparison'] == 'unknown':
             print('DDS 設定の照合に必要な RMW、プロファイル hash、discovery range のいずれかが未記録です。')
     inputs = report['sensor_input_transports']
-    cu_path, orb_path = (TRANSPORT_NAMES.get(inputs[key], '不明') for key in BACKENDS)
-    print(f'追跡ノードへのセンサー入力　cuVSLAM {cu_path} / ORB-SLAM3 {orb_path}')
+    labels = {'cuvslam': 'cuVSLAM', 'orbslam3': 'ORB-SLAM3', 'orbslam3_vio': 'ORB-SLAM3 VIO'}
+    routes = [f"{name} {TRANSPORT_NAMES.get(inputs[key], '不明')}" for key, name in labels.items() if key in inputs]
+    print('追跡ノードへのセンサー入力　' + ' / '.join(routes))
     if inputs['comparison'] == 'different':
         print('センサー入力経路が異なる条件での比較です。', file=sys.stderr)
     for backend, result in report['backends'].items():
         coverage = (f"出力カバー率 {result['output_time_fraction']:.1%}" if 'output_time_fraction' in result
                     else f"観測カバー率 {result['observed_time_fraction']:.1%}")
         print(f"{backend}  {coverage}  0.25 s 超の姿勢間隔 {result['internal_gaps_over_threshold']} 回", end='')
+        if report['schema'] == 'atd.vslam_fixed_benchmark.v1':
+            print(f"  地図上の姿勢 {result['observations']} 件", end='')
+            if result.get('local_vio_samples') is not None:
+                print(f"  局所 VIO {result['local_vio_samples']} 件", end='')
+            if result.get('map_matches_observed') is not None:
+                print(f"  固定地図照合 {result['map_matches_observed']} 件", end='')
+            if result.get('outcome') == 'no_tracking':
+                reason = {'vio_not_initialized': '慣性初期化後の VIO 姿勢なし',
+                          'no_map_match': '固定地図への再定位なし'}.get(result.get('no_tracking_reason'), '地図上の追跡なし')
+                print(f'  {reason}', end='')
         if result['paired_accuracy']:
             err = result['paired_accuracy']
             print(f"  共通観測の位置 RMSE {err['xy_rmse_m']:.3f} m・方位誤差中央値 {err['abs_yaw_median_deg']:.2f}°", end='')
         print()
+        if report['schema'] == 'atd.vslam_fixed_benchmark.v1' and result['output_accuracy']:
+            err = result['output_accuracy']
+            print(f"  この方式が出力し GT と照合できた {err['samples']} 件の位置 RMSE {err['xy_rmse_m']:.3f} m・"
+                  f"方位誤差中央値 {err['abs_yaw_median_deg']:.2f}°")
         if result.get('predicted_accuracy'):
             err = result['predicted_accuracy']
             print(f"  補完中の GT 照合 {err['samples']} 件、位置 RMSE {err['xy_rmse_m']:.3f} m・"

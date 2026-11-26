@@ -137,6 +137,8 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
         tracking = f'VIO (IMU {imu.frequency:g} Hz, {imu.frame})' if imu else 'VO'
         consumers = f'{name} と RViz' if rviz is not None else name
         settings = orb.params['mode'] if orb else f'slam_max_map_size={slam_max_map_size}'
+        if imu and orb and settings == 'localization':
+            settings = f"固定ステレオ地図 {orb.params['map_id']} への照合＋Stereo-Inertial オドメトリ"
         print(f'{bag} ({rate:g} 倍速)  {tracking}  {settings}'
               f'\n{consumers} の購読準備を待っています。', flush=True)
 
@@ -287,6 +289,8 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_op
                                       start_offset_s=orb_options.start_offset, alignment_source=(
                                           'saved_map' if orb_options.map else 'first_estimate'))
                 result.summary['loop_closure_graph'] = {'status': 'unavailable', 'reason': 'ORB-SLAM3 replay'}
+                if orb_options.map:
+                    result.summary['localization_method'] = orb.summary['localization_method']
                 orb.summary['gt_replay_id'] = result.directory.name
             print(f'Gazebo 正解軌跡: {ground_truth}\n比較結果の保存先: {result.directory}', flush=True)
         run_session(node, bag, rate, config, qos, trace, result, slam_max_map_size=slam_max_map_size, imu=imu, orb=orb)
@@ -305,13 +309,13 @@ def main(argv=None):
     maps = parser.add_mutually_exclusive_group()
     maps.add_argument('--save-map', metavar='ID', help='新しい ORB-SLAM3 コース地図を保存')
     maps.add_argument('--map', metavar='ID', help='保存済み ORB-SLAM3 地図に別走行から再定位')
-    parser.add_argument('--gyro-bridge', choices=('auto', 'on', 'off'), default='auto',
-                        help='固定 ORB 地図の途絶補完。auto は収録ジャイロがあれば有効（既定）、on は記録必須')
+    parser.add_argument('--gyro-bridge', choices=('auto', 'on', 'off'),
+                        help='固定地図の VO に対する旧ジャイロ補完。VO の既定は auto、VIO では off')
     parser.add_argument('--start-offset', type=float, default=0., help='固定地図を検証する bag の途中開始位置 [s]')
     parser.add_argument('--imu-calibration', type=Path,
                         help='ORB-SLAM3 VIO 用 IMU ノイズ校正 YAML。ATD Gazebo bag は省略時に試験値を使用')
     args = parser.parse_args(argv)
-    if args.gyro_bridge != 'auto' and not (args.backend == 'orbslam3' and args.map):
+    if args.gyro_bridge in ('on', 'off') and not (args.backend == 'orbslam3' and args.map):
         parser.error('--gyro-bridge は --backend orbslam3 --map ID と一緒に指定してください')
     if args.backend != 'orbslam3' and (args.map or args.save_map or args.start_offset or args.imu_calibration):
         parser.error('地図・途中開始・IMU校正の指定には --backend orbslam3 が必要です')
@@ -320,10 +324,14 @@ def main(argv=None):
     if args.backend == 'orbslam3':
         if args.slam_max_map_size:
             parser.error('--slam-max-map-size は cuVSLAM の設定です')
-        if args.tracking == 'vio' and (args.map or args.save_map):
-            parser.error('固定地図の作成・再定位には --tracking vo を指定してください')
+        if args.tracking == 'vio' and args.save_map:
+            parser.error('固定地図の作成には --tracking vo、作成済みの地図の利用には --map を指定してください')
+        if args.tracking == 'vio' and args.map and args.gyro_bridge in ('on', 'auto'):
+            parser.error('固定地図の VIO には --gyro-bridge off を指定するか、このオプションを省略してください')
         if args.imu_calibration and args.tracking != 'vio':
             parser.error('--imu-calibration は --tracking vio と一緒に指定してください')
+    if args.gyro_bridge is None:
+        args.gyro_bridge = 'auto' if args.tracking == 'vo' else 'off'
     if not math.isfinite(args.rate) or args.rate <= 0:
         parser.error('--rate には正の有限値を指定してください')
     if not 0 <= args.slam_max_map_size <= 2147483647:

@@ -38,7 +38,7 @@ class OrbReplayTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, '末尾画像処理を確認できません'):
                     orb.finish(Mock(), Mock(), None)
 
-    def test_final_csvs_are_readable_while_rviz_remains_open(self):
+    def replay_with_subscribers(self, viewer, *, vio):
         subscriptions = {}
 
         def subscribe(kind, topic, callback, qos):
@@ -48,37 +48,55 @@ class OrbReplayTests(unittest.TestCase):
         node = NS(create_subscription=subscribe, destroy_subscription=subscriptions.pop)
         modules = {name: Mock() for name in ('rclpy', 'rclpy.qos', 'atd_interfaces.msg', 'nav_msgs.msg',
                                               'std_msgs.msg', 'std_srvs.srv')}
-        with TemporaryDirectory() as temp, ExitStack() as mocks:
-            root = Path(temp)
-            bag = root / 'second-bag'
-            bag.mkdir()
-            (bag / 'metadata.yaml').write_text('test bag')
-            options = NS(map='track', save_map=None, tracking='vo', rate=1., start_offset=0.)
-            meta = dict(map_id='track', map_sha256='hash', hdmap_sha256='hd', tracking='vo',
-                        source_metadata_sha256='other', atlas_path=root / 'atlas.osa')
-            inputs = NS(camera_fps=90., first_left_ns=1, last_left_ns=1, pairs=1)
-            mocks.enter_context(patch.dict('sys.modules', modules))
-            mocks.enter_context(patch.dict('os.environ', ATD_REPLAY_RECORD_ROOT=str(root / 'record')))
-            mocks.enter_context(patch.object(replay_orbslam3, 'inputs_from_bag', return_value=inputs))
-            mocks.enter_context(patch('atd_localization.orb_assets.orb_map_metadata', return_value=meta))
-            mocks.enter_context(patch('atd_localization.orb_replay.recorded_calibration',
-                                      return_value=({}, (640, 480))))
-            mocks.enter_context(patch('atd_localization.orb_replay.OrbBootstrap'))
-            with ExitStack() as viewer:
-                orb = replay_orbslam3.OrbReplay(viewer, root, node, bag, options, None, {}, 'orb')
+        root = Path(viewer.enter_context(TemporaryDirectory()))
+        bag = root / 'second-bag'
+        bag.mkdir()
+        (bag / 'metadata.yaml').write_text('test bag')
+        options = NS(map='track', save_map=None, tracking='vio' if vio else 'vo', rate=1., start_offset=0.,
+                     imu_calibration=None)
+        meta = dict(map_id='track', map_sha256='hash', hdmap_sha256='hd', tracking='vo',
+                    source_metadata_sha256='other', atlas_path=root / 'atlas.osa')
+        inputs = NS(camera_fps=90., first_left_ns=1, last_left_ns=3, pairs=3)
+        viewer.enter_context(patch.dict('sys.modules', modules))
+        viewer.enter_context(patch.dict('os.environ', ATD_REPLAY_RECORD_ROOT=str(root / 'record')))
+        viewer.enter_context(patch.object(replay_orbslam3, 'inputs_from_bag', return_value=inputs))
+        viewer.enter_context(patch.object(replay_orbslam3, 'resolve_imu_noise', return_value=('test', {})))
+        viewer.enter_context(patch('atd_localization.orb_assets.orb_map_metadata', return_value=meta))
+        viewer.enter_context(patch('atd_localization.orb_replay.recorded_calibration',
+                                   return_value=({}, (640, 480))))
+        viewer.enter_context(patch('atd_localization.orb_replay.OrbBootstrap'))
+        imu = NS(frame='imu', frequency=400.) if vio else None
+        return replay_orbslam3.OrbReplay(viewer, root, node, bag, options, imu, {}, 'orb'), subscriptions
+
+    def test_final_csvs_are_readable_while_rviz_remains_open(self):
+        def header(nanosec, frame):
+            return NS(stamp=NS(sec=0, nanosec=nanosec), frame_id=frame)
+
+        pose = NS(position=NS(x=1, y=0, z=0), orientation=NS(x=0, y=0, z=0, w=1))
+        for vio in (False, True):
+            with self.subTest(vio=vio), ExitStack() as viewer:
+                orb, subscriptions = self.replay_with_subscribers(viewer, vio=vio)
                 params = replay_orbslam3.yaml.safe_load((orb.directory / 'parameters.yaml').read_text())
                 self.assertEqual(params[orb.sensor_source]['ros__parameters'], dict(
-                    bag_path=str(bag), rate=1., start_offset_s=0., player_name=orb.player_name, imu_topic=''))
+                    bag_path=str(orb.bag), rate=1., start_offset_s=0., player_name=orb.player_name,
+                    imu_topic=replay_orbslam3.IMU_TOPIC if vio else ''))
+                self.assertEqual(orb.params['stereo_inertial'], vio)
+                self.assertEqual(orb.params['mode'], 'localization')
                 self.assertFalse(orb.playback_finished)
                 subscriptions[orb.sensor_source + '/finished'](NS(data=True))
                 self.assertTrue(orb.playback_finished)
-                stamp = NS(sec=0, nanosec=1)
-                header = NS(stamp=stamp, frame_id='map')
-                pose = NS(position=NS(x=1, y=0, z=0), orientation=NS(x=0, y=0, z=0, w=1))
-                subscriptions['/orbslam3/processed'](header)
-                odom = NS(header=header, child_frame_id='base_link', pose=NS(pose=pose))
+                map_header = header(3, 'map')
+                subscriptions['/orbslam3/processed'](map_header)
+                if vio:
+                    for ns in (1, 3):
+                        local = NS(header=header(ns, 'odom'), child_frame_id='base_link', pose=NS(pose=pose))
+                        subscriptions[replay_orbslam3.ORB_VIO_ODOMETRY](local)
+                        subscriptions[replay_orbslam3.SLAM_ODOMETRY](local)
+                    self.assertEqual(orb.poses, 0)
+                    subscriptions[replay_orbslam3.ORB_MAP_MATCH](map_header)
+                odom = NS(header=map_header, child_frame_id='base_link', pose=NS(pose=pose))
                 subscriptions[replay_orbslam3.SLAM_ODOMETRY](odom)
-                subscriptions['/localization/status'](NS(header=header, state='tracking', epoch=0, reason='ok',
+                subscriptions['/localization/status'](NS(header=map_header, state='tracking', epoch=0, reason='ok',
                                                          map_id='track', map_sha256='hash'))
                 with patch.object(replay_orbslam3, 'time', NS(monotonic=iter((0, 1, 2)).__next__)):
                     orb.finish(Mock(), Mock(), None)
@@ -86,8 +104,30 @@ class OrbReplayTests(unittest.TestCase):
                 self.assertFalse(subscriptions)  # Late status heartbeats cannot append after EOF.
                 summary = json.loads((orb.directory / 'summary.json').read_text())
                 self.assertEqual((summary['status'], summary['trajectory_samples']), ('complete', 1))
-                self.assertEqual((orb.directory / 'trajectory.csv').read_text().splitlines()[1:], ['1,1,0,0,0,0,0,1'])
-                self.assertEqual((orb.directory / 'status.csv').read_text().splitlines()[1:], ['1,tracking,0,ok'])
+                self.assertEqual(summary['outcome'], 'tracking_observed')
+                self.assertEqual((orb.directory / 'trajectory.csv').read_text().splitlines()[1:], ['3,1,0,0,0,0,0,1'])
+                self.assertEqual((orb.directory / 'status.csv').read_text().splitlines()[1:], ['3,tracking,0,ok'])
+                if vio:
+                    self.assertEqual(summary['localization_method'], 'fixed_stereo_atlas_vio')
+                    self.assertEqual((summary['first_local_vio_stamp_ns'], summary['local_vio_samples']), (1, 2))
+                    self.assertEqual((summary['first_map_match_stamp_ns'], summary['map_matches_observed']), (3, 1))
+
+    def test_fixed_runs_at_eof_can_measure_zero_output_without_substituting_unanchored_odometry(self):
+        for vio, local_poses, reason in ((False, 0, 'no_map_match'), (True, 0, 'no_local_vio_pose'),
+                                         (True, 1, 'no_map_match')):
+            with self.subTest(vio=vio, reason=reason), ExitStack() as viewer:
+                orb, subscriptions = self.replay_with_subscribers(viewer, vio=vio)
+                header = NS(stamp=NS(sec=0, nanosec=3), frame_id='odom')
+                subscriptions['/orbslam3/processed'](header)
+                if local_poses:
+                    subscriptions[replay_orbslam3.ORB_VIO_ODOMETRY](NS(header=header, child_frame_id='base_link'))
+                result = NS(summary={'sample_count': 0})
+                with patch.object(replay_orbslam3, 'time', NS(monotonic=iter((0, 1, 2)).__next__)):
+                    orb.finish(Mock(), Mock(), result)
+                self.assertEqual(orb.summary['status'], 'complete')
+                self.assertEqual((orb.summary['outcome'], orb.summary['no_tracking_reason']), ('no_tracking', reason))
+                self.assertEqual(orb.summary['trajectory_samples'], 0)
+                self.assertEqual(result.summary['outcome'], 'no_tracking')
 
     def test_node_is_required_before_bag_scan_or_child_processes(self):
         with TemporaryDirectory() as folder:
@@ -145,7 +185,7 @@ class OrbReplayTests(unittest.TestCase):
         with redirect_stderr(StringIO()), patch.object(replay_vslam, 'select_bag') as select:
             for args in (['--map', 'a'], ['--start-offset', '1'], ['--start-offset', 'nan', '--map', 'a'],
                          ['--tracking', 'vo', '--imu-calibration', 's.yaml'], ['--map', 'a', '--save-map', 'b'],
-                         ['--map', 'a', '--tracking', 'vio', '--imu-calibration', 's.yaml']):
+                         ['--save-map', 'a', '--tracking', 'vio'], ['--map', 'a', '--tracking', 'vio', '--gyro-bridge', 'on']):
                 backend = [] if args == ['--map', 'a'] else ['--backend', 'orbslam3']
                 with self.subTest(args=args), self.assertRaises(SystemExit):
                     replay_vslam.main(['bag', *backend, *args])
@@ -158,6 +198,10 @@ class OrbReplayTests(unittest.TestCase):
             self.assertEqual(replay_vslam.main(['bag', '--backend', 'orbslam3', '--tracking', 'vio', '--headless']), 0)
             options = run.call_args.kwargs['orb_options']
             self.assertEqual((options.tracking, options.map, options.imu_calibration), ('vio', None, None))
+            self.assertEqual(replay_vslam.main(['bag', '--backend', 'orbslam3', '--tracking', 'vio',
+                                                '--map', 'track', '--imu-calibration', 'imu.yaml']), 0)
+            options = run.call_args.kwargs['orb_options']
+            self.assertEqual((options.map, options.imu_calibration, options.gyro_bridge), ('track', Path('imu.yaml'), 'off'))
 
     def test_imu_noise_requires_all_four_calibrated_positive_values(self):
         with TemporaryDirectory() as folder:

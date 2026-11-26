@@ -3,6 +3,7 @@
 #include <LocalMapping.h>
 #include <ORBextractor.h>
 
+#include <algorithm>
 #include <iostream>
 
 int main() {
@@ -25,6 +26,27 @@ int main() {
     frame.setIntegrated();
     if (!frame.imuIsPreintegrated() || frame.N != 0 || frame.Nleft != -1 || frame.Nright != -1) {
         std::cerr << "Featureless stereo frame lost its IMU or stereo state\n";
+        return 1;
+    }
+
+    cv::Mat textured(480, 640, CV_8UC1);
+    cv::RNG rng(173);
+    rng.fill(textured, cv::RNG::UNIFORM, 0, 255);
+    ORB_SLAM3::Frame visual(textured, textured, 0.1, &left, &right, nullptr, intrinsics,
+                            distortion, 337.0f * 0.095f, 40.0f, &camera, &frame);
+    if (!visual.N) return 1;
+    visual.mvbOutlier[0] = true;
+    visual.SetPose(Sophus::SE3f());
+    visual.SetVelocity(Eigen::Vector3f::Ones());
+    const auto next = ORB_SLAM3::Frame::nNextId;
+    ORB_SLAM3::Frame fixed(visual, nullptr, &camera, 17);
+    if (fixed.mnId != 17 || ORB_SLAM3::Frame::nNextId != next || fixed.mTimeStamp != visual.mTimeStamp ||
+        fixed.N != visual.N || fixed.mDescriptors.data != visual.mDescriptors.data ||
+        fixed.mDescriptorsRight.data != visual.mDescriptorsRight.data || fixed.mvuRight != visual.mvuRight ||
+        fixed.mvDepth != visual.mvDepth || fixed.HasPose() || fixed.HasVelocity() || fixed.mpPrevFrame ||
+        fixed.mpImuPreintegrated || fixed.mpReferenceKF || fixed.mvbOutlier[0] ||
+        std::any_of(fixed.mvpMapPoints.begin(), fixed.mvpMapPoints.end(), [](auto* p) { return p != nullptr; })) {
+        std::cerr << "Fixed Atlas must share visual measurements and own its tracking state\n";
         return 1;
     }
     return 0;

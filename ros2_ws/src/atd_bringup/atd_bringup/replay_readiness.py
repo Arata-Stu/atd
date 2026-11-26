@@ -5,7 +5,8 @@ from atd_localization.replay_player import (
 )
 
 from atd_bringup.replay_inputs import (
-    GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, IMU_TOPIC, SLAM_ODOMETRY, STEREO_WORKFLOW,
+    GROUND_TRUTH_ERROR, GROUND_TRUTH_NODE, GROUND_TRUTH_PATH, IMU_TOPIC, ORB_MAP_MATCH, ORB_VIO_ODOMETRY,
+    SLAM_ODOMETRY, STEREO_WORKFLOW,
 )
 
 
@@ -75,6 +76,8 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=Fal
             feedback.append(('/orbslam3/imu_skipped', 'std_msgs/msg/Header'))
         if orb.metadata:
             feedback.append(('/localization/status', 'atd_interfaces/msg/LocalizationStatus'))
+            if vio:
+                feedback.extend([(ORB_VIO_ODOMETRY, 'nav_msgs/msg/Odometry'), (ORB_MAP_MATCH, 'std_msgs/msg/Header')])
         links.extend((topic, kind, tracker, orb.seed_source) for topic, kind in feedback)
         if orb.gyro_topic:
             from .orb_gap_bridge import CONTINUOUS_ODOMETRY, FRAME_STATUS

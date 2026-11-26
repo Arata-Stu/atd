@@ -254,10 +254,11 @@ exit 130
         args = shlex.split(result.stdout.split('command: ', 1)[1])
         self.assertEqual(args[-5:], ['ros2', 'run', 'atd_bringup', 'evaluate_orb_gyro', 'fixed-run'])
 
-        result = self.invoke('replay', '--compare', 'cu-id', 'orb-id', '--dry-run')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(shlex.split(result.stdout.split('command: ', 1)[1])[-6:],
-                         ['ros2', 'run', 'atd_bringup', 'compare_replays', 'cu-id', 'orb-id'])
+        for ids in (['cu-id', 'orb-id'], ['cu-id', 'orb-id', 'vio-id']):
+            result = self.invoke('replay', '--compare', *ids, '--dry-run')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected = ['ros2', 'run', 'atd_bringup', 'compare_replays', *ids]
+            self.assertEqual(shlex.split(result.stdout.split('command: ', 1)[1])[-len(expected):], expected)
 
         validation_options = ['--validate-map', 'cu_map', '--bag', 'my session/lap 01',
                               '--rate', '1', '--diagnose-frame-gaps', '--domain', '96']

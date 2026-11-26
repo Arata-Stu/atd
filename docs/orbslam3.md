@@ -89,6 +89,49 @@ ROS 2 では `/orbslam3/continuous_odometry` に姿勢、対応する `/orbslam3
 
 ## cuVSLAM と ORB-SLAM3 の比較
 
+### お台場で 1 m/s の地図を作り、3 m/s で3方式を比べる
+
+地図作成と評価には別々の bag を使う。下の例では評価走行を2周とした。両方とも片眼 640×480・90 Hz、ジャイロと統合 IMU は 400 Hz、加速度は 200 Hz。
+
+1. Linux Notebook **ホスト**で地図作成用の1周を記録する。
+
+   ```bash
+   atd gazebo bag --course odaiba --speed 1 --laps 1 --resolution 640x480 --camera-hz 90 --imu 400
+   ```
+
+2. Notebook の **ORB 対応コンテナ**内で1周の bag から固定地図を作る。`MAP_BAG` は収録時に表示された `rosbags/` 以下の bag 名。ORB は Atlas を保存する。同じ bag を Web UI の「地図とライン」→「rosbag から地図を作成」で選び、cuVSLAM 地図を別 ID の `odaiba_s1_cu` として作成する。続いて「VGL地図を作成」で 640×480 対応の export を選び、Notebook 用 engine と VGL 地図の準備を完了する。
+
+   ```bash
+   read -rp '地図作成用の bag 名: ' MAP_BAG
+   atd replay "$MAP_BAG" --backend orbslam3 --save-map odaiba_s1_orb --rate 0.5 --headless
+   ```
+
+3. Notebook **ホスト**で評価走行を記録する。
+
+   ```bash
+   atd gazebo bag --course odaiba --speed 3 --laps 2 --resolution 640x480 --camera-hz 90 --imu 400
+   ```
+
+4. 同じコンテナでテスト bag を等速で2回、順に再生する。1回目で画像で確定した ORB 姿勢とジャイロ補完後の姿勢の両方が残る。2回目は保存済み NVIDIA 地図に対する cuVSLAM のステレオ定位。比較では ORB を `--tracking vo` で動かし、IMU を途絶時の補完に使う。
+
+   ```bash
+   read -rp '評価用の bag 名: ' TEST_BAG
+   atd replay "$TEST_BAG" --backend orbslam3 --map odaiba_s1_orb --gyro-bridge on --rate 1 --headless
+   atd-shell ros2 run atd_localization validate_bag --map odaiba_s1_cu --bag "$TEST_BAG" --rate 1
+   ```
+
+5. 端末に表示された run ID を入力して、3方式の結果を保存する。ORB 側には `runs/orbslam3/` の ID を使う。
+
+   ```bash
+   read -rp 'cuVSLAM の runs/localization/ の ID: ' CU_RUN
+   read -rp 'ORB の runs/orbslam3/ の ID: ' ORB_RUN
+   atd replay --compare "$CU_RUN" "$ORB_RUN" --record-root /data/record/rosbags
+   ```
+
+結果は `runs/vslam_benchmark/<RUN>/report.json`。`output_time_fraction` は、隣り合う出力の間隔が 0.25 秒以下だった時間の合計を共通の評価区間の長さで割った値。3方式で同じ定義を使う。位置・方位は両バックエンドの最初の共通観測で Gazebo 正解に合わせる。ジャイロ補完には ORB と同じ座標変換を使う。`paired_accuracy` で画像を追跡できた共通時刻の精度を、`orbslam3_gyro.predicted_accuracy` で補完中の出力だけの対 GT 誤差を確認する。再取得の段差とその直前・直後の値は ORB run の `reacquisitions.csv` に残る。
+
+### 画像観測のみの2方式を比較する
+
 **保存地図への定位**を選定する場合は、同じ地図作成用 bag から作った NVIDIA 地図（VGL 準備済み）と ORB の Atlas を用意する。次の例で `cu_map` はその NVIDIA 地図 ID、`bag` は上記の評価用 bag。各コマンドが表示した `runs/localization/` の run ID を比較に渡す。
 
 ```bash

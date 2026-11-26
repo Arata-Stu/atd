@@ -18,7 +18,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(bringup_composition test/test_composition.py APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   ament_add_pytest_test(gazebo_lap_mapping test/test_lap_mapping.py APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   foreach(test_name gazebo_control gazebo_closed_loop_paths replay_inputs replay_readiness replay_vslam replay_gt_source replay_gt_geometry replay_gt_node replay_result replay_loop_graph replay_orbslam3
-      orb_gap_eval orb_gap_motion orb_gap_imu orb_gap_bridge orb_online_motion replay_benchmark)
+      orb_gap_eval orb_gap_motion orb_gap_imu orb_gap_bridge orb_online_motion replay_benchmark replay_gyro_benchmark)
     ament_add_pytest_test(${test_name} test/test_${test_name}.py APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   endforeach()
 endif()

@@ -126,6 +126,8 @@ class OrbReplay:
                             input_pairs=self.inputs.pairs, first_input_stamp_ns=self.inputs.first_left_ns,
                             last_input_stamp_ns=self.inputs.last_left_ns, camera_fps=self.inputs.camera_fps,
                             status='running')
+        if self.metadata:
+            self.summary['source_metadata_sha256'] = self.metadata['source_metadata_sha256']
         self._summary()
         stack.push(self._exit)
         self.recording = stack.enter_context(ExitStack())

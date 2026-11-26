@@ -21,6 +21,7 @@ ORB-SLAM3 によるステレオ地図作成: atd replay BAG --backend orbslam3 -
 固定地図でジャイロ補完と再取得時の段差を計測: atd replay BAG --backend orbslam3 --map MAP_ID --gyro-bridge on
 --gyro-bridge auto（既定）は収録ジャイロがあれば補完し、off は画像で確認できた姿勢だけを表示します。
 cuVSLAM と ORB-SLAM3 の同条件の run を比較: atd replay --compare CUV_RUN_ID ORB_RUN_ID
+固定地図で cuVSLAM・ORB 観測・ORB ジャイロ補完を比較: atd replay --compare CU_VALIDATION_ID ORB_GYRO_RUN_ID --record-root /data/record/rosbags
 ORB-SLAM3 VIO 比較: atd replay BAG --backend orbslam3 --tracking vio --imu-calibration IMU.yaml --headless
 固定地図の姿勢途絶を収録済みジャイロで評価: atd replay --imu-gaps RUN_ID [--bag DIR] [--results-root DIR]
 ORB-SLAM3 の状態と軌跡は /data/results/runs/orbslam3/ に保存します。

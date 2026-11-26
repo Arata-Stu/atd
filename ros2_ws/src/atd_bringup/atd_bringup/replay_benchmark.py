@@ -32,19 +32,19 @@ def _sha(path):
 @dataclass
 class Sample:
     stamp: int
-    epoch: int
+    epoch: int | None
     error: tuple | None = None  # 平面位置 [m]・絶対方位差 [deg]
     pose: tuple | None = None   # map 座標の xyz, xyzw
 
 
 def _load_run(root, run_id):
     matches = []
-    for kind, filename in (('replay', 'summary.json'), ('localization', 'report.json')):
+    for kind, filename in (('replay', 'summary.json'), ('localization', 'report.json'), ('orbslam3', 'summary.json')):
         folder = run_dir(root, kind, run_id)
         if (folder / filename).is_file():
             matches.append((kind, folder, json.loads((folder / filename).read_bytes())))
     if len(matches) != 1:
-        raise ValueError(f'runs/replay または runs/localization に一意の run ID が必要です: {run_id}')
+        raise ValueError(f'runs/replay・localization・orbslam3 内で一意の run ID が必要です: {run_id}')
     return matches[0]
 
 
@@ -86,8 +86,10 @@ def _fixed(folder, meta):
         raise ValueError(f'再生が完了していません: {folder.name} ({meta["outcome"]})')
     stereo = meta['stereo']
     series = []
+    pose_count = 0
     with (folder / 'trajectory.csv').open(newline='') as stream:
         for row in csv.DictReader(stream):
+            pose_count += 1
             pose = tuple(float(row[key]) for key in ('x_m', 'y_m', 'z_m', 'qx', 'qy', 'qz', 'qw'))
             if not all(map(math.isfinite, pose)):
                 raise ValueError('追跡姿勢に非有限値があります')
@@ -97,6 +99,8 @@ def _fixed(folder, meta):
                 series[-1] = sample
             else:
                 series.append(sample)
+    if 'pose_samples' in meta and pose_count != meta['pose_samples']:
+        raise ValueError(f'固定地図の保存姿勢数が report.json と一致しません: {folder.name}')
     # TrackingReport records a transition on state or epoch change; a missed loss message
     # can therefore give adjacent tracking entries from two distinct epochs.
     acquisitions = sum(row['state'] == 'tracking' for row in meta['state_changes'])
@@ -107,7 +111,8 @@ def _fixed(folder, meta):
 
 def _coverage(series, start, end):
     deltas = [b.stamp - a.stamp for a, b in pairwise(series)]
-    covered = sum(dt for (a, b), dt in zip(pairwise(series), deltas) if a.epoch == b.epoch and dt <= GAP_NS)
+    covered = sum(dt for (a, b), dt in zip(pairwise(series), deltas)
+                  if a.epoch is not None and a.epoch == b.epoch and dt <= GAP_NS)
     return dict(observations=len(series), observed_time_fraction=covered / (end - start),
                 initial_gap_s=(series[0].stamp-start) / 1e9 if series else None,
                 final_gap_s=(end-series[-1].stamp) / 1e9 if series else None,
@@ -159,6 +164,12 @@ def _relative_errors(pairs, trace):
 
 def compare_runs(root, cu_id, orb_id, record_root=None):
     runs = [_load_run(root, run_id) for run_id in (cu_id, orb_id)]
+    if [r[0] for r in runs] == ['localization', 'orbslam3']:
+        from .replay_gyro_benchmark import compare_gyro_run
+        return compare_gyro_run(root, cu_id, orb_id, record_root)
+    if any(r[0] == 'orbslam3' for r in runs):
+        raise ValueError('3方式の固定地図比較では runs/localization の cuVSLAM ID、'
+                         'runs/orbslam3 のジャイロ補完 ID の順に指定してください')
     if runs[0][0] != runs[1][0]:
         raise ValueError('2本とも同じ検証手順（atd replay または validate_bag）で作成してください')
     kind = runs[0][0]
@@ -226,10 +237,10 @@ def compare_runs(root, cu_id, orb_id, record_root=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('cuvslam_run')
-    parser.add_argument('orbslam3_run')
+    parser.add_argument('cuvslam_run', help='固定地図では runs/localization の cuVSLAM 検証 ID')
+    parser.add_argument('orbslam3_run', help='3方式の固定地図比較には runs/orbslam3 の補完あり run ID')
     parser.add_argument('--results-root', type=Path, default=Path(os.environ.get('ATD_REPLAY_RESULTS_ROOT', '/data/results')))
-    parser.add_argument('--record-root', type=Path, help='固定地図の Gazebo 相対誤差も評価する bag ルート')
+    parser.add_argument('--record-root', type=Path, help='固定地図の位置・方位を Gazebo 正解と照合する bag ルート')
     args = parser.parse_args(argv)
     try:
         report = compare_runs(args.results_root, args.cuvslam_run, args.orbslam3_run, args.record_root)
@@ -244,11 +255,16 @@ def main(argv=None):
     print(f"共通評価区間 {(report['window_ns'][1]-report['window_ns'][0])/1e9:.3f} 秒、"
           f"±5 ms で対応した観測 {report['paired_observations']} 組")
     for backend, result in report['backends'].items():
-        print(f"{backend}  観測カバー率 {result['observed_time_fraction']:.1%}  "
-              f"0.25 s 超の姿勢間隔 {result['internal_gaps_over_threshold']} 回", end='')
+        coverage = (f"出力カバー率 {result['output_time_fraction']:.1%}" if 'output_time_fraction' in result
+                    else f"観測カバー率 {result['observed_time_fraction']:.1%}")
+        print(f"{backend}  {coverage}  0.25 s 超の姿勢間隔 {result['internal_gaps_over_threshold']} 回", end='')
         if result['paired_accuracy']:
             err = result['paired_accuracy']
             print(f"  共通観測の位置 RMSE {err['xy_rmse_m']:.3f} m・方位誤差中央値 {err['abs_yaw_median_deg']:.2f}°", end='')
         print()
+        if result.get('predicted_accuracy'):
+            err = result['predicted_accuracy']
+            print(f"  補完中の GT 照合 {err['samples']} 件、位置 RMSE {err['xy_rmse_m']:.3f} m・"
+                  f"方位誤差中央値 {err['abs_yaw_median_deg']:.2f}°")
     print(f'比較結果: {path}')
     return 0

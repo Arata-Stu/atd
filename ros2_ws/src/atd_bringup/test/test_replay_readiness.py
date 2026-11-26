@@ -61,6 +61,30 @@ class GateTests(unittest.TestCase):
         self.subs[topic].append(endpoint('/visual_slam', kind))
         self.assertFalse(_missing_endpoints(self.node, self.player, self.rviz, vio=True))
 
+    def test_orb_gyro_replay_requires_gyro_at_bridge_and_per_image_decisions(self):
+        from atd_bringup.orb_gap_bridge import FRAME_STATUS
+        tracker, bridge = '/orbslam3_node', '/atd_bag_replay'
+        gyro = '/camera/camera/gyro/sample'
+        seeds = {STEREO_WORKFLOW[k] for k in ('left_info', 'right_info', 'tf_static')}
+        orb = NS(tracker=tracker, seed_source=bridge, seed_topics=seeds, gyro_topic=gyro, metadata=True)
+        for topic in [*STEREO_WORKFLOW.values(), '/clock']:
+            kind = self.pubs[topic][0].topic_type
+            self.pubs[topic] = [endpoint(bridge if topic in seeds else self.player, kind)]
+            self.subs[topic] = [endpoint(tracker, kind)]
+        self.subs['/tf_static'].append(endpoint(bridge, 'tf2_msgs/msg/TFMessage'))
+        for topic, kind in [(SLAM_ODOMETRY, 'nav_msgs/msg/Odometry'), ('/orbslam3/ready', 'std_msgs/msg/Bool'),
+                            ('/orbslam3/processed', 'std_msgs/msg/Header'),
+                            ('/localization/status', 'atd_interfaces/msg/LocalizationStatus'),
+                            (FRAME_STATUS, 'atd_interfaces/msg/LocalizationStatus')]:
+            self.pubs[topic], self.subs[topic] = [endpoint(tracker, kind)], [endpoint(bridge, kind)]
+        self.pubs[gyro] = [endpoint(self.player, 'sensor_msgs/msg/Imu')]
+        self.subs[gyro] = [endpoint(tracker, 'sensor_msgs/msg/Imu')]
+        self.assertIn(gyro, ' '.join(_missing_endpoints(self.node, self.player, None, orb=orb)))
+        self.subs[gyro] = [endpoint(bridge, 'sensor_msgs/msg/Imu')]
+        self.assertFalse(_missing_endpoints(self.node, self.player, None, orb=orb))
+        self.pubs[FRAME_STATUS] = []
+        self.assertIn(FRAME_STATUS, ' '.join(_missing_endpoints(self.node, self.player, None, orb=orb)))
+
     def test_waits_for_configured_rviz_displays_before_resuming(self):
         ready = self.subs[SLAM_ODOMETRY]
         self.subs[SLAM_ODOMETRY] = [

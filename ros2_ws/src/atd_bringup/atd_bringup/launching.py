@@ -52,12 +52,14 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
         if not autonomous:
             defaults.update(joy_drive='false' if localization else 'true', joy_drive_port='')
     if localization:
+        from atd_bringup.replay_inputs import GYRO_TOPIC
         from atd_control.core import LookaheadConfig
         from atd_control.speed import DEFAULT_FEEDFORWARD_PATH, PIDConfig
         from atd_planning.core import DEFAULT_HORIZON_M
         tuning = ('min_lookahead_m', 'lookahead_time_s', 'max_lookahead_m')
         controller = LookaheadConfig()
         defaults.update(map_id='', results_root='/data/results', engine_dir='', line='raceline')
+        defaults.update(orb_gyro_bridge='false', orb_gyro_topic=GYRO_TOPIC)
         defaults.update({key: str(getattr(controller, key)) for key in tuning})
         pid = PIDConfig()
         speed_arguments = {'feedforward_path': DEFAULT_FEEDFORWARD_PATH,
@@ -68,7 +70,7 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
                         auto_calibration_path='/data/results/runs/vehicle/auto_drive.yaml')
     arguments = {key: LaunchConfiguration(key) for key in defaults}
     actions = [DeclareLaunchArgument(key, default_value=value,
-                                     choices=['true', 'false'] if key == 'joy_drive' else None)
+                                     choices=['true', 'false'] if key in ('joy_drive', 'orb_gyro_bridge') else None)
                for key, value in defaults.items()]
     if camera:
         actions += [
@@ -92,6 +94,11 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
     if localization:
         actions.append(include('atd_localization', 'localization.launch.py',
                                {key: arguments[key] for key in ('map_id', 'results_root', 'engine_dir')}))
+        actions.append(Node(package='atd_bringup', executable='orb_gyro_bridge', output='screen',
+                            condition=IfCondition(arguments['orb_gyro_bridge']),
+                            parameters=[{key: ParameterValue(arguments[arg], value_type=str) for key, arg in
+                                         [('map_id', 'map_id'), ('results_root', 'results_root'),
+                                          ('imu_topic', 'orb_gyro_topic')]}]))
         def planning(context):
             if autonomous:
                 import json

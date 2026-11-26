@@ -14,7 +14,7 @@ import yaml
 from atd_mapping.frames import stamp_ns
 
 from .replay_gt_geometry import Alignment, PlanarPose
-from .replay_inputs import SLAM_ODOMETRY
+from .replay_inputs import SLAM_ODOMETRY, STEREO_WORKFLOW, recorded_imu
 from .replay_orb_inputs import inputs_from_bag, noise_settings
 
 
@@ -53,11 +53,21 @@ def saved_alignment(atlas_path, circuit):
     return Alignment(PlanarPose(*world), tuple(origin), tuple(quaternion))
 
 
+def gyro_calibration(bag, topic, calibration):
+    from .orb_gap_imu import _add_transform, _body_axis
+    profile = recorded_imu(bag, topic)
+    parents = {}
+    for tf in calibration[STEREO_WORKFLOW['tf_static']].transforms:
+        _add_transform(parents, tf)
+    _, path = _body_axis(profile.frame, parents)
+    return profile, path
+
+
 class OrbReplay:
     tracker = '/orbslam3_node'
     seed_source = '/atd_bag_replay'
 
-    def __init__(self, stack, root, node, bag, options, imu, course, executable):
+    def __init__(self, stack, root, node, bag, options, imu, course, executable, *, gyro_topic=None):
         import rclpy
         from atd_interfaces.msg import LocalizationStatus
         from atd_localization.orb_assets import map_workspace, orb_map_metadata
@@ -70,6 +80,8 @@ class OrbReplay:
 
         self.node, self.root, self.bag = node, root, bag
         self.options, self.course = options, course
+        self.gyro_topic = gyro_topic
+        self.bridge = None
         self.stage = self.fixed_alignment = self.save_client = None
         self.last_processed = self.first_pose = self.first_tracking = None
         self.poses = self.processed = 0
@@ -122,6 +134,23 @@ class OrbReplay:
         events = csv.writer(self.recording.enter_context((self.directory / 'status.csv').open('x', newline='')))
         events.writerow(('stamp_ns', 'state', 'epoch', 'reason'))
         calibration, self.image_size = recorded_calibration(bag)
+        if gyro_topic:
+            from .orb_gap_bridge import OrbGapBridge
+            try:
+                profile, tf_path = gyro_calibration(bag, gyro_topic, calibration)
+            except ValueError as exc:
+                if options.gyro_bridge == 'on':
+                    raise
+                self.gyro_topic = None
+                self.summary['gyro_bridge'] = dict(topic=gyro_topic, disabled_reason=str(exc))
+                print(f'ジャイロ補完を使用できないため観測姿勢で再生します。{exc}', flush=True)
+            else:
+                self.bridge = OrbGapBridge(node, self.directory, options.map, self.metadata['map_sha256'],
+                                           imu_topic=gyro_topic)
+                self.recording.callback(self.bridge.close)
+                self.summary['gyro_bridge'] = dict(topic=gyro_topic, imu_frame=profile.frame, tf_path=tf_path,
+                                                    report='gyro_bridge_summary.json')
+                print(f'途絶補完ジャイロ: {gyro_topic} ({profile.frequency:g} Hz, {profile.frame})', flush=True)
         bootstrap = OrbBootstrap(node, calibration)
         self.seed_topics = bootstrap.topics
         self.seed = bootstrap.wait
@@ -190,12 +219,18 @@ class OrbReplay:
 
         # Wait for actual tracking completion. A successful bag process alone cannot certify a saved atlas.
         deadline = time.monotonic() + 30
-        while self.last_processed != self.inputs.last_left_ns and time.monotonic() < deadline:
+        def bridge_pending():
+            return self.bridge is not None and self.bridge.last_frame_ns != self.inputs.last_left_ns
+
+        while (self.last_processed != self.inputs.last_left_ns or bridge_pending()) and time.monotonic() < deadline:
             check_running()
             spin(.02)
         if self.last_processed != self.inputs.last_left_ns:
             raise RuntimeError(f'ORB-SLAM3 の末尾画像処理を確認できません: '
                                f'{self.last_processed} / {self.inputs.last_left_ns} ns。再生倍率を下げて再試行してください')
+        if bridge_pending():
+            raise RuntimeError(f'ジャイロ補完で末尾画像を確認できません: {self.bridge.last_frame_ns} / '
+                               f'{self.inputs.last_left_ns} ns')
         deadline = time.monotonic() + .75
         while time.monotonic() < deadline:
             spin(.01)
@@ -205,8 +240,22 @@ class OrbReplay:
             raise RuntimeError('GT と画像時刻を照合できた ORB-SLAM3 の姿勢が 0 件です')
         if result and self.metadata:
             self.summary['initial_error'] = result.summary['initial_error']
-        # RViz can stay open after EOF. Stop sampling and close both CSVs before publishing the result.
+        # RViz can stay open after EOF. Finalize all outputs while the graph is still alive.
         self.recording.close()
+        if self.bridge:
+            report = self.bridge.summary
+            if not report['counts'].get('gyro_samples'):
+                message = '車体座標に変換できたジャイロ観測が0件です。補完を評価できません'
+                if self.options.gyro_bridge == 'on':
+                    raise RuntimeError(message)
+                print(message, flush=True)
+            print(f"補完姿勢 {report['predicted']} 件、再取得 {report['reacquisitions']} 回、"
+                  f"同時刻の段差を計測できたのは {report['measured_jumps']} 回", flush=True)
+            if report['measured_jumps']:
+                xy, yaw = report['position_jump_m'], report['abs_yaw_jump_deg']
+                print(f"再取得時の位置段差 中央値 {xy['median']:.3f} m / 最大 {xy['max']:.3f} m、"
+                      f"方位段差 中央値 {yaw['median']:.2f}° / 最大 {yaw['max']:.2f}°", flush=True)
+            print(f"再取得の区間別結果: {self.directory / 'reacquisitions.csv'}", flush=True)
         if self.save_client is not None:
             if not self.save_client.wait_for_service(timeout_sec=5.):
                 raise RuntimeError('/orbslam3/save_map が利用できません')

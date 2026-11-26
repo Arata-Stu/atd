@@ -1,5 +1,6 @@
 # state == "tracking" のときだけ pose, speed_mps, yaw_rate_rps を使用できる。
-# tracking の stamp は照合済みステレオ観測時刻、それ以外は状態通知の ROS 時刻。
+# /localization/status での tracking の stamp は照合済みステレオ観測時刻、それ以外は状態通知の ROS 時刻。
+# /orbslam3/frame_status では全状態でステレオ観測時刻。画像のない状態通知は含まない。
 std_msgs/Header header
 string map_id
 string map_sha256

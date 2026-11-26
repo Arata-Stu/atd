@@ -18,6 +18,9 @@ while (($#)); do
 Linux Notebook の Isaac ROS コンテナで選択した SLAM と RViz を起動し、rosbag を再生します（既定 cuVSLAM）。
 ORB-SLAM3 によるステレオ地図作成: atd replay BAG --backend orbslam3 --save-map MAP_ID --headless
 保存地図で別走行の 15 秒地点から再定位: atd replay OTHER_BAG --backend orbslam3 --map MAP_ID --start-offset 15 --headless
+固定地図でジャイロ補完と再取得時の段差を計測: atd replay BAG --backend orbslam3 --map MAP_ID --gyro-bridge on
+--gyro-bridge auto（既定）は収録ジャイロがあれば補完し、off は画像で確認できた姿勢だけを表示します。
+cuVSLAM と ORB-SLAM3 の同条件の run を比較: atd replay --compare CUV_RUN_ID ORB_RUN_ID
 ORB-SLAM3 VIO 比較: atd replay BAG --backend orbslam3 --tracking vio --imu-calibration IMU.yaml --headless
 固定地図の姿勢途絶を収録済みジャイロで評価: atd replay --imu-gaps RUN_ID [--bag DIR] [--results-root DIR]
 ORB-SLAM3 の状態と軌跡は /data/results/runs/orbslam3/ に保存します。
@@ -36,6 +39,7 @@ EOF
             exit 0 ;;
         --dry-run) dry_run=true ;;
         --imu-gaps) executable=evaluate_orb_gyro ;;
+        --compare) executable=compare_replays ;;
         --) args+=("$@"); break ;;
         *) args+=("$1") ;;
     esac

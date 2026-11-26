@@ -1,7 +1,9 @@
 """Notebook でステレオ bag を SLAM 再生し、Gazebo の正解軌跡と比較する。"""
 import argparse
+from copy import deepcopy
 from contextlib import ExitStack
 import fcntl
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -19,7 +21,8 @@ from .replay_gt_course import load_course
 from .replay_gt_geometry import Trace
 from .replay_gt_node import ground_truth_viewer
 from .replay_gt_source import find_ground_truth
-from .replay_inputs import GROUND_TRUTH_ERROR, GROUND_TRUTH_PATH, IMU_TOPIC, STEREO_TOPICS, select_bag, validate_bag
+from .replay_inputs import (GROUND_TRUTH_ERROR, GROUND_TRUTH_PATH, IMU_TOPIC, SLAM_ODOMETRY, STEREO_TOPICS,
+                            gap_gyro_topic, select_bag, validate_bag)
 from .replay_result import ReplayResult
 
 
@@ -27,12 +30,21 @@ class ViewerClosed(Exception):
     """RViz のウィンドウを閉じて再生セッションを終了した。"""
 
 
-def replay_config(preset, directory, hidden):
+def replay_config(preset, directory, hidden, *, bridge=False):
     """今回配信しない topic を RViz の表示から取り除く。"""
     config = yaml.safe_load(preset.read_text())
     manager = config['Visualization Manager']
     manager['Displays'] = [display for display in manager['Displays']
                            if display.get('Topic', {}).get('Value') not in hidden]
+    if bridge:
+        from .orb_gap_bridge import CONTINUOUS_ODOMETRY
+        raw = next(d for d in manager['Displays'] if d.get('Topic', {}).get('Value') == SLAM_ODOMETRY)
+        raw['Name'] = 'ORB visual observations'
+        continuous = deepcopy(raw)
+        continuous['Name'] = 'ORB with gyro gap prediction'
+        continuous['Topic']['Value'] = CONTINUOUS_ODOMETRY
+        continuous['Shape'].update({'Color': '120; 235; 145', 'Shaft Radius': .03, 'Head Radius': .08})
+        manager['Displays'].append(continuous)
     output = Path(directory) / preset.name
     output.write_text(yaml.safe_dump(config, sort_keys=False))
     return output
@@ -61,6 +73,8 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
         if orb:
             launch_args = orb.command
             topics = [topic for topic in topics if topic not in orb.seed_topics]
+            if orb.gyro_topic:
+                topics.append(orb.gyro_topic)
         launch = start(launch_args)
         rviz = None
         if rviz_config is not None:
@@ -214,7 +228,12 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_op
         orb = None
         hidden = set()
         if orb_options:
-            orb = OrbReplay(stack, root, node, bag, orb_options, imu, course, executable)
+            gyro = None
+            if orb_options.map and orb_options.gyro_bridge != 'off':
+                gyro = gap_gyro_topic(bag, required=orb_options.gyro_bridge == 'on')
+                if gyro is None:
+                    print('bag にジャイロがありません。ORB の観測姿勢で再生します。', flush=True)
+            orb = OrbReplay(stack, root, node, bag, orb_options, imu, course, executable, gyro_topic=gyro)
             hidden.update(('/visual_slam/vis/landmarks_cloud', '/visual_slam/vis/loop_closure_cloud'))
             if trace and orb.metadata and not orb.fixed_alignment:
                 print('このコースと照合できる地図作成時の GT 座標変換がないため、絶対誤差は評価しません。', flush=True)
@@ -222,10 +241,14 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_op
         if not trace:
             hidden.update((GROUND_TRUTH_PATH, GROUND_TRUTH_ERROR))
         if config and hidden:
-            config = replay_config(config, stack.enter_context(TemporaryDirectory(prefix='atd-replay-rviz-')), hidden)
+            config = replay_config(config, stack.enter_context(TemporaryDirectory(prefix='atd-replay-rviz-')),
+                                   hidden, bridge=bool(orb and orb.bridge))
         if trace is not None:
             result = stack.enter_context(ReplayResult(root, bag, rate, trace, course,
                                                      slam_max_map_size=slam_max_map_size, imu=imu))
+            bag_hash = orb.bag_hash if orb else hashlib.sha256((bag / 'metadata.yaml').read_bytes()).hexdigest()
+            result.summary.update(backend='cuvslam', mode='mapping', alignment_source='first_estimate',
+                                  start_offset_s=0., metadata_sha256=bag_hash)
             if orb:
                 result.summary.pop('slam_max_map_size')
                 result.summary.update(backend='orbslam3', mode=orb.params['mode'], map_id=orb_options.map or orb_options.save_map,
@@ -250,9 +273,13 @@ def main(argv=None):
     maps = parser.add_mutually_exclusive_group()
     maps.add_argument('--save-map', metavar='ID', help='新しい ORB-SLAM3 コース地図を保存')
     maps.add_argument('--map', metavar='ID', help='保存済み ORB-SLAM3 地図に別走行から再定位')
+    parser.add_argument('--gyro-bridge', choices=('auto', 'on', 'off'), default='auto',
+                        help='固定 ORB 地図の途絶補完。auto は収録ジャイロがあれば有効（既定）、on は記録必須')
     parser.add_argument('--start-offset', type=float, default=0., help='固定地図を検証する bag の途中開始位置 [s]')
     parser.add_argument('--imu-calibration', type=Path, help='ORB-SLAM3 VIO 用 IMU ノイズ校正 YAML')
     args = parser.parse_args(argv)
+    if args.gyro_bridge != 'auto' and not (args.backend == 'orbslam3' and args.map):
+        parser.error('--gyro-bridge は --backend orbslam3 --map ID と一緒に指定してください')
     if args.backend != 'orbslam3' and (args.map or args.save_map or args.start_offset or args.imu_calibration):
         parser.error('地図・途中開始・IMU校正の指定には --backend orbslam3 が必要です')
     if not math.isfinite(args.start_offset) or args.start_offset < 0 or (args.start_offset and not args.map):

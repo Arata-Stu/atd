@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from atd_bringup.replay_gt_source import store_ground_truth
-from atd_bringup.replay_inputs import IMU_TOPIC, ImuProfile, select_bag, validate_bag
+from atd_bringup.replay_inputs import GYRO_TOPIC, IMU_TOPIC, ImuProfile, gap_gyro_topic, select_bag, validate_bag
 
 
 class ReplaySelectionTests(unittest.TestCase):
@@ -200,3 +200,15 @@ class ReplayInputValidationTests(unittest.TestCase):
             else:
                 with self.assertRaisesRegex(ValueError, 'Missing static TF.*' + imu_frame):
                     validate_bag(self.bag, vio=True)
+
+    def test_optional_gap_bridge_accepts_the_d455_gyro_without_acceleration(self):
+        self.write_metadata()
+        self.assertIsNone(gap_gyro_topic(self.bag, required=False))
+        with self.assertRaisesRegex(ValueError, GYRO_TOPIC):
+            gap_gyro_topic(self.bag, required=True)
+        self.topics[GYRO_TOPIC] = 'sensor_msgs/msg/Imu'
+        self.topics[IMU_TOPIC] = 'sensor_msgs/msg/Imu'
+        self.write_metadata(empty=IMU_TOPIC)
+        self.assertEqual(gap_gyro_topic(self.bag, required=True), GYRO_TOPIC)
+        self.write_metadata()
+        self.assertEqual(gap_gyro_topic(self.bag, required=True), IMU_TOPIC)

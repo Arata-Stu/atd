@@ -69,6 +69,13 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=Fal
         if orb.metadata:
             feedback.append(('/localization/status', 'atd_interfaces/msg/LocalizationStatus'))
         links.extend((topic, kind, tracker, orb.seed_source) for topic, kind in feedback)
+        if orb.gyro_topic:
+            from .orb_gap_bridge import CONTINUOUS_ODOMETRY, FRAME_STATUS
+            links.extend([(FRAME_STATUS, 'atd_interfaces/msg/LocalizationStatus', tracker, orb.seed_source),
+                          (orb.gyro_topic, 'sensor_msgs/msg/Imu', player_name, orb.seed_source),
+                          (STEREO_WORKFLOW['tf_static'], 'tf2_msgs/msg/TFMessage', orb.seed_source, orb.seed_source)])
+            if rviz_name:
+                links.append((CONTINUOUS_ODOMETRY, 'nav_msgs/msg/Odometry', orb.seed_source, rviz_name))
     for topic, kind, producer, consumer in links:
         publishers = _check_publishers(node, topic, kind, producer, missing)
         missing.extend(_connection_issues(

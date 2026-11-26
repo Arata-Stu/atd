@@ -215,3 +215,35 @@ def test_orb_validation_uses_only_dynamic_images_in_the_paused_player():
     assert command[command.index('--topics')+1:] == ['/infra1', '/infra2']
     window = stereo_window([10, 20, 30], [11, 21, 31], 1, left_stamp=True)
     assert (window['first_stamp_ns'], window['last_stamp_ns']) == (10, 30)
+
+
+def test_fixed_map_paused_player_waits_for_slam_vgl_and_monitor_on_remapped_topics(monkeypatch):
+    import sys
+    from unittest.mock import Mock
+
+    workflow = dict(left_image='/l', right_image='/r', left_info='/li', right_info='/ri', tf_static='/tf_static')
+    topic_types = dict.fromkeys(('/l', '/r'), 'sensor_msgs/msg/Image')
+    topic_types.update(dict.fromkeys(('/li', '/ri'), 'sensor_msgs/msg/CameraInfo'))
+    topic_types.update({'/tf_static': 'tf2_msgs/msg/TFMessage', '/clock': 'rosgraph_msgs/msg/Clock'})
+    def endpoint(name, topic, qos=True):
+        return SimpleNamespace(node_name=name, node_namespace='/', topic_type=topic_types[topic], qos_profile=qos)
+    pubs = {t: [endpoint('player', t)] for t in topic_types}
+    pubs['/tf_static'].append(endpoint('visual_slam', '/tf_static'))
+    subs = {t: [endpoint(n, t) for n in ('visual_slam', 'visual_global_localization', 'atd_localization_monitor')]
+            for t in topic_types}
+    subs['/tf_static'] = [endpoint('transform_listener_impl_12', '/tf_static')]
+    node = Mock()
+    node.get_service_names_and_types.return_value = []
+    node.get_publishers_info_by_topic.side_effect = pubs.__getitem__
+    node.get_subscriptions_info_by_topic.side_effect = subs.__getitem__
+    monkeypatch.setitem(sys.modules, 'rclpy.qos', SimpleNamespace(QoSCompatibility=SimpleNamespace(ERROR=False),
+                        qos_check_compatible=lambda pub, sub: (pub == sub, '')))
+    assert not replay.validation_connections(node, '/player', workflow, orb=False)
+    subs['/li'][-1].qos_profile = False
+    subs['/r'] = [endpoint('visual_slam', '/r')]
+    issues = replay.validation_connections(node, '/player', workflow, orb=False)
+    assert any('/li' in i and 'atd_localization_monitor' in i and 'QoS' in i for i in issues)
+    assert any('/r' in i and 'visual_global_localization' in i for i in issues)
+    for topic in ('/clock', '/l', '/r'):
+        subs[topic] = [endpoint('orbslam3_node', topic)]
+    assert not replay.validation_connections(node, '/player', workflow, orb=True)

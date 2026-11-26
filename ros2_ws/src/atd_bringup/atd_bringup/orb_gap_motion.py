@@ -15,7 +15,7 @@ def _sinc(angle):
     return math.sin(angle) / angle if angle else 1.
 
 
-def _advance(pose, speed, seconds, yaw_change):
+def advance_planar(pose, speed, seconds, yaw_change):
     """平面の定速円弧。旋回率ゼロのときも同じ式で直進する。"""
     x, y, yaw = pose
     distance = speed * seconds * _sinc(yaw_change * .5)
@@ -31,10 +31,9 @@ def _pose(row, prefix):
     return pose
 
 
-def _motion(stamps, samples):
+def estimate_motion(stamps, poses):
     """前進速度とヨー角速度を直前の位置・方位履歴の最小二乗勾配から得る。"""
     distances, angles = [0.], [0.]
-    poses = [_pose(samples[t], 'est') for t in stamps]
     for (x0, y0, yaw0), (x1, y1, yaw1) in pairwise(poses):
         angle = math.remainder(yaw1 - yaw0, math.tau)
         yaw_mid = yaw0 + angle * .5
@@ -58,7 +57,7 @@ def _gyro_endpoint(start, end, pose, speed, stamps, rates):
         if stop - stamps[i] > MAX_GYRO_HOLD_NS:
             return None
         seconds = (stop - t) * 1e-9
-        pose = _advance(pose, speed, seconds, rates[i] * seconds)
+        pose = advance_planar(pose, speed, seconds, rates[i] * seconds)
         i += 1
         t = stop
     return pose
@@ -112,10 +111,11 @@ def evaluate_gaps(trajectory_stamps, epochs, samples, gyro_stamps, yaw_rates):
         if first == i:
             gap['status'] = 'insufficient_history'
             continue
-        speed, turn = _motion(trajectory_stamps[first:i+1], samples)
+        history = trajectory_stamps[first:i+1]
+        speed, turn = estimate_motion(history, [_pose(samples[t], 'est') for t in history])
         gap.update(forward_mps=speed, yaw_rate_radps=turn)
-        gap['errors']['straight'] = _error(_advance(pose, speed, duration, 0.), truth)
-        gap['errors']['turn'] = _error(_advance(pose, speed, duration, turn * duration), truth)
+        gap['errors']['straight'] = _error(advance_planar(pose, speed, duration, 0.), truth)
+        gap['errors']['turn'] = _error(advance_planar(pose, speed, duration, turn * duration), truth)
         predicted = _gyro_endpoint(start, end, pose, speed, gyro_stamps, yaw_rates)
         if predicted is None:
             gap['status'] = 'insufficient_gyro_coverage'

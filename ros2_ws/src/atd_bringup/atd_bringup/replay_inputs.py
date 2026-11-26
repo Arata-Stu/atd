@@ -24,6 +24,7 @@ STEREO_WORKFLOW = {
 }
 STEREO_TOPICS = tuple(STEREO_WORKFLOW.values())
 IMU_TOPIC = '/camera/camera/imu'
+GYRO_TOPIC = '/camera/camera/gyro/sample'
 SLAM_ODOMETRY = '/visual_slam/vis/slam_odometry'
 LOOP_CLOSURE_CLOUD = '/visual_slam/vis/loop_closure_cloud'
 GROUND_TRUTH_PATH = '/atd/replay/ground_truth_path'
@@ -150,36 +151,50 @@ class ImuProfile(NamedTuple):
     frequency: float
 
 
-def recorded_imu(path):
+def gap_gyro_topic(path, *, required):
+    """固定地図の補完には統合 IMU または D455 の単独ジャイロを使う。"""
+    info = load_metadata(path)
+    rows = {r['topic_metadata']['name']: r for r in info['topics_with_message_count']}
+    for name in (IMU_TOPIC, GYRO_TOPIC):
+        row = rows.get(name)
+        if row and row['message_count'] >= 2 and row['topic_metadata']['type'] == 'sensor_msgs/msg/Imu':
+            return name
+    if required:
+        raise ValueError(f'ジャイロ補完には {IMU_TOPIC} または {GYRO_TOPIC} の記録が必要です')
+    return None
+
+
+def recorded_imu(path, topic=IMU_TOPIC):
     """統合 IMU のヘッダーから、収録時の座標系とシミュレーション時刻での周期を読む。"""
     import rosbag2_py
     from rclpy.serialization import deserialize_message
     from sensor_msgs.msg import Imu
 
     metadata = load_metadata(path)
-    if not any(entry['topic_metadata']['name'] == IMU_TOPIC and
+    if not any(entry['topic_metadata']['name'] == topic and
                entry['topic_metadata']['type'] == 'sensor_msgs/msg/Imu' and entry['message_count'] >= 2
                for entry in metadata['topics_with_message_count']):
-        raise ValueError(f'VIO に必要な統合 IMU {IMU_TOPIC} の記録がありません。'
+        kind = '統合 IMU' if topic == IMU_TOPIC else 'ジャイロ'
+        raise ValueError(f'{kind} {topic} の記録がありません。'
                          'Gazebo では --imu 400 で記録してください')
     reader = rosbag2_py.SequentialReader()
     reader.open(rosbag2_py.StorageOptions(uri=str(path), storage_id=metadata['storage_identifier']),
                 rosbag2_py.ConverterOptions('', ''))
-    reader.set_filter(rosbag2_py.StorageFilter(topics=[IMU_TOPIC]))
+    reader.set_filter(rosbag2_py.StorageFilter(topics=[topic]))
     stamps = []
     frame = None
     while len(stamps) < 65 and reader.has_next():
         header = deserialize_message(reader.read_next()[1], Imu).header
         name = header.frame_id.lstrip('/')
         if not name or (frame is not None and frame != name):
-            raise ValueError(f'{IMU_TOPIC} の座標系を確認できません')
+            raise ValueError(f'{topic} の座標系を確認できません')
         frame = name
         stamp = header.stamp.sec * 1_000_000_000 + header.stamp.nanosec
         if stamps and stamp <= stamps[-1]:
-            raise ValueError(f'{IMU_TOPIC} の時刻が単調増加していません')
+            raise ValueError(f'{topic} の時刻が単調増加していません')
         stamps.append(stamp)
     if len(stamps) < 2:
-        raise ValueError(f'{IMU_TOPIC} の記録から周期を計算できません')
+        raise ValueError(f'{topic} の記録から周期を計算できません')
     period_ns = median(b - a for a, b in zip(stamps, stamps[1:]))
     return ImuProfile(frame, 1e9 / period_ns)
 

@@ -187,6 +187,24 @@ class ReplaySessionTests(unittest.TestCase):
         self.assertEqual(player[player.index('--topics') + 1:], [*replay.STEREO_TOPICS, replay.IMU_TOPIC])
         self.assertTrue(self.ready.call_args.kwargs['vio'])
 
+    def test_gyro_bridge_sends_gyro_to_replay_without_switching_orb_to_vio(self):
+        orb = Mock(command=['orb', '--ros-args'], params={'mode': 'localization'},
+                   seed_topics={'/tf_static'}, gyro_topic='/camera/camera/gyro/sample')
+        orb.options.start_offset = 0
+        self.ready.side_effect = KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.session(orb=orb)
+        launch, _, player = [call.args[0] for call in self.spawn.call_args_list]
+        self.assertEqual(launch, orb.command)
+        self.assertEqual(player[player.index('--topics')+1:],
+                         [*(t for t in replay.STEREO_TOPICS if t not in orb.seed_topics), orb.gyro_topic])
+        self.assertFalse(self.ready.call_args.kwargs['vio'])
+        with TemporaryDirectory() as directory:
+            preset = yaml.safe_load(replay.replay_config(self.config, directory, set(), bridge=True).read_text())
+        arrows = {d['Topic']['Value']: d['Shape']['Color'] for d in preset['Visualization Manager']['Displays']
+                  if d['Class'].endswith('/Odometry')}
+        self.assertNotEqual(arrows['/orbslam3/continuous_odometry'], arrows[SLAM_ODOMETRY])
+
     def test_playback_failure_after_resume_is_reported(self):
         self.player.returncode = 2
         with self.assertRaisesRegex(RuntimeError, 'rosbag2.*exit 2'):

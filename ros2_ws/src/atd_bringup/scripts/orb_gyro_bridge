@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""車載の固定 ORB 地図で、ジャイロ補完した姿勢を観測する。"""
+from contextlib import ExitStack
+
+import rclpy
+from rclpy.executors import ExternalShutdownException
+
+from atd_bringup.orb_gap_bridge import OrbGapBridge
+from atd_bringup.replay_inputs import GYRO_TOPIC
+from atd_localization.orb_assets import orb_map_metadata
+
+
+def main():
+    with ExitStack() as stack:
+        rclpy.init()
+        stack.callback(rclpy.try_shutdown)
+        node = rclpy.create_node('orb_gyro_bridge')
+        stack.callback(node.destroy_node)
+        map_id = node.declare_parameter('map_id', '').value
+        root = node.declare_parameter('results_root', '/data/results').value
+        topic = node.declare_parameter('imu_topic', GYRO_TOPIC).value
+        meta = orb_map_metadata(root, map_id)
+        bridge = OrbGapBridge(node, None, map_id, meta['map_sha256'], imu_topic=topic)
+        stack.callback(bridge.close)
+        try:
+            rclpy.spin(node)
+        except (KeyboardInterrupt, ExternalShutdownException):
+            pass
+
+
+if __name__ == '__main__':
+    main()

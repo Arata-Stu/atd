@@ -255,6 +255,11 @@ exit 130
         args = shlex.split(result.stdout.split('command: ', 1)[1])
         self.assertEqual(args[-5:], ['ros2', 'run', 'atd_bringup', 'evaluate_orb_gyro', 'fixed-run'])
 
+        result = self.invoke('replay', '--compare', 'cu-id', 'orb-id', '--dry-run')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(shlex.split(result.stdout.split('command: ', 1)[1])[-6:],
+                         ['ros2', 'run', 'atd_bringup', 'compare_replays', 'cu-id', 'orb-id'])
+
         # コンテナ内の起動時に ATD shell で overlay を読み直すところまで確認する。
         shell = self.root / 'docker/scripts/atd-shell.sh'
         shell.parent.mkdir(parents=True)

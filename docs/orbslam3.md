@@ -62,6 +62,51 @@ atd replay day2/lap --backend orbslam3 --tracking vio --imu-calibration /path/to
 
 ステレオ＋IMU は、新規セッションでの追跡比較に実装した。固定 Atlas の作成・再定位にはステレオ単独を使う。VIO には同じ撮影時刻系の統合 IMU `/camera/camera/imu` と、カメラ・IMU 間の固定 TF が必要。D455 は既定で加速度・ジャイロを別々に配信するため、収録時に統合出力も準備する。IMU 校正 YAML の最上位に `gyro_noise_density`、`accel_noise_density`、`gyro_random_walk`、`accel_random_walk` を記載する。各値には ORB-SLAM3 の連続時間 IMU モデルの SI 単位を用いる。カメラの外部姿勢とステレオ基線は実測 TF と投影行列で照合する。
 
+## 固定地図で途絶を補完し、再取得時の段差を見る
+
+既存の `odaiba_orb_01` と、これまで定位に使ったお台場 3 m/s・2 周の走行を等速で再生する例。更新した checkout と ORB 対応コンテナ内で実行する。今回の変更は ROS パッケージの再ビルドで反映される。
+
+```bash
+atd-build --packages-up-to atd_orbslam3 atd_bringup --cmake-args -DATD_REQUIRE_ORBSLAM3=ON
+bag=gazebo-odaiba-2026-11-23_01-07-25_640x480-90Hz_imu-400Hz_2laps_3mps
+atd replay "$bag" --backend orbslam3 --map odaiba_orb_01 --rate 1 --gyro-bridge on
+```
+
+RViz の橙は地図で確認した姿勢、緑は補完を含む姿勢。`--headless` を加えると描画を省いて末尾で終了する。`--gyro-bridge off` で画像観測だけの試験に切り替えられる。既定の `auto` は収録した統合 IMU、または D455 の `/camera/camera/gyro/sample` と固定 TF があれば補完を有効にする。`on` はジャイロを必須とする。
+
+直前 0.20 秒の同じ追跡区間にある 2 点以上の確定姿勢から、前後方向の速度を推定する。途絶中はこの速度を保ち、固定 TF で車体の上向き軸に射影したジャイロで平面位置とヨーを更新する。高さ・ロール・ピッチは最後の観測値を使う。予測期限は最後の観測から 2 秒、角速度を保持できる時間は 20 ms。画像自体が止まった場合も、ジャイロ時刻から 0.25 秒の画像処理待ちを取って更新する。再取得時には地図で確認した姿勢に戻る。
+
+再生終了時に端末へ段差の中央値・最大値を表示する。結果は `/data/results/runs/orbslam3/<RUN>/` に保存する。
+
+| ファイル | 見る値 |
+| --- | --- |
+| `gyro_bridge_summary.json` | 予測の出力数、再取得回数、段差を計測できた回数、予測できなかった理由 |
+| `reacquisitions.csv` | `gap_s` は最後の観測から再取得までの秒数。`position_jump_m`・`abs_yaw_jump_deg` は**再取得と同時刻の予測**と画像観測の平面距離・方位差。速度履歴や IMU が足りない回も理由を残す |
+| `reacquisitions.csv` の `display_step_m`・`display_step_abs_yaw_deg` | 直前の配信姿勢から再取得姿勢までの変位と回転。2 つの時刻の間に車体が動いた分も含む |
+| `gyro_trajectory.csv` | 配信した姿勢、`source`（`observed`・`predicted`）、最後の画像観測からの秒数 `age_s` |
+
+ROS 2 では `/orbslam3/continuous_odometry` に姿勢、対応する `/orbslam3/continuous_status` に観測・予測・予測不能の区別と経過時間が出る。Jetson で手動走行中に観測する場合は `./scripts/bringup.sh localization map_id:=odaiba_orb_01 orb_gyro_bridge:=true` を使う。単独ジャイロが既定。統合 IMU を配信する設定では `orb_gyro_topic:=/camera/camera/imu` を加える。走行制御が参照する `/localization/status` は画像観測の確定状態を返す。
+
+## cuVSLAM と ORB-SLAM3 の比較
+
+**保存地図への定位**を選定する場合は、同じ地図作成用 bag から作った NVIDIA 地図（VGL 準備済み）と ORB の Atlas を用意する。次の例で `cu_map` はその NVIDIA 地図 ID、`bag` は上記の評価用 bag。各コマンドが表示した `runs/localization/` の run ID を比較に渡す。
+
+```bash
+atd-shell ros2 run atd_localization validate_bag --map "$cu_map" --bag "$bag" --rate 1
+atd-shell ros2 run atd_localization validate_bag --map odaiba_orb_01 --bag "$bag" --rate 1
+atd replay --compare "$cu_run" "$orb_run" --record-root /data/record/rosbags
+```
+
+比較結果は `/data/results/runs/vslam_benchmark/<RUN>/report.json`。同じ評価区間で、初回観測までの時間、追跡カバー率、0.25 秒を超えた途絶、最長の観測間隔、再取得回数を比較する。両方式とも画像で確認した姿勢を用いる。`--record-root` で Gazebo 正解を指定すると、最初の共通観測で各地図を正解に合わせ、それ以降の共通観測で位置 RMSE・中央値・95 パーセンタイルと方位誤差を算出する。この相対精度には初回定位の絶対誤差は含まれない。実車など正解軌跡がない bag では `--record-root` を省略する。
+
+**新規地図でのステレオ追跡**を比較したいときは、同じ Notebook で次の 2 本を順に実行する。比較に渡すのは各回の `runs/replay/` の ID。描画の有無と再生倍率を揃える。
+
+```bash
+atd replay "$bag" --backend cuvslam --rate 1 --headless
+atd replay "$bag" --backend orbslam3 --rate 1 --headless
+atd replay --compare "$cu_replay_run" "$orb_replay_run"
+```
+
 ## 収録済みジャイロで姿勢が途切れた区間を調べる
 
 Mac で開発・ネイティブ試験を行い、実データの評価は後から SSH で Linux Notebook に入り、既存の ATD コンテナで実行する。引数は Gazebo の正解軌跡と照合した固定地図 run の ID。対応する比較 run と bag は保存済みの metadata から特定する。bag を移動した場合は `--bag DIR` で指定できる。
@@ -87,8 +132,10 @@ Linux Notebook の Odaiba 90 Hz・2周の bag ではステレオ地図を549点�
 
 Linux Notebook では、お台場を 3 m/s で1周した 90 Hz のステレオ bag から `odaiba_orb_01` を保存できた。別走行の同速度・2周を等速再生した固定地図試験（`20261125T154149Z-8963ca5d239f`、連続追跡の修正前）は完走した。初回確定は入力時刻で 0.033 秒。Gazebo 正解と照合できた 1,563 姿勢の平面位置誤差は中央値 8.95 cm、95 パーセンタイル 20.79 cm、最大 1.20 m だった。一方、追跡確定から喪失への遷移は172回あり、姿勢出力間隔が 0.25 秒を超えた区間は24回、最長 1.78 秒だった。出力のある時刻での位置誤差と、出力途絶中に進んだ距離は別々に評価する。
 
-固定地図追跡では、前画像で確認した地図点を撮影時刻に基づく予測姿勢で次の画像に投影する。照合できなければ参照キーフレーム、次に地図全体から姿勢を求め、各画像で局所地図との整合を1回検査する。再定位後は速度予測を初期化する。上記の保存地図をそのまま使って変更前後を比較できる。IMU を用いた空白区間の補完は、この固定地図モードには未実装。
+固定地図追跡では、前画像で確認した地図点を撮影時刻に基づく予測姿勢で次の画像に投影する。照合できなければ参照キーフレーム、次に地図全体から姿勢を求め、各画像で局所地図との整合を1回検査する。再定位後は ORB 内部の速度予測を初期化する。上記の保存地図をそのまま使って変更前後を比較できる。
 
-上記24区間のうち、切れる直前の同じ追跡区間に2姿勢以上あった21区間で、直前0.2秒の観測から速度を推定した。次の地図照合時刻まで位置を保持した場合と、前進速度・旋回率を一定として進めた場合の終点誤差の中央値はそれぞれ 1.52 m と 0.32 m だった。最長の区間では後者も 3.45 m ずれた。地図姿勢を失った間の候補は、車体座標のジャイロによる方位更新と、ステレオや車速で推定した前進速度の併用である。評価では地図照合による姿勢と予測姿勢を区別し、途絶の長さに対する誤差と再取得時の位置・方位のずれを比較する。
+上記 24 区間のうち直前に速度を推定できた 21 区間で、Linux Notebook の収録ジャイロによるオフライン評価を行った。途絶終点での Gazebo 正解に対する位置誤差の中央値は、位置保持 1.519 m、等速直進 0.882 m、定速旋回 0.325 m、収録ジャイロ 0.089 m。最長の 1.782 秒の区間でジャイロ使用時の終点誤差は 0.059 m だった。オンラインでの再取得段差は地図の観測姿勢との比較で別途計測する。
+
+オンライン補完は macOS ネイティブの ROS 2 Lyrical で、保存した合成 Atlas とステレオ 34 組・合成ジャイロ 400 Hz の MCAP を使って確認した。8 組の左右画像を遮蔽し、通常の headless replay で末尾まで処理した。画像で確認できた 22 姿勢に加えて 10 姿勢を補完し、0.55 秒後の再取得で同時刻の位置差 2.59 cm・方位差 3.77° を記録した。お台場の収録 bag でのオンライン段差と、cuVSLAM との実測比較は Notebook で評価する。
 
 ATD 版は headless で実行する。固定地図モードでは Atlas の単一地図を選び、地図更新を停止して追跡・再定位する。[公式リポジトリの使用リビジョン](https://github.com/UZ-SLAMLab/ORB_SLAM3/tree/4452a3c4ab75b1cde34e5505a36ec3f9edcdc4c4)・[上流への変更](../docker/orbslam3/atd-orbslam3.patch)・[地図保存・再定位の再現試験](../docker/orbslam3/test/fixed_map.cpp)

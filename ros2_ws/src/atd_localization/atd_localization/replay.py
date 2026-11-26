@@ -21,6 +21,7 @@ from atd_mapping.frames import stamp_ns
 
 from .replay_inputs import independent_bag, inspect_inputs
 from .replay_report import TrackingReport
+from .replay_player import _check_publishers, _connection_issues, _endpoints, resume_when_connected
 
 STATUS = '/localization/status'
 DOMAIN = 95
@@ -59,6 +60,27 @@ def play_command(bag, topics, qos, rate, *, paused_player=None):
             '--qos-profile-overrides-path', str(qos),
             *(['--start-paused', '--disable-keyboard-controls', '--remap', f'__node:={paused_player}'] if paused_player else []),
             '--topics', *topics]
+
+
+def validation_connections(node, player_name, workflow, *, orb):
+    """停止中の bag と実際に追跡・再定位を行う購読先の型・QoS を確認する。"""
+    cameras = ['/orbslam3_node'] if orb else ['/visual_slam', '/visual_global_localization']
+    clocks = cameras if orb else [*cameras, '/atd_localization_monitor']
+    links = [(workflow[side + '_image'], 'sensor_msgs/msg/Image', cameras) for side in ('left', 'right')]
+    if not orb:
+        # These component names and remapped CameraInfo inputs are shared with localization.launch.py.
+        links += [(workflow[side + '_info'], 'sensor_msgs/msg/CameraInfo', clocks) for side in ('left', 'right')]
+        # tf2 can create its own listener node; validate the actual typed reader in this isolated domain.
+        links.append((workflow['tf_static'], 'tf2_msgs/msg/TFMessage', [None]))
+    links.append(('/clock', 'rosgraph_msgs/msg/Clock', clocks))
+    issues = []
+    for topic, kind, consumers in links:
+        pubs = _check_publishers(node, topic, kind, player_name, issues)
+        readers = node.get_subscriptions_info_by_topic(topic)
+        for consumer in consumers:
+            subs = _endpoints(readers, kind, consumer)
+            issues.extend(_connection_issues(topic, pubs, subs, player_name, consumer or 'TF listener'))
+    return issues
 
 
 def run_ros(args, meta, bag, topics, duration, report, output):
@@ -111,17 +133,16 @@ def run_ros(args, meta, bag, topics, duration, report, output):
         if any(node.count_publishers(t) for t in [*topics, *feedback, '/tf', '/clock']):
             raise ValueError('検証 domain に既存の sensor/TF/clock/localization publisher があります')
         playback_topics = topics
-        paused_player = None
+        paused_player = f'atd_validation_{os.getpid()}'
+        bootstrap = None
         if orb:
             from .orb_replay import OrbBootstrap, recorded_calibration
-            from .replay_player import _check_publishers, _connection_issues, _endpoints, resume_when_connected
             from rclpy.qos import QoSProfile, DurabilityPolicy
             from std_msgs.msg import Header
 
             calibration, _ = recorded_calibration(bag)
             bootstrap = OrbBootstrap(node, calibration)
             playback_topics = [topic for topic in topics if topic not in bootstrap.topics]
-            paused_player = f'atd_orb_validation_{os.getpid()}'
             processed_stamp = None
 
             def processed(msg):
@@ -148,32 +169,29 @@ def run_ros(args, meta, bag, topics, duration, report, output):
         player = subprocess.Popen(play_command(bag, playback_topics, qos, args.rate, paused_player=paused_player),
                                   start_new_session=True)
         stack.callback(stop, player)
-        if orb:
-            def check_children():
-                if launch.poll() is not None or player.poll() is not None:
-                    raise ValueError('ORB-SLAM3 または bag player が再生開始前に終了しました')
+        def check_children():
+            if launch.poll() is not None or player.poll() is not None:
+                raise ValueError('自己位置推定または bag player が再生開始前に終了しました')
 
-            def missing():
-                issues = []
-                for topic in [*playback_topics, '/clock']:
-                    kind = 'rosgraph_msgs/msg/Clock' if topic == '/clock' else 'sensor_msgs/msg/Image'
-                    producer, consumer = '/' + paused_player, '/orbslam3_node'
-                    pubs = _check_publishers(node, topic, kind, producer, issues)
-                    subs = _endpoints(node.get_subscriptions_info_by_topic(topic), kind, consumer)
-                    issues.extend(_connection_issues(topic, pubs, subs, producer, consumer))
-                return issues
+        def missing():
+            return validation_connections(node, '/' + paused_player, meta['workflow'], orb=orb)
 
-            resume_when_connected(node, paused_player, args.ready_timeout, missing, check_children,
-                                  initialize=lambda: bootstrap.wait(check_children, args.ready_timeout))
+        initialize = (lambda: bootstrap.wait(check_children, args.ready_timeout)) if bootstrap else None
+        resume_when_connected(node, paused_player, args.ready_timeout, missing, check_children, initialize)
         deadline = time.monotonic() + duration / args.rate * 2 + args.ready_timeout
         next_check = time.monotonic()
+        checked = [*topics, '/clock']
+        if not orb:
+            checked.remove(meta['workflow']['tf_static'])
         while player.poll() is None:
             rclpy.spin_once(node, timeout_sec=.05)
             if launch.poll() is not None or time.monotonic() > deadline:
                 raise ValueError('再生中に自己位置推定が終了、またはタイムアウトしました')
             if time.monotonic() >= next_check:
-                if (publisher_signature(node, feedback) != identity
-                        or any(node.count_publishers(t) > 1 for t in [*topics, '/clock'])):
+                if not orb:
+                    # cuVSLAM also advertises /tf_static. Permit its writer while still detecting competing players.
+                    _check_publishers(node, meta['workflow']['tf_static'], 'tf2_msgs/msg/TFMessage', '/' + paused_player, [])
+                if publisher_signature(node, feedback) != identity or any(node.count_publishers(t) > 1 for t in checked):
                     raise ValueError('再生中に入力または自己位置 publisher が変わりました')
                 next_check = time.monotonic() + 1.
         if player.returncode:
@@ -240,7 +258,8 @@ def main(argv=None):
         destination.mkdir(parents=True, exist_ok=False)
         output = destination
         print('検証結果 ' + str(output), flush=True)
-        result = dict(schema='atd.localization.validation.v1', map_id=args.map_id, map_sha256=meta['map_sha256'],
+        result = dict(schema='atd.localization.validation.v1', backend=meta.get('backend', 'cuvslam'),
+                      map_id=args.map_id, map_sha256=meta['map_sha256'],
                       hdmap_sha256=meta['hdmap_sha256'], source_bag=meta['source_bag'],
                       source_metadata_sha256=meta['source_metadata_sha256'], bag=args.bag, metadata_sha256=digest,
                       frame='map', body_frame='base_link', replay_rate=args.rate, ros_domain_id=args.domain)

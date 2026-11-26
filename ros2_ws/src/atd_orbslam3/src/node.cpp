@@ -222,6 +222,7 @@ public:
     processed_ = create_publisher<Header>("/orbslam3/processed", rclcpp::QoS(1).transient_local());
     if (fixed_) {
       status_ = create_publisher<Status>("/localization/status", 10);
+      frame_status_ = create_publisher<Status>("/orbslam3/frame_status", 128);
       transforms_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
       timer_ = create_wall_timer(100ms, [this]() { watch(); });
     } else if (!atlas_.empty()) {
@@ -357,7 +358,7 @@ private:
                     (!inertial_ || core_->GetTimeFromIMUInit() > 0.) &&
                     tcw.matrix().allFinite() && (!fixed_ || core_->GetFixedMapInliers() > 0);
     if (!ok) {
-      clear_tracking("選択した地図への画像照合を待っています", ever_tracked_ ? "lost" : "localizing");
+      clear_tracking("選択した地図への画像照合を待っています", ever_tracked_ ? "lost" : "localizing", &left.header);
     } else {
       const long origin = core_->GetTrackingMapOriginId();
       if (origin >= 0) {
@@ -378,7 +379,7 @@ private:
         const Rigid pose = reference_->map_from_atlas * camera_from_atlas.inverse() * base_from_camera_.inverse();
         observe(left.header, pose);
       } else {
-        clear_tracking("地図の基準キーフレームを待っています", ever_tracked_ ? "lost" : "localizing");
+        clear_tracking("地図の基準キーフレームを待っています", ever_tracked_ ? "lost" : "localizing", &left.header);
       }
     }
     processed_->publish(left.header);
@@ -397,7 +398,7 @@ private:
     const auto stamp = ns(image);
     const double age = (now().nanoseconds() - stamp) * 1e-9;
     if (age > max_age_ || age < -.1) {
-      clear_tracking("画像時刻が現在のROS時刻と一致しません", "stale");
+      clear_tracking("画像時刻が現在のROS時刻と一致しません", "stale", &image);
       return;
     }
     const auto delta = previous_pose_ ? Rigid(previous_pose_->inverse() * pose) : Rigid::Identity();
@@ -410,7 +411,7 @@ private:
     if (!accepted) {
       state_ = ever_tracked_ ? "lost" : "localizing";
       reason_ = "連続する画像で地図上の姿勢を確認しています";
-      publish_invalid();
+      publish_invalid(&image);
       return;
     }
     // Immutable-map tracking within this epoch. Start a new map->odom correction on reacquisition,
@@ -434,6 +435,7 @@ private:
     status.speed_mps = odom.twist.twist.linear.x;
     status.yaw_rate_rps = odom.twist.twist.angular.z;
     status_->publish(status);
+    frame_status_->publish(status);
   }
 
   Status status_message() const
@@ -444,7 +446,7 @@ private:
     return status;
   }
 
-  void publish_invalid()
+  void publish_invalid(const Header * image = nullptr)
   {
     if (!fixed_) { return; }
     auto status = status_message();
@@ -456,15 +458,20 @@ private:
     p.x = p.y = p.z = q.x = q.y = q.z = q.w = invalid;
     status.speed_mps = status.yaw_rate_rps = invalid;
     status_->publish(status);
+    // One decision per processed stereo image. Heartbeats have no corresponding image.
+    if (image) {
+      status.header.stamp = image->stamp;
+      frame_status_->publish(status);
+    }
   }
 
-  void clear_tracking(const std::string & reason, const std::string & state)
+  void clear_tracking(const std::string & reason, const std::string & state, const Header * image = nullptr)
   {
     confirm_.invalidate();
     previous_pose_.reset();
     state_ = state;
     reason_ = reason;
-    publish_invalid();
+    publish_invalid(image);
   }
 
   void watch()
@@ -536,7 +543,7 @@ private:
   rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr static_sub_;
   rclcpp::Subscription<Imu>::SharedPtr imu_sub_;
   rclcpp::Publisher<Odometry>::SharedPtr odometry_;
-  rclcpp::Publisher<Status>::SharedPtr status_;
+  rclcpp::Publisher<Status>::SharedPtr status_, frame_status_;
   rclcpp::Publisher<Header>::SharedPtr processed_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_;
   rclcpp::Service<Trigger>::SharedPtr save_;

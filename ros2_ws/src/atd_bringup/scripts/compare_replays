@@ -1,0 +1,5 @@
+#!/usr/bin/python3
+from atd_bringup.replay_benchmark import main
+
+if __name__ == '__main__':
+    raise SystemExit(main())

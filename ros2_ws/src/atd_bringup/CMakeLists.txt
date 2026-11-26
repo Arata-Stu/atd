@@ -6,7 +6,7 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(atd_bringup)
 install(PROGRAMS scripts/choose_localization_map scripts/esc_trial_session scripts/gazebo_lap_map
   scripts/replay_vslam scripts/replay_ground_truth scripts/gazebo_control scripts/gazebo_closed_loop_paths
-  scripts/gazebo_closed_loop_log scripts/evaluate_orb_gyro
+  scripts/gazebo_closed_loop_log scripts/evaluate_orb_gyro scripts/compare_replays scripts/orb_gyro_bridge
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
@@ -18,7 +18,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(bringup_composition test/test_composition.py APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   ament_add_pytest_test(gazebo_lap_mapping test/test_lap_mapping.py APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   foreach(test_name gazebo_control gazebo_closed_loop_paths replay_inputs replay_readiness replay_vslam replay_gt_source replay_gt_geometry replay_gt_node replay_result replay_loop_graph replay_orbslam3
-      orb_gap_eval orb_gap_motion orb_gap_imu)
+      orb_gap_eval orb_gap_motion orb_gap_imu orb_gap_bridge orb_online_motion replay_benchmark)
     ament_add_pytest_test(${test_name} test/test_${test_name}.py APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
   endforeach()
 endif()

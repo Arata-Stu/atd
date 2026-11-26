@@ -196,16 +196,29 @@ class ReplaySessionTests(unittest.TestCase):
         self.ready.side_effect = KeyboardInterrupt()
         with self.assertRaises(KeyboardInterrupt):
             self.session(orb=orb)
-        launch, _, player = [call.args[0] for call in self.spawn.call_args_list]
+        launch, rviz = [call.args[0] for call in self.spawn.call_args_list]
         self.assertEqual(launch, orb.command)
-        self.assertEqual(player[player.index('--topics')+1:],
-                         [*(t for t in replay.STEREO_TOPICS if t not in orb.seed_topics), orb.gyro_topic])
+        self.assertEqual(rviz[0], 'rviz2')
         self.assertFalse(self.ready.call_args.kwargs['vio'])
         with TemporaryDirectory() as directory:
             preset = yaml.safe_load(replay.replay_config(self.config, directory, set(), bridge=True).read_text())
         arrows = {d['Topic']['Value']: d['Shape']['Color'] for d in preset['Visualization Manager']['Displays']
                   if d['Class'].endswith('/Odometry')}
         self.assertNotEqual(arrows['/orbslam3/continuous_odometry'], arrows[SLAM_ODOMETRY])
+
+    def test_headless_orb_waits_for_embedded_player_eof_with_tracker_running(self):
+        self.config = None
+        directory = Path(self.stack.enter_context(TemporaryDirectory()))
+        orb = Mock(command=['orb'], directory=directory, summary={}, params={'mode': 'mapping'},
+                   player_name='player', playback_finished=False)
+        def notify_eof(timeout_sec):
+            orb.finish.assert_not_called()
+            orb.playback_finished = True
+        orb.spin.side_effect = notify_eof
+        self.session(orb=orb)
+        self.assertEqual(self.spawn.call_count, 1)
+        self.assertEqual(self.ready.call_args.kwargs['player_name'], '/player')
+        orb.finish.assert_called_once()
 
     def test_orb_crash_preserves_node_output_including_exit_cleanup(self):
         directory = Path(self.stack.enter_context(TemporaryDirectory()))

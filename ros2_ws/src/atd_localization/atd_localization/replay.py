@@ -303,7 +303,8 @@ def main(argv=None):
                       map_id=args.map_id, map_sha256=meta['map_sha256'],
                       hdmap_sha256=meta['hdmap_sha256'], source_bag=meta['source_bag'],
                       source_metadata_sha256=meta['source_metadata_sha256'], bag=args.bag, metadata_sha256=digest,
-                      frame='map', body_frame='base_link', replay_rate=args.rate, ros_domain_id=args.domain)
+                      frame='map', body_frame='base_link', replay_rate=args.rate, ros_domain_id=args.domain,
+                      sensor_input_transport='ros2_inter_process')
         result['dds_profile'] = replay_dds_profile()
         save_validation_hdmap(args.results_root, meta, output)
         recorded_stamps = {}

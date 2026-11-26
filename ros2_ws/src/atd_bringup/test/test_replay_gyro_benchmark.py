@@ -133,7 +133,12 @@ def test_recorded_dds_content_and_rmw_are_compared_across_runs(tmp_path, monkeyp
         meta['dds_profile'] = dict(rmw_implementation='rmw_fastrtps_cpp', path=str(path.parent / 'copy.xml'),
                                    sha256=recorded['sha256'], discovery_range='SYSTEM_DEFAULT')
         path.write_text(json.dumps(meta))
-    assert compare_gyro_run(tmp_path, 'cu', 'orb')['dds_profiles']['comparison'] == 'match'
+    cu_meta.write_text(json.dumps({**json.loads(cu_meta.read_text()), 'sensor_input_transport': 'ros2_inter_process'}))
+    meta['sensor_input_transport'] = 'ros2_intra_process'
+    orb_meta.write_text(json.dumps(meta))
+    report = compare_gyro_run(tmp_path, 'cu', 'orb')
+    assert report['dds_profiles']['comparison'] == 'match'
+    assert report['sensor_input_transports']['comparison'] == 'different'
     meta['dds_profile']['discovery_range'] = 'LOCALHOST'
     orb_meta.write_text(json.dumps(meta))
     assert compare_gyro_run(tmp_path, 'cu', 'orb')['dds_profiles']['comparison'] == 'different'

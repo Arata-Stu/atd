@@ -50,6 +50,7 @@ def test_mapping_coverage_and_error_compare_the_same_observations(tmp_path, caps
     replay(tmp_path, 'cu', 'cuvslam', [0, .1, .2, .4, 1])
     replay(tmp_path, 'orb', 'orbslam3', [.102, .2, .399, .65, .8])
     result = bench.compare_runs(tmp_path, 'cu', 'orb')
+    assert result['sensor_input_transports'] == dict(cuvslam=None, orbslam3=None, comparison='unknown')
     assert result['paired_observations'] == 3
     cu, orb = result['backends'].values()
     assert cu['observed_time_fraction'] == pytest.approx(.4)
@@ -62,6 +63,26 @@ def test_mapping_coverage_and_error_compare_the_same_observations(tmp_path, caps
     path, = tmp_path.glob('runs/vslam_benchmark/*/report.json')
     assert json.loads(path.read_text()) == result
     assert '共通観測' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('cu_input,orb_input,comparison', [
+    ('ros2_inter_process', 'ros2_intra_process', 'different'),
+    ('ros2_inter_process', 'ros2_inter_process', 'match'),
+    (None, 'ros2_intra_process', 'unknown'),
+])
+def test_benchmark_reports_recorded_sensor_inputs(tmp_path, capsys, cu_input, orb_input, comparison):
+    for name, backend, transport in [('cu', 'cuvslam', cu_input), ('orb', 'orbslam3', orb_input)]:
+        folder = local(tmp_path, name, backend, [0, .2])
+        if transport is not None:
+            path = folder / 'report.json'
+            put(path, {**json.loads(path.read_text()), 'sensor_input_transport': transport})
+    assert bench.main(['cu', 'orb', '--results-root', str(tmp_path)]) == 0
+    path, = tmp_path.glob('runs/vslam_benchmark/*/report.json')
+    assert json.loads(path.read_text())['sensor_input_transports'] == dict(
+        cuvslam=cu_input, orbslam3=orb_input, comparison=comparison)
+    output = capsys.readouterr()
+    assert ('入力経路が異なる' in output.err) == (comparison == 'different')
+    assert ('不明' in output.out) == (comparison == 'unknown')
 
 
 @pytest.mark.parametrize('field,value', [('mode', 'localization'), ('rate', .5), ('tracking', 'vio'),

@@ -1,5 +1,6 @@
 #include "calibration.hpp"
 #include "confirmation.hpp"
+#include "node.hpp"
 #include "stereo_imu_buffer.hpp"
 
 #include <algorithm>
@@ -171,8 +172,9 @@ public:
     for (int side = 0; side < 2; ++side) {
       const auto topic = "/camera/camera/infra" + std::to_string(side + 1);
       images_[side] = create_subscription<Image>(topic + "/image_rect_raw", sensor,
-        [this, side](Image::ConstSharedPtr image) {
+        [this, side](Image::ConstSharedPtr image, const rclcpp::MessageInfo & info) {
           ++received_images_[side];
+          if (info.get_rmw_message_info().from_intra_process) { ++ipc_images_[side]; }
           if (finished_ || ns(image->header) <= last_stamp_) { return; }
           auto & queue = image_queue_[side];
           if (!queue.empty() && ns(queue.back()->header) >= ns(image->header)) { return; }
@@ -203,7 +205,9 @@ public:
       });
     if (vio) {
       imu_sub_ = create_subscription<Imu>("/camera/camera/imu", rclcpp::SensorDataQoS().keep_last(512),
-        [this](Imu::ConstSharedPtr imu) {
+        [this](Imu::ConstSharedPtr imu, const rclcpp::MessageInfo & info) {
+          ++received_imu_;
+          if (info.get_rmw_message_info().from_intra_process) { ++ipc_imu_; }
           if (finished_) { return; }
           const auto stamp = ns(imu->header);
           if (stamp <= imu_buffer_.latest_stamp()) { return; }
@@ -238,6 +242,9 @@ public:
 
   ~OrbslamNode() override
   {
+    RCLCPP_INFO(get_logger(),
+      "ORB 入力: 左 %zu / 右 %zu / IMU %zu 件、うち intra-process 左 %zu / 右 %zu / IMU %zu 件",
+      received_images_[0], received_images_[1], received_imu_, ipc_images_[0], ipc_images_[1], ipc_imu_);
     if (tracked_pairs_ > 0) {
       RCLCPP_INFO(get_logger(),
         "ORB 計測: 左右画像の受信 %zu / %zu、TrackStereo %zu 対、平均 %.2f ms / 最大 %.2f ms、"
@@ -525,7 +532,8 @@ private:
   }
 
   WorkDir work_;
-  std::array<std::size_t, 2> received_images_{};
+  std::array<std::size_t, 2> received_images_{}, ipc_images_{};
+  std::size_t received_imu_ = 0, ipc_imu_ = 0;
   std::size_t tracked_pairs_{}, over_camera_period_{};
   double tracking_total_ms_{}, tracking_max_ms_{};
   Confirmation confirm_;
@@ -562,6 +570,11 @@ private:
   std::int64_t tolerance_ns_ = 0, last_clock_ = 0;
   double max_age_ = 0.;
 };
+
+std::shared_ptr<rclcpp::Node> make_orbslam_node(const rclcpp::NodeOptions & options)
+{
+  return std::make_shared<OrbslamNode>(options);
+}
 }  // namespace atd_orbslam3
 
 RCLCPP_COMPONENTS_REGISTER_NODE(atd_orbslam3::OrbslamNode)

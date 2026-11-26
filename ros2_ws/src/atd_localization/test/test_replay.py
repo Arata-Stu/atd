@@ -149,6 +149,7 @@ def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, stat
     result = json.loads(path.read_text())
     assert (path.parent / 'hdmap.json').read_bytes() == hdmap.read_bytes()
     assert result['outcome'] == {'tracking':'tracked_to_end','lost':'no_tracking','error':'failed'}[status]
+    assert result['sensor_input_transport'] == 'ros2_inter_process'
     assert result['bag'] == 'b/run' and result['source_metadata_sha256'] == source_hash
     assert replay.main(args) == 1
     assert json.loads(path.read_text()) == result

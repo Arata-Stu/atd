@@ -8,7 +8,9 @@ from pathlib import Path
 from atd_localization.orb_assets import orb_map_metadata
 
 from .orb_gap_eval import run_dir
-from .replay_benchmark import PAIR_TOLERANCE_NS, Sample, _accuracy, _backend, _coverage, _fixed, _paired, _sha
+from .replay_benchmark import (
+    PAIR_TOLERANCE_NS, Sample, _accuracy, _backend, _coverage, _fixed, _paired, _sensor_input_transports, _sha,
+)
 from .replay_gt_geometry import Alignment, Trace
 from .replay_gt_source import find_ground_truth
 from .replay_inputs import STEREO_TOPICS
@@ -186,5 +188,5 @@ def compare_gyro_run(root, cu_id, orb_id, record_root=None):
                 source_metadata_sha256=source_hash, window_ns=[start, end], gap_threshold_s=GAP_NS / 1e9,
                 pairing_tolerance_s=PAIR_TOLERANCE_NS / 1e9, paired_observations=len(triples),
                 accuracy_frame='aligned_at_first_common_observation' if anchor else None, anchor_stamp_ns=anchor,
-                dds_profiles=_dds_profiles(cu, orb),
+                dds_profiles=_dds_profiles(cu, orb), sensor_input_transports=_sensor_input_transports(cu, orb),
                 backends=dict(cuvslam=cu_info, orbslam3=raw_info, orbslam3_gyro=gyro_info))

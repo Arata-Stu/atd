@@ -22,6 +22,18 @@ from .replay_result import GAP_NS, compare
 BACKENDS = ('cuvslam', 'orbslam3')
 # cuVSLAM は左右の遅い方、ORB は左画像の撮影時刻を使う。
 PAIR_TOLERANCE_NS = 5_000_000
+TRANSPORT_NAMES = {
+    'ros2_intra_process': 'ROS 2 プロセス内',
+    'ros2_inter_process': 'ROS 2 プロセス間',
+}
+
+
+def _sensor_input_transports(cu, orb):
+    a, b = (run.get('sensor_input_transport') for run in (cu, orb))
+    comparison = 'unknown'
+    if a in TRANSPORT_NAMES and b in TRANSPORT_NAMES:
+        comparison = 'match' if a == b else 'different'
+    return dict(cuvslam=a, orbslam3=b, comparison=comparison)
 
 
 def _sha(path):
@@ -206,6 +218,7 @@ def compare_runs(root, cu_id, orb_id, record_root=None):
     if end <= start:
         raise ValueError('両 run が共通の評価区間を持ちません')
     report = dict(schema='atd.vslam_benchmark.v1', mode=mode, bag=cu['bag'], rate=rate, tracking=tracking,
+                  sensor_input_transports=_sensor_input_transports(cu, orb),
                   metadata_sha256=cu.get('metadata_sha256') or orb.get('metadata_sha256'),
                   source_metadata_sha256=cu.get('source_metadata_sha256'), pose_source='backend_observations',
                   window_ns=[start, end], gap_threshold_s=GAP_NS / 1e9,
@@ -259,6 +272,11 @@ def main(argv=None):
             print(dds['warning'], file=sys.stderr)
         elif dds['comparison'] == 'unknown':
             print('DDS 設定の照合に必要な RMW、プロファイル hash、discovery range のいずれかが未記録です。')
+    inputs = report['sensor_input_transports']
+    cu_path, orb_path = (TRANSPORT_NAMES.get(inputs[key], '不明') for key in BACKENDS)
+    print(f'追跡ノードへのセンサー入力　cuVSLAM {cu_path} / ORB-SLAM3 {orb_path}')
+    if inputs['comparison'] == 'different':
+        print('センサー入力経路が異なる条件での比較です。', file=sys.stderr)
     for backend, result in report['backends'].items():
         coverage = (f"出力カバー率 {result['output_time_fraction']:.1%}" if 'output_time_fraction' in result
                     else f"観測カバー率 {result['observed_time_fraction']:.1%}")

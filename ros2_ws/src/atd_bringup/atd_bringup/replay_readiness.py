@@ -25,6 +25,8 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=Fal
     overlay = '/' + GROUND_TRUTH_NODE
     tracker = orb.tracker if orb else '/visual_slam'
     required_nodes = [player_name, tracker]
+    if orb:
+        required_nodes.append(orb.sensor_source)
     if ground_truth:
         required_nodes.append(overlay)
     for name in required_nodes:
@@ -32,7 +34,9 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=Fal
             raise RuntimeError(f'同じ ROS domain に {name} が複数あります。Notebook コンテナで確認してください。'
                                f'\n{_graph_command()}')
     for topic, kind in inputs.items():
-        producer = orb.seed_source if orb and topic in orb.seed_topics else player_name
+        producer = player_name
+        if orb and topic != '/clock':
+            producer = orb.seed_source if topic in orb.seed_topics else orb.sensor_source
         publishers = _check_publishers(node, topic, kind, producer, missing)
         infos = node.get_subscriptions_info_by_topic(topic)
         if topic == STEREO_WORKFLOW['tf_static']:
@@ -64,15 +68,18 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=Fal
             links.extend([(GROUND_TRUTH_PATH, 'nav_msgs/msg/Path', overlay, rviz_name),
                           (GROUND_TRUTH_ERROR, 'visualization_msgs/msg/Marker', overlay, rviz_name)])
     if orb:
+        links.append((orb.sensor_source + '/finished', 'std_msgs/msg/Bool', orb.sensor_source, orb.seed_source))
         feedback = [(SLAM_ODOMETRY, 'nav_msgs/msg/Odometry'), ('/orbslam3/ready', 'std_msgs/msg/Bool'),
                     ('/orbslam3/processed', 'std_msgs/msg/Header')]
+        if vio:
+            feedback.append(('/orbslam3/imu_skipped', 'std_msgs/msg/Header'))
         if orb.metadata:
             feedback.append(('/localization/status', 'atd_interfaces/msg/LocalizationStatus'))
         links.extend((topic, kind, tracker, orb.seed_source) for topic, kind in feedback)
         if orb.gyro_topic:
             from .orb_gap_bridge import CONTINUOUS_ODOMETRY, FRAME_STATUS
             links.extend([(FRAME_STATUS, 'atd_interfaces/msg/LocalizationStatus', tracker, orb.seed_source),
-                          (orb.gyro_topic, 'sensor_msgs/msg/Imu', player_name, orb.seed_source),
+                          (orb.gyro_topic, 'sensor_msgs/msg/Imu', orb.sensor_source, orb.seed_source),
                           (STEREO_WORKFLOW['tf_static'], 'tf2_msgs/msg/TFMessage', orb.seed_source, orb.seed_source)])
             if rviz_name:
                 links.append((CONTINUOUS_ODOMETRY, 'nav_msgs/msg/Odometry', orb.seed_source, rviz_name))

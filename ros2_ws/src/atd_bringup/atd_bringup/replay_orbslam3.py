@@ -15,7 +15,7 @@ from atd_localization.replay_dds import replay_dds_profile
 from atd_mapping.frames import stamp_ns
 
 from .replay_gt_geometry import Alignment, PlanarPose
-from .replay_inputs import SLAM_ODOMETRY, STEREO_WORKFLOW, recorded_imu
+from .replay_inputs import IMU_TOPIC, SLAM_ODOMETRY, STEREO_WORKFLOW, recorded_imu
 from .replay_orb_inputs import inputs_from_bag, resolve_imu_noise
 
 
@@ -27,7 +27,7 @@ def orb_executable():
     except PackageNotFoundError:
         issue = '現在の ROS 2 環境に atd_orbslam3 が見つかりません'
     else:
-        executable = prefix / 'lib/atd_orbslam3/orbslam3_node'
+        executable = prefix / 'lib/atd_orbslam3/orbslam3_replay_node'
         if executable.is_file() and os.access(executable, os.X_OK):
             return str(executable)
         issue = f'現在の ROS 2 環境で {executable} を実行できません'
@@ -67,6 +67,7 @@ def gyro_calibration(bag, topic, calibration):
 class OrbReplay:
     tracker = '/orbslam3_node'
     seed_source = '/atd_bag_replay'
+    sensor_source = '/orbslam3_bag_input'
 
     def __init__(self, stack, root, node, bag, options, imu, course, executable, *, gyro_topic=None, gazebo=False):
         import rclpy
@@ -76,11 +77,13 @@ class OrbReplay:
         from atd_localization.orb_replay import OrbBootstrap, recorded_calibration
         from nav_msgs.msg import Odometry
         from rclpy.qos import DurabilityPolicy, QoSProfile
-        from std_msgs.msg import Header
+        from std_msgs.msg import Bool, Header
         from std_srvs.srv import Trigger
 
         self.node, self.root, self.bag = node, root, bag
         self.options, self.course = options, course
+        self.player_name = f'atd_replay_player_{os.getpid()}'
+        self.playback_finished = False
         self.gyro_topic = gyro_topic
         self.bridge = None
         self.stage = self.fixed_alignment = self.save_client = None
@@ -121,16 +124,14 @@ class OrbReplay:
         name = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid4().hex[:12]
         self.directory = root / 'runs/orbslam3' / name
         self.directory.mkdir(parents=True)
-        params_path = self.directory / 'parameters.yaml'
-        params_path.write_text(yaml.safe_dump({self.tracker: {'ros__parameters': self.params}}))
-        self.command = [executable, '--ros-args', '--params-file', str(params_path)]
         self.summary = dict(backend='orbslam3', bag=str(bag), metadata_sha256=self.bag_hash,
                             tracking=options.tracking, rate=options.rate, map_id=options.map or options.save_map,
                             map_sha256=self.metadata['map_sha256'] if self.metadata else None,
                             mode=self.params['mode'], start_offset_s=options.start_offset,
                             input_pairs=self.inputs.pairs, first_input_stamp_ns=self.inputs.first_left_ns,
                             last_input_stamp_ns=self.inputs.last_left_ns, camera_fps=self.inputs.camera_fps,
-                            dds_profile=replay_dds_profile(), status='running')
+                            sensor_input_transport='ros2_intra_process', dds_profile=replay_dds_profile(),
+                            status='running')
         if self.metadata:
             self.summary['source_metadata_sha256'] = self.metadata['source_metadata_sha256']
         if imu:
@@ -163,6 +164,17 @@ class OrbReplay:
         bootstrap = OrbBootstrap(node, calibration)
         self.seed_topics = bootstrap.topics
         self.seed = bootstrap.wait
+        sensor_params = dict(bag_path=str(bag), start_offset_s=float(options.start_offset),
+                             rate=float(options.rate), player_name=self.player_name,
+                             imu_topic=IMU_TOPIC if imu else (self.gyro_topic or ''))
+        params_path = self.directory / 'parameters.yaml'
+        params_path.write_text(yaml.safe_dump({self.tracker: {'ros__parameters': self.params},
+                                               self.sensor_source: {'ros__parameters': sensor_params}}))
+        self.command = [executable, '--ros-args', '--params-file', str(params_path)]
+
+        def playback_finished(msg):
+            if msg.data:
+                self.playback_finished = True
 
         def processed(msg):
             stamp = stamp_ns(msg.stamp)
@@ -204,6 +216,8 @@ class OrbReplay:
             sub = node.create_subscription(kind, topic, callback, qos)
             self.recording.callback(node.destroy_subscription, sub)
 
+        subscribe(Bool, self.sensor_source + '/finished', playback_finished,
+                  QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         subscribe(Header, '/orbslam3/processed', processed,
                   QoSProfile(depth=256, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         if imu:

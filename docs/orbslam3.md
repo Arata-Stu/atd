@@ -19,7 +19,7 @@ atd-build --packages-up-to atd_orbslam3 atd_bringup --cmake-args -DATD_REQUIRE_O
 atd-shell ros2 pkg executables atd_orbslam3
 ```
 
-最後の出力に `atd_orbslam3 orbslam3_node` があれば replay を開始できる。通常版から同じ workspace を引き継ぎ、パッケージが表示されても実行ファイルの一覧が空の場合は、ORB 対応コンテナ内でノードを再構成する。
+最後の出力に `orbslam3_node`（実センサー用）と `orbslam3_replay_node`（bag 用）が表示されることを確認する。通常版から同じ workspace を引き継ぎ、パッケージが表示されても実行ファイルの一覧が空の場合は、ORB 対応コンテナ内でノードを再構成する。
 
 ```bash
 atd-build --packages-up-to atd_orbslam3 --cmake-clean-cache --cmake-args -DATD_REQUIRE_ORBSLAM3=ON
@@ -76,6 +76,12 @@ Mac のネイティブ ROS 2 で、640×480・25 Hz のステレオと同期し�
 
 D455 で試す場合は、左右画像と同じ時計で統合 IMU `/camera/camera/imu` と固定 TF を収録し、`--imu-calibration /path/to/imu-noise.yaml` で校正値を指定する。YAML の最上位に `gyro_noise_density`、`accel_noise_density`、`gyro_random_walk`、`accel_random_walk` を SI 単位で指定する。
 
+お台場の同じ 1 周を半速・ループバック UDP で再試行した際には、bag の対象 2,629 対に対して ORB ノードの画像受信は左 88 枚・右 331 枚、追跡処理は 55 対だった。末尾の対象画像より 3.442 秒手前が最後の処理時刻だった。
+
+現在の ORB replay は再生中に 1 つの rosbag2 Player から収録データを読み、画像と IMU を型付きメッセージに復元して ORB に渡す。外部の RViz やジャイロ補完ノードが購読する場合は、その購読先にも配信する。終了時の `bag センサー発行` と `ORB 入力` で発行件数・受信件数・実際にプロセス内で届いた件数を比較できる。`TrackStereo` はそのうち左右が揃い、追跡処理に渡った対数を示す。既存の ORB 対応コンテナでは `atd-build --packages-up-to atd_bringup` でこの変更を取り込める。
+
+Mac のネイティブ ROS 2 Lyrical で、同じ Fast DDS のループバック UDP 設定・同じ静止発進の合成 bag（90 Hz + 400 Hz、半速）を両経路で再生した。従来の別プロセス構成では 720 対中 470 対を処理し、IMU の観測途絶で停止した。変更後は左右各 720 枚と IMU 3,205 件がすべてプロセス内で受信され、720 対を処理して 399 件の VIO 姿勢を得た。Notebook のお台場 bag での改善量は再実行で確認する。
+
 ## 固定地図で途絶を補完し、再取得時の段差を見る
 
 既存の `odaiba_orb_01` と、これまで定位に使ったお台場 3 m/s・2 周の走行を等速で再生する例。更新した checkout と ORB 対応コンテナ内で実行する。今回の変更は ROS パッケージの再ビルドで反映される。
@@ -126,7 +132,7 @@ ROS 2 では `/orbslam3/continuous_odometry` に姿勢、対応する `/orbslam3
    atd gazebo bag --course odaiba --speed 3 --laps 2 --resolution 640x480 --camera-hz 90 --imu 400
    ```
 
-4. Linux Notebook ホストまたは ORB 対応コンテナで、テスト bag を等速で2回、順に再生する。1回目で画像で確定した ORB 姿勢とジャイロ補完後の姿勢の両方が残る。2回目は保存済み NVIDIA 地図に対する cuVSLAM のステレオ定位。既定の DDS は両方ともループバック UDP。以前の計測と同じ共有メモリ＋UDP の XML を使うときは、同じ端末で両方の実行前に `export ATD_REPLAY_DDS=shm` を指定し、終了後に `unset ATD_REPLAY_DDS` で戻す。bag player は独立したプロセスで動く。
+4. Linux Notebook ホストまたは ORB 対応コンテナで、テスト bag を等速で2回、順に再生する。1回目で画像で確定した ORB 姿勢とジャイロ補完後の姿勢の両方が残る。2回目は保存済み NVIDIA 地図に対する cuVSLAM のステレオ定位。既定の DDS は両方ともループバック UDP。以前の計測と同じ共有メモリ＋UDP の XML を使うときは、同じ端末で両方の実行前に `export ATD_REPLAY_DDS=shm` を指定し、終了後に `unset ATD_REPLAY_DDS` で戻す。ORB の `atd replay BAG --backend orbslam3` は rosbag2 Player と追跡ノードを同じプロセスで動かし、型付きの左右画像と VIO 用 IMU をプロセス内で渡す。cuVSLAM の地図検証では rosbag2 Player が別プロセスで動く。
 
    ```bash
    read -rp '評価用の bag 名: ' TEST_BAG
@@ -144,7 +150,7 @@ ROS 2 では `/orbslam3/continuous_odometry` に姿勢、対応する `/orbslam3
 
 結果は `runs/vslam_benchmark/<RUN>/report.json`。`output_time_fraction` は、隣り合う出力の間隔が 0.25 秒以下だった時間の合計を共通の評価区間の長さで割った値。3方式で同じ定義を使う。位置・方位は両バックエンドの最初の共通観測で Gazebo 正解に合わせる。ジャイロ補完には ORB と同じ座標変換を使う。`paired_accuracy` で画像を追跡できた共通時刻の精度を、`orbslam3_gyro.predicted_accuracy` で補完中の出力だけの対 GT 誤差を確認する。再取得の段差とその直前・直後の値は ORB run の `reacquisitions.csv` に残る。
 
-`dds_profiles` には各 run の RMW 実装、Fast DDS 設定ファイルのパスと SHA-256、ROS の探索範囲が入る。RMW、設定内容、ROS の探索範囲が揃えば `comparison` は `match`、記録値が異なれば `different` となり、端末にも警告を表示する。必要な情報が残っていない過去の run は `unknown` として比較できる。
+`dds_profiles` には各 run の RMW 実装、Fast DDS 設定ファイルのパスと SHA-256、ROS の探索範囲が入る。RMW、設定内容、ROS の探索範囲が揃えば `comparison` は `match`、記録値が異なれば `different` となり、端末にも警告を表示する。必要な情報が残っていない過去の run は `unknown` として比較できる。`sensor_input_transports` には、各 run でセンサー入力が追跡ノードと同じプロセスかどうかを記録する。DDS 設定が一致していても、センサー入力経路が異なる場合は比較時に表示する。
 
 cuVSLAM の処理フレームが飛んだときは、同じ地図・bag・倍率で画像到達と追跡処理を記録する。追加の画像購読を伴う診断は、通常のベンチマークと別に `runs/cuvslam_frame_gaps/<run>/` に保存する。
 

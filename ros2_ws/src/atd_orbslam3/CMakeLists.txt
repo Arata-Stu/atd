@@ -27,6 +27,8 @@ if(ATDOrbslam3_FOUND)
   target_link_libraries(orbslam3_component ATDOrbslam3::core Eigen3::Eigen ${OpenCV_LIBRARIES})
   rclcpp_components_register_node(orbslam3_component
     PLUGIN "atd_orbslam3::OrbslamNode" EXECUTABLE orbslam3_node)
+  ament_auto_add_executable(orbslam3_replay_node src/bag_replay.cpp)
+  target_compile_features(orbslam3_replay_node PRIVATE cxx_std_17)
 else()
   message(STATUS "ORB-SLAM3 core is absent. Skipping the optional orbslam3_node.")
 endif()

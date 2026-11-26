@@ -66,6 +66,12 @@ class OrbReplayTests(unittest.TestCase):
             mocks.enter_context(patch('atd_localization.orb_replay.OrbBootstrap'))
             with ExitStack() as viewer:
                 orb = replay_orbslam3.OrbReplay(viewer, root, node, bag, options, None, {}, 'orb')
+                params = replay_orbslam3.yaml.safe_load((orb.directory / 'parameters.yaml').read_text())
+                self.assertEqual(params[orb.sensor_source]['ros__parameters'], dict(
+                    bag_path=str(bag), rate=1., start_offset_s=0., player_name=orb.player_name, imu_topic=''))
+                self.assertFalse(orb.playback_finished)
+                subscriptions[orb.sensor_source + '/finished'](NS(data=True))
+                self.assertTrue(orb.playback_finished)
                 stamp = NS(sec=0, nanosec=1)
                 header = NS(stamp=stamp, frame_id='map')
                 pose = NS(position=NS(x=1, y=0, z=0), orientation=NS(x=0, y=0, z=0, w=1))
@@ -93,10 +99,10 @@ class OrbReplayTests(unittest.TestCase):
                     replay_vslam.run('course', .5, orb_options=NS())
                 scan.assert_not_called()
                 spawn.assert_not_called()
-                node = Path(folder) / 'lib/atd_orbslam3/orbslam3_node'
+                node = Path(folder) / 'lib/atd_orbslam3/orbslam3_replay_node'
                 node.parent.mkdir(parents=True)
                 node.touch(mode=0o644)
-                with self.assertRaisesRegex(RuntimeError, 'orbslam3_node'):
+                with self.assertRaisesRegex(RuntimeError, 'orbslam3_replay_node'):
                     orb_executable()
                 node.chmod(0o755)
                 self.assertEqual(orb_executable(), str(node))

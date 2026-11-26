@@ -96,6 +96,9 @@ def test_validated_target_and_tf_owner_for_both_clocks(deployment):
         assert resolved['hint_topic'] == '/localization/pose_hint'
         assert ('visual_localization/pose', resolved['hint_topic']) in resolved['remaps']['vgl']
         assert ('visual_slam/initial_pose', resolved['hint_topic']) in resolved['remaps']['cuvslam']
+        assert slam['enable_request_hint']
+        assert ('visual_slam/trigger_hint', '/localization/request_hint') in resolved['remaps']['cuvslam']
+        assert ('visual_localization/trigger_localization', '/localization/request_hint') in resolved['remaps']['vgl']
 
 
 @pytest.mark.parametrize('changed', ['nvidia/cuvslam_map/landmarks.mdb', 'nvidia/cuvgl_map/bow_index.pb',

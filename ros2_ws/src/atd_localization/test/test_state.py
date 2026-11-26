@@ -3,9 +3,7 @@ from math import sin, cos, pi
 
 import pytest
 
-from atd_localization.state import InitialHintRequest, RigidPose, TrackingState
-from concurrent.futures import Future
-from types import SimpleNamespace
+from atd_localization.state import RigidPose, TrackingState
 
 
 T = 10**10
@@ -207,52 +205,3 @@ def test_invalid_pose_speed_or_future_stamp_cannot_produce_valid_observation():
     assert state.status(5.)[2] is None
     observe(state, T + 2_000_000_000)
     assert state.status(5.)[2] is None
-
-
-def test_missed_startup_hint_is_requested_once_when_ready_even_if_hint_was_seen_by_only_one_consumer():
-    bootstrap = InitialHintRequest()
-    started = []
-    def request():
-        future = Future()
-        started.append(future)
-        return future
-    bootstrap.tick(0., stop=False, ready=lambda: False, request=request)
-    assert not started
-    for now in (1., 1.5, 2.):
-        bootstrap.tick(now, stop=False, ready=lambda: True, request=request)
-    assert len(started) == 1
-    started[0].set_result(SimpleNamespace(success=True))
-    for now in (3., 10., 100.):
-        bootstrap.tick(now, stop=False, ready=lambda: True, request=request)
-    assert bootstrap.done and not bootstrap.error and len(started) == 1
-
-
-def test_startup_hint_retry_is_bounded_even_if_service_hangs_or_fails():
-    bootstrap = InitialHintRequest()
-    calls = []
-    def request():
-        future = Future()
-        calls.append(future)
-        if len(calls) == 2:
-            future.set_result(SimpleNamespace(success=False, message='rejected'))
-        if len(calls) == 3:
-            raise RuntimeError('unavailable')
-        return future
-    for now in range(40):
-        bootstrap.tick(now, stop=False, ready=lambda: True, request=request)
-    assert len(calls) == 3 and calls[0].cancelled() and bootstrap.done and bootstrap.error
-
-
-def test_no_bootstrap_after_success_or_tracking_loss():
-    bootstrap = InitialHintRequest()
-    for stopped in (True, False):
-        bootstrap.tick(10., stop=stopped, ready=lambda: True, request=lambda: pytest.fail('unexpected VGL request'))
-
-
-def test_initial_request_waits_for_fresh_cuvslam_diagnostics_and_both_camera_infos():
-    state = TrackingState()
-    camera(state)
-    assert not state.initialized_stereo(5.)
-    state.diagnostic(T, 5., dict(GOOD, localized_in_exist_map='No'))
-    assert state.initialized_stereo(5.)
-    assert not state.initialized_stereo(6.1)

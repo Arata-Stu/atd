@@ -50,7 +50,8 @@ def test_ros_stamped_inputs_result_in_single_signed_observation_and_loss():
         driver.create_service(Trigger, '/localization/request_hint', trigger)
         driver.create_subscription(PoseWithCovarianceStamped, '/localization/pose_hint', lambda _: None, 10)
         sub = driver.create_subscription(LocalizationStatus, '/localization/status', received.append, 10)
-        spin_until(lambda: sub.get_publisher_count() > 0 and all(p.get_subscription_count() > 0 for p in pubs))
+        spin_until(lambda: sub.get_publisher_count() > 0 and pubs[0].get_subscription_count() == 2
+                   and all(p.get_subscription_count() > 0 for p in pubs[1:]))
         stamp = driver.get_clock().now().to_msg()
         for frame, pub in zip(('l','r'), pubs[-2:]):
             info = CameraInfo(width=640, height=480)
@@ -60,9 +61,10 @@ def test_ros_stamped_inputs_result_in_single_signed_observation_and_loss():
             KeyValue(key='vo_status', value='OK'), KeyValue(key='localized_in_exist_map', value='No')])])
         diag.header.stamp = stamp
         pubs[3].publish(diag)
-        # Simulate the first volatile VGL hint having been missed: the monitor
-        # must request another only after both hint consumers have been discovered.
-        spin_until(lambda: bool(requests))
+        # Keep the native hint pending across heartbeats with both consumers and the service ready.
+        received.clear()
+        spin_until(lambda: sum(m.state == 'waiting_hint' for m in received) >= 10 or requests)
+        assert not requests
         assert not any(m.state == 'tracking' for m in received)
         # All remaining state changes, including the completed frame and loss,
         # must be published by input callbacks without a heartbeat tick.
@@ -98,7 +100,7 @@ def test_ros_stamped_inputs_result_in_single_signed_observation_and_loss():
         pubs[3].publish(diag)
         spin_until(lambda: received[-1].state == 'lost')
         assert received[-1].epoch > sample.epoch
-        assert requests == [True]
+        assert not requests
     finally:
         executor.shutdown()
         driver.destroy_node()

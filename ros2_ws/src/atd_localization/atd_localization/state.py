@@ -37,56 +37,6 @@ class Observation:
     yaw_rate: float
 
 
-class InitialHintRequest:
-    """Re-arm VGL once after discovery; bounded retries only for failed service calls."""
-    def __init__(self):
-        self.future = None
-        self.attempts = 0
-        self.next_check = 0.
-        self.done = False
-        self.error = ''
-
-    def tick(self, now, *, stop, ready, request):
-        if self.done:
-            return
-        if stop:
-            self.done = True
-            return
-        if self.future is not None:
-            if not self.future.done() and now < self.deadline:
-                return
-            try:
-                if not self.future.done():
-                    self.future.cancel()
-                    raise TimeoutError('応答待ちが期限を超えました')
-                result = self.future.result()
-                if not result.success:
-                    raise RuntimeError(result.message or 'サービスが要求を拒否しました')
-            except Exception as error:
-                self._failed(now, error)
-            else:
-                self.done = True
-                self.future = None
-            return
-        if now < self.next_check:
-            return
-        self.next_check = now + 0.5
-        if ready():
-            self.attempts += 1
-            try:
-                self.future = request()
-                self.deadline = now + 5.
-            except Exception as error:
-                self._failed(now, error)
-
-    def _failed(self, now, error):
-        self.future = None
-        self.next_check = now + 1.
-        if self.attempts >= 3:
-            self.done = True
-            self.error = f'VGL の初回候補の再要求に失敗しました。自己位置推定を再起動してください（{error}）'
-
-
 class TrackingState:
     def __init__(self, max_age_s=1.0, *, allow_sparse_tf=False):
         if not math.isfinite(max_age_s) or max_age_s <= 0:
@@ -223,11 +173,6 @@ class TrackingState:
         # stopped ROS clocks are caught independently using ROS and steady time.
         return (-0.1 <= (self.clock_ns - stamp) * 1e-9 <= self.max_age_s
                 and 0 <= wall - received <= self.max_age_s)
-
-    def initialized_stereo(self, wall):
-        return (self.last_diag > 0 and -0.1 <= (self.clock_ns - self.last_diag) * 1e-9 <= self.max_age_s
-                and all(side in self.cameras and self._fresh(*self.cameras[side], wall)
-                        for side in ('left', 'right')))
 
     def status(self, wall):
         if self.allow_sparse_tf:

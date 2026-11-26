@@ -16,10 +16,9 @@ from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo
-from std_srvs.srv import Trigger
 from tf2_msgs.msg import TFMessage
 
-from .state import InitialHintRequest, RigidPose, TrackingState
+from .state import RigidPose, TrackingState
 
 
 def rigid(position, rotation):
@@ -49,10 +48,8 @@ class LocalizationMonitor(Node):
         self.arrival_time = (lambda: self.get_clock().now().nanoseconds * 1e-9) if c['simulation_freshness'] else time.monotonic
         self.session_id = str(uuid.uuid4())
         self.state = TrackingState(c['max_age_s'], allow_sparse_tf=c['allow_sparse_tf'])
-        self.startup_hint = InitialHintRequest()
-        self.hint_client = self.create_client(Trigger, '/localization/request_hint')
         self.publisher = self.create_publisher(LocalizationStatus, '/localization/status', 10)
-        self.hint_subscription = self.create_subscription(PoseWithCovarianceStamped, '/localization/pose_hint', self.on_hint, 10)
+        self.create_subscription(PoseWithCovarianceStamped, '/localization/pose_hint', self.on_hint, 10)
         self.create_subscription(DiagnosticArray, '/diagnostics', self.on_diagnostic, qos_profile_sensor_data)
         self.create_subscription(Odometry, '/visual_slam/tracking/odometry', self.on_odometry, qos_profile_sensor_data)
         self.create_subscription(TFMessage, '/tf', self.on_tf, qos_profile_sensor_data)
@@ -123,22 +120,8 @@ class LocalizationMonitor(Node):
                             msg.twist.twist.linear.x, msg.twist.twist.angular.z)
         self.publish()
 
-    def hint_ready(self, wall):
-        if not (self.state.initialized_stereo(wall) and self.hint_client.service_is_ready()
-                and self.hint_subscription.get_publisher_count() == 1):
-            return False
-        endpoints = self.get_subscriptions_info_by_topic('/localization/pose_hint')
-        names = [item.node_name for item in endpoints if item.node_namespace == '/'
-                 and item.topic_type == 'geometry_msgs/msg/PoseWithCovarianceStamped']
-        return names.count('visual_slam') == 1 and names.count(self.get_name()) == 1
-
     def watch(self):
         self.state.clock(self.get_clock().now().nanoseconds)
-        received = self.arrival_time()
-        self.startup_hint.tick(time.monotonic(), stop=(self.state.registered or self.state.lost
-                                          or self.state.conflict or self.state.camera_mismatch),
-                               ready=lambda: self.hint_ready(received),
-                               request=lambda: self.hint_client.call_async(Trigger.Request()))
         self.publish(heartbeat=True)
 
     def publish(self, *, heartbeat=False):
@@ -146,8 +129,6 @@ class LocalizationMonitor(Node):
         if status is None:
             return
         state, reason, sample = status
-        if self.startup_hint.error and state in ('waiting_hint', 'localizing'):
-            reason = self.startup_hint.error
         msg = LocalizationStatus()
         msg.header.frame_id = self.config['map_frame']
         msg.map_id = self.config['map_id']

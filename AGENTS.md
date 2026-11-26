@@ -36,7 +36,7 @@
 - イベントカメラは今後使用しない。関連 SDK・driver・ROS package・Python 依存を導入せず、将来の追加候補にも含めない。
 - OS・配布済み ROS パッケージ、SDK、uv 本体、Notebook の Node / pnpm などコンテナのシステムに導入する依存は Docker build で準備する。共通 apt 依存は `docker/dependencies.apt` で管理し、起動時は導入状態を検査する。不足やイメージとの不一致があれば起動を止め、再ビルドを案内する。
 - 日常コマンドは `/workspaces/atd` にマウントした checkout から実行し、編集は次の実行で反映する。DDS・USB serial・ROS 用 Python 同期など起動時に適用する設定の変更はコンテナを再作成して反映する。uv の venv、Web の node_modules、自作 ROS package の colcon 成果物は各ホストのマウント済み workspace に置く。
-- DDS は Fast DDS の UDPv4 / loopback 設定を使う。生成先は `/etc/atd/fastdds.xml` と `/etc/atd/dds.env.sh` とし、起動時の root スクリプトで配置する。
+- Jetson の走行系と Notebook の Gazebo・bag replay は、それぞれのホスト内で完結させる。プロセス間の DDS は Fast DDS の UDPv4 / loopback を使う。設定は起動時に `/etc/atd/fastdds.xml` と `/etc/atd/dds.env.sh` に配置する。
 - 初回準備は `scripts/setup.sh` と [セットアップ手順](docs/setup/README.md) を入口とする。Notebook（x86_64 / amd64）と Jetson（aarch64 / arm64 と BSP）を区別し、既存 Docker・CLI 設定を不用意に置換しない。
 - ROS workspace は setup の workspace 操作で対話的に指定し、未設定時は実際の clone 配下の `ros2_ws` を使う。標準 clone 位置なら `~/workspaces/atd/ros2_ws` となる。`config/workspace.env` の `ATD_PC_ROS_WS` / `ATD_JETSON_ROS_WS` に別々に保存する。保存済み指定と引数・環境変数の上書きを優先し、旧設定や既存データを自動移行しない。コンテナでは `/workspaces/isaac_ros-dev` を使い、`ISAAC_ROS_WS` は `dev.sh` が設定する。Notebook / Jetson のホストパスやビルド成果物を同一視しない。別の workspace を使う場合、その `src/atd` はリポジトリの `ros2_ws/src/` を mount する予約先とし、編集元を別々に管理しない。
 - 環境の診断は `scripts/tools/docker.sh` から項目ごとの `OK` / `FAIL` / `SKIP` を表示し、結果を `logs/docker/<host>/` に保存して後から確認できるようにする。導入状態の診断と、Docker 起動・GPU 演算・センサ・実走行の検証を区別する。
@@ -72,8 +72,9 @@
 - 自作 ROS 2 パッケージはモジュールごとに分割し、`atd_<pkg_name>` と命名する。
 - C++ を基本とし、計算量、メモリ使用量、コピー、遅延を意識して効率よく実装する。
 - `CMakeLists.txt` と `ament_cmake_auto` を原則として用いる。
-- composable node / component container の利用を推奨する。特に画像・深度など大容量データを交換する経路は、component として利用する前提で設計・実装する。
-- component 化だけでコピー削減や性能達成を検証済みとは扱わず、必要に応じて実際のデータ経路と性能を確認する。
+- 実機・Gazebo・bag replay のいずれでも、センサー取得から処理結果までのメモリコピーを最小限にする。画像・深度・IMU の ROS 側の配信元と処理ノードを同じ component container 等のプロセスに置き、型付きの ROS 2 intra-process 通信で渡す。
+- Gazebo と ROS のプロセス境界ではセンサー用共有メモリを使う。GPU 処理が続く区間は、入出力が対応する CUDA バッファを共有し、途中の CPU への読み戻しや GPU への再転送を避ける。
+- センサー経路の変更・比較では、実際の受信経路と件数を確認する。ゼロコピーと報告する場合は、対象区間を明示し、デシリアライズ、形式変換、CPU・GPU 間転送まで含めて根拠を示す。
 - Python node も CMake と `ament_cmake_auto` を基本とし、必要に応じて `ament_cmake_python` を併用する。
 - 直接起動する Python スクリプトには適切な shebang と実行権限を設定し、CMake の `install(PROGRAMS ...)` などで配置する。`colcon build` 後の起動も確認する。import 用モジュールへの実行権限は必須ではない。
 - DDS のネットワーク設定と、topic ごとの QoS を区別する。ROS 側と XML のどちらで設定するかを明確にする。

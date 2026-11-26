@@ -19,6 +19,7 @@ import uuid
 from atd_mapping.capture_snapshot import publisher_signature, stop
 from atd_mapping.frames import stamp_ns
 
+from .replay_dds import replay_dds_profile
 from .replay_inputs import independent_bag, inspect_inputs
 from .replay_report import TrackingReport
 from .replay_player import _check_publishers, _connection_issues, _endpoints, resume_when_connected
@@ -62,11 +63,12 @@ def play_command(bag, topics, qos, rate, *, paused_player=None):
             '--topics', *topics]
 
 
-def validation_connections(node, player_name, workflow, *, orb):
+def validation_connections(node, player_name, workflow, *, orb, observe_images=False):
     """停止中の bag と実際に追跡・再定位を行う購読先の型・QoS を確認する。"""
     cameras = ['/orbslam3_node'] if orb else ['/visual_slam', '/visual_global_localization']
     clocks = cameras if orb else [*cameras, '/atd_localization_monitor']
-    links = [(workflow[side + '_image'], 'sensor_msgs/msg/Image', cameras) for side in ('left', 'right')]
+    readers = [*cameras, node.get_fully_qualified_name()] if observe_images else cameras
+    links = [(workflow[side + '_image'], 'sensor_msgs/msg/Image', readers) for side in ('left', 'right')]
     if not orb:
         # These component names and remapped CameraInfo inputs are shared with localization.launch.py.
         links += [(workflow[side + '_info'], 'sensor_msgs/msg/CameraInfo', clocks) for side in ('left', 'right')]
@@ -83,7 +85,25 @@ def validation_connections(node, player_name, workflow, *, orb):
     return issues
 
 
-def run_ros(args, meta, bag, topics, duration, report, output):
+def trace_connections(node):
+    """画像の処理時間を配信するノードと診断用の購読先を開始前に確認する。"""
+    missing = []
+    observer = node.get_fully_qualified_name()
+    links = [('/visual_slam/status', 'isaac_ros_visual_slam_interfaces/msg/VisualSlamStatus',
+              '/visual_slam', [observer]),
+             ('/visual_slam/tracking/odometry', 'nav_msgs/msg/Odometry', '/visual_slam', [observer]),
+             ('/localization/pose_hint', 'geometry_msgs/msg/PoseWithCovarianceStamped', '/visual_global_localization',
+              [observer, '/atd_localization_monitor', '/visual_slam'])]
+    for topic, kind, source, consumers in links:
+        publishers = _check_publishers(node, topic, kind, source, missing)
+        subscribers = node.get_subscriptions_info_by_topic(topic)
+        for consumer in consumers:
+            missing.extend(_connection_issues(topic, publishers, _endpoints(subscribers, kind, consumer),
+                                               source, consumer))
+    return missing
+
+
+def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
     import rclpy
     from ament_index_python.packages import get_package_share_directory
     from atd_interfaces.msg import LocalizationStatus
@@ -95,7 +115,9 @@ def run_ros(args, meta, bag, topics, duration, report, output):
     old_handler = signal.signal(signal.SIGTERM, interrupt)
     with ExitStack() as stack:
         stack.callback(signal.signal, signal.SIGTERM, old_handler)
-        lock = stack.enter_context((output.parent / f'.domain-{args.domain}.lock').open('a'))
+        lock_dir = args.results_root / 'runs/localization'
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock = stack.enter_context((lock_dir / f'.domain-{args.domain}.lock').open('a'))
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as e:
@@ -122,6 +144,8 @@ def run_ros(args, meta, bag, topics, duration, report, output):
                 writer.writerow([stamp, msg.epoch, *sample])
 
         node.create_subscription(LocalizationStatus, STATUS, observe, 20)
+        if trace is not None:
+            trace.subscribe(node, meta['workflow'])
         orb = meta.get('backend') == 'orbslam3'
         if not orb:
             from isaac_ros_visual_slam_interfaces.srv import LocalizeInMap
@@ -150,7 +174,8 @@ def run_ros(args, meta, bag, topics, duration, report, output):
                 processed_stamp = stamp_ns(msg.stamp)
             node.create_subscription(Header, '/orbslam3/processed', processed,
                                      QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-        launch = subprocess.Popen(launch_command(args.results_root, args.map_id, args.engine_dir), start_new_session=True)
+        command = launch_command(args.results_root, args.map_id, args.engine_dir)
+        launch = subprocess.Popen(command, start_new_session=True)
         stack.callback(stop, launch)
         deadline = time.monotonic() + args.ready_timeout
         while time.monotonic() < deadline:
@@ -174,7 +199,11 @@ def run_ros(args, meta, bag, topics, duration, report, output):
                 raise ValueError('自己位置推定または bag player が再生開始前に終了しました')
 
         def missing():
-            return validation_connections(node, '/' + paused_player, meta['workflow'], orb=orb)
+            issues = validation_connections(node, '/' + paused_player, meta['workflow'], orb=orb,
+                                            observe_images=trace is not None)
+            if trace is not None:
+                issues.extend(trace_connections(node))
+            return issues
 
         initialize = (lambda: bootstrap.wait(check_children, args.ready_timeout)) if bootstrap else None
         resume_when_connected(node, paused_player, args.ready_timeout, missing, check_children, initialize)
@@ -198,6 +227,10 @@ def run_ros(args, meta, bag, topics, duration, report, output):
             raise ValueError(f'rosbag 再生が失敗しました（exit {player.returncode}）')
         deadline = time.monotonic() + args.drain_timeout
         def still_draining():
+            if trace is not None:
+                # tail_tracked can already be true half a second before the final image.
+                # Drain independent DDS queues through the full observation deadline.
+                return True
             return (processed_stamp != report.stereo['last_stamp_ns'] if orb else not report.summary()['tail_tracked'])
 
         while time.monotonic() < deadline and still_draining():
@@ -229,6 +262,8 @@ def main(argv=None):
     parser.add_argument('--domain', type=int, default=DOMAIN, help='隔離する ROS domain（既定95）')
     parser.add_argument('--ready-timeout', type=float, default=120., help='起動準備待ち秒')
     parser.add_argument('--drain-timeout', type=float, default=8., help='最終入力の処理待ち秒')
+    parser.add_argument('--diagnose-frame-gaps', action='store_true',
+                        help='cuVSLAM の画像到達と処理完了、地図照合の時刻を同じ再生で記録する')
     args = parser.parse_args(argv)
     if not 1 <= args.domain <= 101 or args.domain in (93, 94) or not .05 <= args.rate <= 4:
         parser.error('domain は 1〜101（地図作成用93・94を除く）、rate は0.05〜4です')
@@ -247,6 +282,8 @@ def main(argv=None):
                 (args.results_root / 'maps').glob('*/hdmap/map.json') if not p.parents[1].name.startswith('.') and
                 ((p.parents[1] / 'nvidia/cuvgl_map').is_dir() or (p.parents[1] / 'orbslam3/manifest.json').is_file())))
         meta = map_metadata(args.results_root, args.map_id)
+        if args.diagnose_frame_gaps and meta.get('backend') == 'orbslam3':
+            raise ValueError('フレーム間隔の診断には cuVSLAM 地図を選択してください')
         if meta.get('backend') == 'orbslam3' and args.engine_dir:
             raise ValueError('ORB-SLAM3 地図に VGL engine は使用しません')
         if not args.bag:
@@ -254,7 +291,8 @@ def main(argv=None):
             args.bag = choose('別走行の bag', (i for i in ids if i != meta['source_bag']))
         bag, digest = independent_bag(args.record_root, args.bag, meta['source_bag'], meta['source_metadata_sha256'])
         run_id = args.run_id or datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:12]
-        destination = args.results_root / 'runs/localization' / run_id
+        category = 'cuvslam_frame_gaps' if args.diagnose_frame_gaps else 'localization'
+        destination = args.results_root / 'runs' / category / run_id
         destination.mkdir(parents=True, exist_ok=False)
         output = destination
         print('検証結果 ' + str(output), flush=True)
@@ -263,11 +301,27 @@ def main(argv=None):
                       hdmap_sha256=meta['hdmap_sha256'], source_bag=meta['source_bag'],
                       source_metadata_sha256=meta['source_metadata_sha256'], bag=args.bag, metadata_sha256=digest,
                       frame='map', body_frame='base_link', replay_rate=args.rate, ros_domain_id=args.domain)
+        result['dds_profile'] = replay_dds_profile()
         save_validation_hdmap(args.results_root, meta, output)
-        topics, duration, stereo = inspect_inputs(bag, meta)
+        recorded_stamps = {}
+        if args.diagnose_frame_gaps:
+            from .replay_frame_trace import FrameTrace, print_frame_summary
+            result.update(schema='atd.cuvslam.frame_diagnosis.v1')
+            topics, duration, stereo = inspect_inputs(bag, meta, recorded_stamps=recorded_stamps)
+        else:
+            topics, duration, stereo = inspect_inputs(bag, meta)
         result.update(inputs=topics, input_shape=meta['input_shape'], stereo=stereo)
         report = TrackingReport(stereo, max(.5, .3 * args.rate))
-        run_ros(args, meta, bag, topics, duration, report, output)
+        if args.diagnose_frame_gaps:
+            trace = FrameTrace()
+            try:
+                run_ros(args, meta, bag, topics, duration, report, output, trace=trace)
+            finally:
+                measured = trace.write(output, recorded_stamps)
+                result['frame_trace'] = 'frame_trace.json'
+            print_frame_summary(measured)
+        else:
+            run_ros(args, meta, bag, topics, duration, report, output)
         result.update(report.summary(), trajectory='trajectory.csv')
         print(f"{result['outcome']}  追跡時間率 {result['tracking_time_fraction']:.1%}  "
               f"有効姿勢 {result['pose_samples']} 件", flush=True)

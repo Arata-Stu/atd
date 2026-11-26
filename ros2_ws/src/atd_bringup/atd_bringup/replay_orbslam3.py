@@ -11,6 +11,7 @@ import time
 from uuid import uuid4
 
 import yaml
+from atd_localization.replay_dds import replay_dds_profile
 from atd_mapping.frames import stamp_ns
 
 from .replay_gt_geometry import Alignment, PlanarPose
@@ -125,7 +126,7 @@ class OrbReplay:
                             mode=self.params['mode'], start_offset_s=options.start_offset,
                             input_pairs=self.inputs.pairs, first_input_stamp_ns=self.inputs.first_left_ns,
                             last_input_stamp_ns=self.inputs.last_left_ns, camera_fps=self.inputs.camera_fps,
-                            status='running')
+                            dds_profile=replay_dds_profile(), status='running')
         if self.metadata:
             self.summary['source_metadata_sha256'] = self.metadata['source_metadata_sha256']
         self._summary()

@@ -260,11 +260,27 @@ exit 130
         self.assertEqual(shlex.split(result.stdout.split('command: ', 1)[1])[-6:],
                          ['ros2', 'run', 'atd_bringup', 'compare_replays', 'cu-id', 'orb-id'])
 
+        validation_options = ['--validate-map', 'cu_map', '--bag', 'my session/lap 01',
+                              '--rate', '1', '--diagnose-frame-gaps', '--domain', '96']
+        validation_command = ['env', command[2], 'ros2', 'run', 'atd_localization', 'validate_bag',
+                              '--map', *validation_options[1:]]
+        result = self.invoke('replay', '--dry-run', *validation_options)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = shlex.split(result.stdout.split('command: ', 1)[1])
+        self.assertEqual(args[args.index('/usr/local/bin/atd-shell') + 1:], validation_command)
+        for bad_options in (['--validate-map'], ['--validate-map', '--bag', 'lap'],
+                            ['--validate-map', 'cu_map', '--compare']):
+            result = self.invoke('replay', '--dry-run', *bad_options)
+            self.assertEqual(result.returncode, 2, result.stderr)
+
         # コンテナ内の起動時に ATD shell で overlay を読み直すところまで確認する。
         shell = self.root / 'docker/scripts/atd-shell.sh'
         shell.parent.mkdir(parents=True)
         shell.write_text('#!/bin/bash\nprintf "%s\\0" "$@" > "$MENU_TEST_CALLS"\nexit 17\n')
         shell.chmod(0o755)
+        result = self.invoke('replay', *validation_options, MENU_TEST_CONTAINER='1')
+        self.assertEqual(result.returncode, 17, result.stderr)
+        self.assert_call(*validation_command)
         for domain in ('0', '232'):
             command[1] = 'ROS_DOMAIN_ID=' + domain
             result = self.invoke('replay', *options, MENU_TEST_CONTAINER='1', ATD_REPLAY_ROS_DOMAIN_ID=domain)

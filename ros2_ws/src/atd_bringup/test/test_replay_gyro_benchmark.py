@@ -10,6 +10,7 @@ from atd_bringup import replay_benchmark
 from atd_bringup.replay_gt_source import store_ground_truth
 from atd_bringup.replay_gyro_benchmark import compare_gyro_run
 from atd_bringup.replay_inputs import IMU_TOPIC, STEREO_TOPICS
+from atd_localization.replay_dds import replay_dds_profile
 
 
 OBSERVED_MS = (0, 100, 500, 600)
@@ -86,6 +87,7 @@ def fixture_runs(root, cu_ms=OBSERVED_MS, *, late_recovery=False):
 def test_predictions_increase_output_coverage_and_are_scored_during_the_gap(tmp_path, capsys):
     records, _ = fixture_runs(tmp_path)
     result = compare_gyro_run(tmp_path, 'cu', 'orb', records)
+    assert result['dds_profiles']['comparison'] == 'unknown'
     streams = result['backends']
     raw, gyro = streams['orbslam3'], streams['orbslam3_gyro']
     assert raw['output_time_fraction'] == pytest.approx(1/3)
@@ -102,6 +104,39 @@ def test_predictions_increase_output_coverage_and_are_scored_during_the_gap(tmp_
     saved, = tmp_path.glob('runs/vslam_benchmark/*/report.json')
     assert json.loads(saved.read_text()) == result
     assert 'orbslam3_gyro' in capsys.readouterr().out
+
+
+def test_recorded_dds_content_and_rmw_are_compared_across_runs(tmp_path, monkeypatch, capsys):
+    _, orb = fixture_runs(tmp_path)
+    profile = tmp_path / 'fastdds.xml'
+    monkeypatch.setenv('FASTDDS_DEFAULT_PROFILES_FILE', str(profile))
+    cu_meta = tmp_path / 'runs/localization/cu/report.json'
+    orb_meta = orb / 'summary.json'
+    for path, xml in ((cu_meta, b'udp'), (orb_meta, b'shm')):
+        profile.write_bytes(xml)
+        recorded = replay_dds_profile()
+        assert recorded['path'] == str(profile)
+        assert recorded['sha256'] == hashlib.sha256(xml).hexdigest()
+        path.write_text(json.dumps({**json.loads(path.read_text()), 'dds_profile': recorded}))
+    assert replay_benchmark.main(['cu', 'orb', '--results-root', str(tmp_path)]) == 0
+    saved, = tmp_path.glob('runs/vslam_benchmark/*/report.json')
+    dds = json.loads(saved.read_text())['dds_profiles']
+    assert dds['comparison'] == 'different'
+    assert dds['cuvslam']['sha256'] != dds['orbslam3']['sha256']
+    assert dds['warning'] in capsys.readouterr().err
+
+    # 同じ設定を別パスに配置した場合も、実装と内容から照合する。
+    for path in (cu_meta, orb_meta):
+        meta = json.loads(path.read_text())
+        meta['dds_profile'] = dict(rmw_implementation='rmw_fastrtps_cpp', path=str(path.parent / 'copy.xml'),
+                                   sha256=recorded['sha256'])
+        path.write_text(json.dumps(meta))
+    assert compare_gyro_run(tmp_path, 'cu', 'orb')['dds_profiles']['comparison'] == 'match'
+    meta['dds_profile']['rmw_implementation'] = 'rmw_cyclonedds_cpp'
+    orb_meta.write_text(json.dumps(meta))
+    assert compare_gyro_run(tmp_path, 'cu', 'orb')['dds_profiles']['comparison'] == 'different'
+    profile.unlink()
+    assert replay_dds_profile()['sha256'] is None
 
 
 @pytest.mark.parametrize('field,value', [('source_metadata_sha256', 'a'*64), ('metadata_sha256', 'e'*64),

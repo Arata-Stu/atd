@@ -112,12 +112,12 @@ ROS 2 では `/orbslam3/continuous_odometry` に姿勢、対応する `/orbslam3
    atd gazebo bag --course odaiba --speed 3 --laps 2 --resolution 640x480 --camera-hz 90 --imu 400
    ```
 
-4. 同じコンテナでテスト bag を等速で2回、順に再生する。1回目で画像で確定した ORB 姿勢とジャイロ補完後の姿勢の両方が残る。2回目は保存済み NVIDIA 地図に対する cuVSLAM のステレオ定位。比較では ORB を `--tracking vo` で動かし、IMU を途絶時の補完に使う。
+4. Linux Notebook ホストまたは ORB 対応コンテナで、テスト bag を等速で2回、順に再生する。1回目で画像で確定した ORB 姿勢とジャイロ補完後の姿勢の両方が残る。2回目は保存済み NVIDIA 地図に対する cuVSLAM のステレオ定位。両方のコマンドが同じ Fast DDS 設定（共有メモリとループバック UDP）を使う。
 
    ```bash
    read -rp '評価用の bag 名: ' TEST_BAG
    atd replay "$TEST_BAG" --backend orbslam3 --map odaiba_s1_orb --gyro-bridge on --rate 1 --headless
-   atd-shell ros2 run atd_localization validate_bag --map odaiba_s1_cu --bag "$TEST_BAG" --rate 1
+   atd replay --validate-map odaiba_s1_cu --bag "$TEST_BAG" --rate 1
    ```
 
 5. 端末に表示された run ID を入力して、3方式の結果を保存する。ORB 側には `runs/orbslam3/` の ID を使う。
@@ -130,13 +130,25 @@ ROS 2 では `/orbslam3/continuous_odometry` に姿勢、対応する `/orbslam3
 
 結果は `runs/vslam_benchmark/<RUN>/report.json`。`output_time_fraction` は、隣り合う出力の間隔が 0.25 秒以下だった時間の合計を共通の評価区間の長さで割った値。3方式で同じ定義を使う。位置・方位は両バックエンドの最初の共通観測で Gazebo 正解に合わせる。ジャイロ補完には ORB と同じ座標変換を使う。`paired_accuracy` で画像を追跡できた共通時刻の精度を、`orbslam3_gyro.predicted_accuracy` で補完中の出力だけの対 GT 誤差を確認する。再取得の段差とその直前・直後の値は ORB run の `reacquisitions.csv` に残る。
 
+`dds_profiles` には各 run の RMW 実装、Fast DDS 設定ファイルのパス、内容の SHA-256 が入る。RMW と設定内容が揃えば `comparison` は `match`、記録値が異なれば `different` となり、端末にも警告を表示する。必要な情報が残っていない過去の run は `unknown` として比較できる。
+
+cuVSLAM の処理フレームが飛んだときは、同じ地図・bag・倍率で画像到達と追跡処理を記録する。追加の画像購読を伴う診断は、通常のベンチマークと別に `runs/cuvslam_frame_gaps/<run>/` に保存する。
+
+```bash
+atd replay --validate-map odaiba_s1_cu --bag "$TEST_BAG" --rate 1 --diagnose-frame-gaps
+```
+
+`frame_trace.json` の `largest_processed_gap` は cuVSLAM の処理完了ステータスを受信した画像時刻の最大間隔。区間内で bag に記録されたペア数、独立した DDS 購読者に届いたペア数、区間両端のコールバック時間・VO 計算時間、その前後の地図照合は `frame_trace.csv` と突き合わせられる。独立購読者と cuVSLAM はそれぞれ自身の受信キューを持つ。
+
+お台場 3 m/s・1周の同一 bag を等速で検証した際、直接起動した `validate_bag` の既定設定（ループバック UDP）では追跡時間率 0.2%・有効姿勢7件だった。ORB 再生と同じ共有メモリ＋UDP 設定で cuVSLAM を再実行すると 98.7%・2,594件で、0.25秒を超えた姿勢間隔は0回。地図は両方とも `odaiba_s1_cu` で、収録済みステレオペアの最大間隔は11.11 ms。この比較の cuVSLAM run は順に `0bc147f187b4463e8fb19c4524f9eb1a` と `20261126T120637Z-4c46210bee6c`。
+
 ### 画像観測のみの2方式を比較する
 
 **保存地図への定位**を選定する場合は、同じ地図作成用 bag から作った NVIDIA 地図（VGL 準備済み）と ORB の Atlas を用意する。次の例で `cu_map` はその NVIDIA 地図 ID、`bag` は上記の評価用 bag。各コマンドが表示した `runs/localization/` の run ID を比較に渡す。
 
 ```bash
-atd-shell ros2 run atd_localization validate_bag --map "$cu_map" --bag "$bag" --rate 1
-atd-shell ros2 run atd_localization validate_bag --map odaiba_orb_01 --bag "$bag" --rate 1
+atd replay --validate-map "$cu_map" --bag "$bag" --rate 1
+atd replay --validate-map odaiba_orb_01 --bag "$bag" --rate 1
 atd replay --compare "$cu_run" "$orb_run" --record-root /data/record/rosbags
 ```
 

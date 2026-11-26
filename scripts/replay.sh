@@ -7,7 +7,7 @@ source "$root/scripts/lib/detect_host.sh"
 
 domain="${ATD_REPLAY_ROS_DOMAIN_ID:-75}"
 dry_run=false
-executable=replay_vslam
+mode=
 args=()
 while (($#)); do
     case "$1" in
@@ -19,6 +19,7 @@ Linux Notebook の Isaac ROS コンテナで選択した SLAM と RViz を起動
 ORB-SLAM3 によるステレオ地図作成: atd replay BAG --backend orbslam3 --save-map MAP_ID --headless
 保存地図で別走行の 15 秒地点から再定位: atd replay OTHER_BAG --backend orbslam3 --map MAP_ID --start-offset 15 --headless
 固定地図でジャイロ補完と再取得時の段差を計測: atd replay BAG --backend orbslam3 --map MAP_ID --gyro-bridge on
+cuVSLAM の保存地図で画像の途絶を診断: atd replay --validate-map MAP_ID --bag BAG --diagnose-frame-gaps
 --gyro-bridge auto（既定）は収録ジャイロがあれば補完し、off は画像で確認できた姿勢だけを表示します。
 cuVSLAM と ORB-SLAM3 の同条件の run を比較: atd replay --compare CUV_RUN_ID ORB_RUN_ID
 固定地図で cuVSLAM・ORB 観測・ORB ジャイロ補完を比較: atd replay --compare CU_VALIDATION_ID ORB_GYRO_RUN_ID --record-root /data/record/rosbags
@@ -34,27 +35,47 @@ RViz では cuVSLAM の直近の推定姿勢を橙の矢印で表示します。
 --tracking vio は左右画像と /camera/camera/imu を使用します。既定の vo はステレオ画像で追跡します。
 --headless は RViz を開かずに Gazebo の正解軌跡との誤差を保存し、再生の末尾で終了します。
 --slam-max-map-size は SLAM 地図の姿勢数上限です。既定の 0 は無制限で、300 を指定すると従来の条件で比較できます。
-再生専用の ROS_DOMAIN_ID は 75 です。ATD_REPLAY_ROS_DOMAIN_ID で変更できます。
+通常の再生には ROS domain 75（ATD_REPLAY_ROS_DOMAIN_ID で変更可能）、--validate-map の固定地図検証には 95（--domain で変更可能）を使います。
 ホストから使う場合は、先に atd dev で開発コンテナを起動してください。
 EOF
             exit 0 ;;
         --dry-run) dry_run=true ;;
-        --imu-gaps) executable=evaluate_orb_gyro ;;
-        --compare) executable=compare_replays ;;
+        --imu-gaps|--compare|--validate-map)
+            if [[ -n "$mode" ]]; then
+                printf 'atd replay: %s と %s は同時に指定できません。\n' "$mode" "$1" >&2
+                exit 2
+            fi
+            mode=$1
+            if [[ "$mode" = --validate-map ]]; then
+                if [[ -z "${2:-}" || "$2" = -* ]]; then
+                    printf 'atd replay: --validate-map に保存地図の ID を指定してください。\n' >&2
+                    exit 2
+                fi
+                shift
+                args+=(--map "$1")
+            fi ;;
         --) args+=("$@"); break ;;
         *) args+=("$1") ;;
     esac
     shift
 done
-command=(env "ROS_DOMAIN_ID=$domain"
-    FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
-    ros2 run atd_bringup "$executable")
+command=(env)
+if [[ "$mode" != --validate-map ]]; then
+    if [[ ! "$domain" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( domain > 232 )); then
+        printf 'atd replay: ATD_REPLAY_ROS_DOMAIN_ID は 0〜232 の整数で指定してください。\n' >&2
+        exit 2
+    fi
+    command+=("ROS_DOMAIN_ID=$domain")
+fi
+command+=(FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml ros2 run)
+case "$mode" in
+    --validate-map) command+=(atd_localization validate_bag) ;;
+    --imu-gaps) command+=(atd_bringup evaluate_orb_gyro) ;;
+    --compare) command+=(atd_bringup compare_replays) ;;
+    *) command+=(atd_bringup replay_vslam) ;;
+esac
 if ((${#args[@]})); then command+=("${args[@]}"); fi
 
-if [[ ! "$domain" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( domain > 232 )); then
-    printf 'atd replay: ATD_REPLAY_ROS_DOMAIN_ID は 0〜232 の整数で指定してください。\n' >&2
-    exit 2
-fi
 if ! "$dry_run" && [[ "$(uname -s)/$(uname -m)" != Linux/x86_64 || "$(detect_atd_host)" != pc ]]; then
     printf 'atd replay: Linux x86_64 の Notebook で実行してください。\n' >&2
     exit 1

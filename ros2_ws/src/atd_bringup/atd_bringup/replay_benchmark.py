@@ -254,6 +254,11 @@ def main(argv=None):
         return 1
     print(f"共通評価区間 {(report['window_ns'][1]-report['window_ns'][0])/1e9:.3f} 秒、"
           f"±5 ms で対応した観測 {report['paired_observations']} 組")
+    if (dds := report.get('dds_profiles')) is not None:
+        if dds['warning']:
+            print(dds['warning'], file=sys.stderr)
+        elif dds['comparison'] == 'unknown':
+            print('DDS 設定の照合に必要な RMW またはプロファイル hash が未記録です。')
     for backend, result in report['backends'].items():
         coverage = (f"出力カバー率 {result['output_time_fraction']:.1%}" if 'output_time_fraction' in result
                     else f"観測カバー率 {result['observed_time_fraction']:.1%}")

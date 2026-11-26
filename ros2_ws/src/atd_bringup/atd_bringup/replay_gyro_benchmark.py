@@ -86,6 +86,27 @@ def _score(rows, trace, alignment, anchor_stamp):
             row.error = math.hypot(err['along_m'], err['lateral_m']), abs(err['heading_deg'])
 
 
+def _dds_profiles(cu, orb):
+    def recorded(run):
+        profile = run.get('dds_profile')
+        if not isinstance(profile, dict):
+            profile = {'path': profile}  # 旧 run はパスだけ、または未記録。
+        return {key: profile.get(key) for key in ('rmw_implementation', 'path', 'sha256')}
+
+    a, b = recorded(cu), recorded(orb)
+    keys = ('rmw_implementation', 'sha256')
+    known = [key for key in keys if a[key] and b[key]]
+    differences = [key for key in known if a[key] != b[key]]
+    comparison = 'unknown'
+    warning = None
+    if differences:
+        comparison = 'different'
+        warning = 'cuVSLAM と ORB の再生時の DDS 設定が異なります（' + '、'.join(differences) + '）。'
+    elif len(known) == len(keys):
+        comparison = 'match'
+    return dict(cuvslam=a, orbslam3=b, comparison=comparison, warning=warning)
+
+
 def compare_gyro_run(root, cu_id, orb_id, record_root=None):
     """同一走行・同一倍率の検証結果。3出力に共通する画像と、補完中の出力時刻を集計する。"""
     root = Path(root)
@@ -165,4 +186,5 @@ def compare_gyro_run(root, cu_id, orb_id, record_root=None):
                 source_metadata_sha256=source_hash, window_ns=[start, end], gap_threshold_s=GAP_NS / 1e9,
                 pairing_tolerance_s=PAIR_TOLERANCE_NS / 1e9, paired_observations=len(triples),
                 accuracy_frame='aligned_at_first_common_observation' if anchor else None, anchor_stamp_ns=anchor,
+                dds_profiles=_dds_profiles(cu, orb),
                 backends=dict(cuvslam=cu_info, orbslam3=raw_info, orbslam3_gyro=gyro_info))

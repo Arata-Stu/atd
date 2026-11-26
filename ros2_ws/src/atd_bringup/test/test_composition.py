@@ -169,7 +169,7 @@ class CompositionTests(unittest.TestCase):
         src = Path(__file__).resolve().parents[2]
         assets = dict(workflow=dict(base_frame='base_link', left_image='/left', right_image='/right',
                                     left_info='/li', right_info='/ri', left_frame='left_optical',
-                                    right_frame='right_optical', ground_constraint=False),
+                                    right_frame='right_optical', ground_constraint=False, tf_static='/tf_static'),
                       map_id='odaiba', map_sha256='a' * 64, hdmap_sha256='b' * 64, input_shape=[1, 3, 480, 640],
                       map_root=Path('/map'), map_dir=Path('/map/cuvslam_map'),
                       model_dir=Path('/models'), config_dir=Path('/config'))
@@ -195,11 +195,25 @@ class CompositionTests(unittest.TestCase):
                         self.assertEqual(dict(slam.remappings)['visual_slam/imu'], '/camera/camera/imu')
                     else:
                         self.assertNotIn('visual_slam/imu', dict(slam.remappings))
+            _, replay = launch['setup'](dict(defaults, map_id='odaiba', use_sim_time='true',
+                                            replay_bag='/record/test', replay_rate='0.5'))
+            slam, vgl, source = replay.composable_node_descriptions
+            self.assertEqual(source.plugin, 'atd_localization::StereoBagInput')
+            self.assertTrue(all(c.extra_arguments == [{'use_intra_process_comms': True}] for c in (slam, vgl, source)))
+            params, = source.parameters
+            self.assertEqual((params['left_image'].args[0], params['right_image'].args[0]), ('/left', '/right'))
+            self.assertEqual((params['rate'], params['required_image_readers'], params['publish_calibration']),
+                             (.5, 2, True))
+            self.assertFalse(params['trace_publications'])
+            _, diagnostic = launch['setup'](dict(defaults, map_id='odaiba', use_sim_time='true',
+                                                replay_bag='/record/test', trace_publications='true'))
+            self.assertTrue(diagnostic.composable_node_descriptions[-1].parameters[0]['trace_publications'])
 
     def test_orb_fixed_map_uses_the_vehicle_camera_container_when_requested(self):
+        from atd_localization.orb_assets import D455
         src = Path(__file__).resolve().parents[2]
         assets = dict(map_id='course', map_sha256='a' * 64, hdmap_sha256='b' * 64,
-                      atlas_path='/map/orbslam3/atlas.osa', camera_fps=90.)
+                      atlas_path='/map/orbslam3/atlas.osa', camera_fps=90., workflow=D455)
         with fake_launch(), patch('atd_localization.orb_assets.is_orb_map', return_value=True), \
                 patch('atd_localization.orb_assets.orb_map_metadata', return_value=assets) as metadata:
             launch = runpy.run_path(str(src / 'atd_localization/launch/localization.launch.py'))
@@ -221,6 +235,11 @@ class CompositionTests(unittest.TestCase):
                              [assets[k] for k in ('map_id', 'map_sha256', 'hdmap_sha256', 'atlas_path')])
             self.assertEqual((params['mode'], params['camera_fps'], params['use_sim_time']), ('localization', 90., False))
             self.assertEqual(metadata.call_count, 2)
+            _, replay_loader = launch['setup'](dict(context, use_sim_time='true', replay_bag='/record/test'))
+            replay_orb, source = replay_loader.composable_node_descriptions
+            self.assertEqual((replay_orb.name, source.name), ('orbslam3_node', 'atd_sensor_bag_input'))
+            self.assertEqual((source.parameters[0]['required_image_readers'], source.parameters[0]['publish_calibration']),
+                             (1, False))
 
     def test_gazebo_profile_runs_only_stereo_vo_with_the_simulation_clock(self):
         path = Path(__file__).resolve().parents[1] / 'launch/gazebo.launch.py'
@@ -253,8 +272,17 @@ class CompositionTests(unittest.TestCase):
     def test_bag_vslam_loads_the_mapper_component_for_live_visualization(self):
         path = Path(__file__).resolve().parents[1] / 'launch/bag_vslam.launch.py'
         with fake_launch():
-            limit, mode, frame, frequency, container = runpy.run_path(str(path))['generate_launch_description']().entities
-        tracker, = container.composable_node_descriptions
+            limit, mode, frame, frequency, bag, rate, player, setup = runpy.run_path(str(path))['generate_launch_description']().entities
+            context = {x.args[0]: x.default_value for x in (limit, mode, frame, frequency, bag, rate, player)}
+            live, = setup.function(context)
+            self.assertEqual(len(live.composable_node_descriptions), 1)
+            container, = setup.function(dict(context, bag_path='drive', tracking_mode='1'))
+        tracker, source = container.composable_node_descriptions
+        self.assertEqual(source.plugin, 'atd_localization::StereoBagInput')
+        self.assertEqual(source.extra_arguments, [{'use_intra_process_comms': True}])
+        sensor_params, = source.parameters
+        self.assertEqual(sensor_params['imu_topic'].args[0], '/camera/camera/imu')
+        self.assertEqual(sensor_params['required_image_readers'], 1)
         self.assertEqual((container.package, container.executable), ('rclcpp_components', 'component_container_mt'))
         self.assertEqual((tracker.package, tracker.plugin),
                          ('isaac_ros_cuvslam', 'nvidia::isaac_ros::visual_slam::VisualSlamNode'))

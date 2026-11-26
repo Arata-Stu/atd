@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 import time
 
 import yaml
+from atd_localization.replay_player import TypedBagInput
 from atd_mapping.capture_snapshot import stop
 from atd_mapping.replay_dds import select_replay_dds
 
@@ -22,7 +23,7 @@ from .replay_gt_course import load_course
 from .replay_gt_geometry import Trace
 from .replay_gt_node import ground_truth_viewer
 from .replay_gt_source import find_ground_truth
-from .replay_inputs import (GROUND_TRUTH_ERROR, GROUND_TRUTH_PATH, IMU_TOPIC, SLAM_ODOMETRY, STEREO_TOPICS,
+from .replay_inputs import (GROUND_TRUTH_ERROR, GROUND_TRUTH_PATH, SLAM_ODOMETRY,
                             gap_gyro_topic, select_bag, validate_bag)
 from .replay_result import ReplayResult
 
@@ -66,7 +67,7 @@ def estimated_only_config(preset, directory):
     return replay_config(preset, directory, {GROUND_TRUTH_PATH, GROUND_TRUTH_ERROR})
 
 
-def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=None, *, slam_max_map_size=0,
+def run_session(node, bag, rate, rviz_config, ground_truth=None, result=None, *, slam_max_map_size=0,
                 imu=None, orb=None):
     from .replay_readiness import wait_and_resume
 
@@ -77,6 +78,8 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
             return process
 
         name = 'ORB-SLAM3' if orb else 'cuVSLAM'
+        player_name = orb.player_name if orb else f'atd_replay_player_{os.getpid()}'
+        bag_input = None
         if orb:
             log_path = orb.directory / 'orbslam3.log'
             output = children.enter_context(log_path.open('xb'))
@@ -86,7 +89,10 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
             orb.summary.update(node_log=log_path.name)
             launch = start(orb.command, stdout=output, stderr=subprocess.STDOUT)
         else:
+            bag_input = TypedBagInput(node)
+            children.callback(bag_input.close)
             launch_args = ['ros2', 'launch', 'atd_bringup', 'bag_vslam.launch.py',
+                           f'bag_path:={bag}', f'rate:={rate}', f'player_name:={player_name}',
                            f'slam_max_map_size:={slam_max_map_size}']
             if imu:
                 launch_args.extend(['tracking_mode:=1', f'imu_frame:={imu.frame}', f'imu_frequency:={imu.frequency}'])
@@ -100,14 +106,6 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
             observer = children.enter_context(ground_truth_viewer(
                 ground_truth, result, visualize=rviz is not None, **({'orb': orb} if orb else {})))
             spin_overlay = observer.spin_once
-        player_name = orb.player_name if orb else f'atd_replay_player_{os.getpid()}'
-        player = None
-        if not orb:
-            topics = [*STEREO_TOPICS, IMU_TOPIC] if imu else STEREO_TOPICS
-            player = start(['ros2', 'bag', 'play', str(bag), '--start-paused', '--disable-keyboard-controls',
-                            '--clock', '--rate', str(rate), '--qos-profile-overrides-path', str(qos),
-                            '--remap', f'__node:={player_name}', '--topics', *topics])
-
         def check_viewer():
             if orb:
                 _show_node_output(reader)
@@ -129,11 +127,6 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                     raise RuntimeError(f'RViz が終了しました（exit {rviz.returncode}）。画面接続と起動ログを確認してください')
                 raise ViewerClosed()
 
-        def check_startup():
-            check_viewer()
-            if player and player.poll() is not None:
-                raise RuntimeError(f'再生開始前に rosbag2 が終了しました（exit {player.returncode}）')
-
         tracking = f'VIO (IMU {imu.frequency:g} Hz, {imu.frame})' if imu else 'VO'
         consumers = f'{name} と RViz' if rviz is not None else name
         settings = orb.params['mode'] if orb else f'slam_max_map_size={slam_max_map_size}'
@@ -147,26 +140,33 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                 orb.spin(timeout_sec=min(.005, timeout_sec))
                 if spin_overlay:
                     spin_overlay(timeout_sec=0.)
-            elif spin_overlay:
-                spin_overlay(timeout_sec=timeout_sec)
             else:
-                time.sleep(timeout_sec)
+                bag_input.spin(0. if spin_overlay else timeout_sec)
+                if spin_overlay:
+                    spin_overlay(timeout_sec=timeout_sec)
 
         finished = False
         try:
-            wait_and_resume(node, player_name=f'/{player_name}', check_running=check_startup,
-                            ground_truth=spin_overlay is not None, vio=imu is not None,
-                            rviz_name='/rviz2' if rviz is not None else None, **({'orb': orb} if orb else {}))
+            connections = wait_and_resume(node, player_name=f'/{player_name}', check_running=check_viewer,
+                                          ground_truth=spin_overlay is not None, vio=imu is not None,
+                                          rviz_name='/rviz2' if rviz is not None else None,
+                                          **({'orb': orb} if orb else {'bag_input': bag_input}))
+            if result is not None and not orb:
+                result.summary.update(sensor_input_transport='ros2_intra_process', bag_input_connections=connections)
             print('bag を再生しています。' + ('終了するには RViz を閉じるか Ctrl+C を押してください。'
                                            if rviz is not None else '末尾で比較結果を保存して終了します。'), flush=True)
             while True:
-                if not finished and (orb.playback_finished if orb else player.poll() is not None):
-                    if player and player.returncode:
-                        raise RuntimeError(f'rosbag2 の再生に失敗しました（exit {player.returncode}）')
+                if not finished and (orb.playback_finished if orb else bag_input.finished):
                     if orb:
                         orb.finish(spin, check_viewer, result)
-                    elif rviz is None:
-                        # rosbag2 の終了後も GPU から遅れて届く姿勢は比較に含める。
+                    else:
+                        counts = bag_input.counts(check_viewer, 5.)
+                        print(f"bag センサー発行: 左 {counts['left_published']} / 右 {counts['right_published']}"
+                              f" / IMU {counts['imu_published']} 件", flush=True)
+                        if result is not None:
+                            result.summary['sensor_input_counts'] = counts
+                    if not orb and rviz is None:
+                        # 画像の発行完了後も GPU から遅れて届く姿勢は比較に含める。
                         stamp = result.last_stamp
                         deadline = time.monotonic() + 2.
                         while time.monotonic() < deadline:
@@ -215,10 +215,8 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_op
         if not shutil.which('rviz2'):
             raise ValueError('コンテナに rviz2 がありません。Notebook の RViz 依存を準備してください')
         config = Path(get_package_share_directory('atd_bringup')) / 'config/bag_vslam.rviz'
-    qos = Path(get_package_share_directory('atd_mapping')) / 'config/replay_qos.yaml'
-    for path in (config, qos):
-        if path is not None and not path.is_file():
-            raise ValueError(f'{path} がありません。atd build --packages-up-to atd_bringup を実行してください')
+    if config is not None and not config.is_file():
+        raise ValueError(f'{config} がありません。atd build --packages-up-to atd_bringup を実行してください')
 
     def interrupt(*_):
         raise KeyboardInterrupt
@@ -281,11 +279,11 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_op
                                                      slam_max_map_size=slam_max_map_size, imu=imu))
             bag_hash = orb.bag_hash if orb else hashlib.sha256((bag / 'metadata.yaml').read_bytes()).hexdigest()
             result.summary.update(backend='cuvslam', mode='mapping', alignment_source='first_estimate',
-                                  start_offset_s=0., metadata_sha256=bag_hash,
-                                  sensor_input_transport=orb.summary['sensor_input_transport'] if orb else 'ros2_inter_process')
+                                  start_offset_s=0., metadata_sha256=bag_hash)
             if orb:
                 result.summary.pop('slam_max_map_size')
-                result.summary.update(backend='orbslam3', mode=orb.params['mode'], map_id=orb_options.map or orb_options.save_map,
+                result.summary.update(backend='orbslam3', sensor_input_transport=orb.summary['sensor_input_transport'],
+                                      mode=orb.params['mode'], map_id=orb_options.map or orb_options.save_map,
                                       start_offset_s=orb_options.start_offset, alignment_source=(
                                           'saved_map' if orb_options.map else 'first_estimate'))
                 result.summary['loop_closure_graph'] = {'status': 'unavailable', 'reason': 'ORB-SLAM3 replay'}
@@ -293,7 +291,7 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_op
                     result.summary['localization_method'] = orb.summary['localization_method']
                 orb.summary['gt_replay_id'] = result.directory.name
             print(f'Gazebo 正解軌跡: {ground_truth}\n比較結果の保存先: {result.directory}', flush=True)
-        run_session(node, bag, rate, config, qos, trace, result, slam_max_map_size=slam_max_map_size, imu=imu, orb=orb)
+        run_session(node, bag, rate, config, trace, result, slam_max_map_size=slam_max_map_size, imu=imu, orb=orb)
 
 
 def main(argv=None):

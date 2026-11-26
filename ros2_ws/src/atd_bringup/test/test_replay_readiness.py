@@ -61,6 +61,23 @@ class GateTests(unittest.TestCase):
         self.subs[topic].append(endpoint('/visual_slam', kind))
         self.assertFalse(_missing_endpoints(self.node, self.player, self.rviz, vio=True))
 
+    def test_composed_bag_checks_image_and_imu_ipc_before_resuming(self):
+        source = Mock(source='/atd_sensor_bag_input')
+        for key in ('left_info', 'right_info', 'left_image', 'right_image'):
+            topic = STEREO_WORKFLOW[key]
+            self.pubs[topic] = [endpoint(source.source, self.pubs[topic][0].topic_type)]
+        kind = 'sensor_msgs/msg/Imu'
+        self.pubs['/camera/camera/imu'] = [endpoint(source.source, kind)]
+        self.subs['/camera/camera/imu'] = [endpoint('/visual_slam', kind)]
+        def ready(*_):
+            self.resume.call_async.assert_not_called()
+            return {'left_intra_readers': 1, 'right_intra_readers': 1, 'imu_intra_readers': 1}
+        source.wait_for_connections.side_effect = ready
+        observed = wait_and_resume(self.node, self.player, rviz_name=None, vio=True, bag_input=source)
+        self.assertEqual(observed['imu_intra_readers'], 1)
+        source.wait_for_connections.assert_called_once()
+        self.resume.call_async.assert_called_once()
+
     def test_orb_gyro_replay_requires_gyro_at_bridge_and_per_image_decisions(self):
         from atd_bringup.orb_gap_bridge import FRAME_STATUS
         tracker, bridge = '/orbslam3_node', '/atd_bag_replay'

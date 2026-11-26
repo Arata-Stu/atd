@@ -10,7 +10,7 @@ from atd_bringup.replay_inputs import (
 )
 
 
-def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=False, orb=None):
+def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=False, orb=None, bag_input=None):
     inputs = {
         STEREO_WORKFLOW['left_image']: 'sensor_msgs/msg/Image',
         STEREO_WORKFLOW['right_image']: 'sensor_msgs/msg/Image',
@@ -26,6 +26,8 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=Fal
     overlay = '/' + GROUND_TRUTH_NODE
     tracker = orb.tracker if orb else '/visual_slam'
     required_nodes = [player_name, tracker]
+    if bag_input:
+        required_nodes.append(bag_input.source)
     if orb:
         required_nodes.append(orb.sensor_source)
     if ground_truth:
@@ -38,6 +40,8 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=Fal
         producer = player_name
         if orb and topic != '/clock':
             producer = orb.seed_source if topic in orb.seed_topics else orb.sensor_source
+        elif bag_input and topic not in ('/clock', STEREO_WORKFLOW['tf_static']):
+            producer = bag_input.source
         publishers = _check_publishers(node, topic, kind, producer, missing)
         infos = node.get_subscriptions_info_by_topic(topic)
         if topic == STEREO_WORKFLOW['tf_static']:
@@ -95,12 +99,17 @@ def _missing_endpoints(node, player_name, rviz_name, ground_truth=False, vio=Fal
 
 
 def wait_and_resume(node, player_name='/rosbag2_player', timeout_s=90.0, *,
-                    rviz_name='/rviz2', check_running=None, ground_truth=False, vio=False, orb=None):
+                    rviz_name='/rviz2', check_running=None, ground_truth=False, vio=False, orb=None, bag_input=None):
     player_name = '/' + player_name.strip('/')
     if rviz_name:
         rviz_name = '/' + rviz_name.strip('/')
     def missing():
-        return _missing_endpoints(node, player_name, rviz_name, ground_truth, vio, orb)
+        return _missing_endpoints(node, player_name, rviz_name, ground_truth, vio, orb, bag_input)
 
     initialize = (lambda: orb.seed(check_running)) if orb else None
+    connections = {}
+    if bag_input:
+        def initialize():
+            connections.update(bag_input.wait_for_connections(check_running, timeout_s))
     resume_when_connected(node, player_name, timeout_s, missing, check_running, initialize)
+    return connections

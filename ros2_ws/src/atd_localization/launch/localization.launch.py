@@ -13,10 +13,11 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 from atd_mapping.capture_config import component_configuration
 from atd_localization.assets import prepare_runtime
+from atd_localization.bag_source import stereo_bag_input
 from atd_localization.orb_assets import is_orb_map, orb_map_metadata
 
 
-class RequiredOrbLoader(LoadComposableNodes):
+class RequiredComponentLoader(LoadComposableNodes):
     def _load_node(self, request, context):
         from launch_ros.utilities import get_node_name_count
         name = f"{request.node_namespace.rstrip('/')}/{request.node_name}"
@@ -35,6 +36,9 @@ def setup(context):
     if clock not in ('true', 'false'):
         raise ValueError('use_sim_time に true / false を指定してください')
     sim_time = clock == 'true'
+    bag = value('replay_bag')
+    if bag and not sim_time:
+        raise ValueError('bag のセンサー入力には use_sim_time:=true が必要です')
     gazebo_imu_frequency = value('gazebo_imu_frequency')
     if gazebo_imu_frequency and not sim_time:
         raise ValueError('Gazebo の統合 IMU にはシミュレーション時刻が必要です')
@@ -45,16 +49,20 @@ def setup(context):
         params = {key: ParameterValue(assets[key], value_type=str)
                   for key in ('map_id', 'map_sha256', 'hdmap_sha256', 'atlas_path')}
         params.update(mode='localization', camera_fps=float(assets['camera_fps']), use_sim_time=sim_time)
-        if value('compose_orb') == 'true':
+        if value('compose_orb') == 'true' or bag:
             orb = ComposableNode(package='atd_orbslam3', plugin='atd_orbslam3::OrbslamNode', name='orbslam3_node',
                                  parameters=[params], extra_arguments=[{'use_intra_process_comms': True}])
+            components = [orb]
+            if bag:
+                components.append(stereo_bag_input(bag, value('replay_rate'), value('replay_player_name'),
+                    assets['workflow'], required_image_readers=1, publish_calibration=False))
             def stop_live_localization(_event, launch_context):
                 if not launch_context.is_shutdown:
                     return [Shutdown(reason='ORB-SLAM3 固定地図の自己位置推定が終了しました')]
             container = ComposableNodeContainer(name='atd_localization_container', namespace='',
                 package='rclcpp_components', executable='component_container', arguments=['--executor-type', 'multi-threaded'],
                 output='screen', composable_node_descriptions=[], on_exit=stop_live_localization)
-            return [container, RequiredOrbLoader(target_container=container, composable_node_descriptions=[orb])]
+            return [container, RequiredComponentLoader(target_container=container, composable_node_descriptions=components)]
         return [Node(package='atd_orbslam3', executable='orbslam3_node', name='orbslam3_node',
                      parameters=[params], output='screen',
                      on_exit=[Shutdown(reason='ORB-SLAM3 固定地図の自己位置推定が終了しました')])]
@@ -83,6 +91,10 @@ def setup(context):
         nodes.append(ComposableNode(package=package, plugin=plugin, name=name,
                                     parameters=[tracking['parameters'][kind]], remappings=tracking['remaps'][kind],
                                     extra_arguments=[{'use_intra_process_comms': True}]))
+    if bag:
+        nodes.append(stereo_bag_input(bag, value('replay_rate'), value('replay_player_name'), workflow,
+                                     imu_topic='/camera/camera/imu' if gazebo_imu_frequency else '',
+                                     trace_publications=value('trace_publications') == 'true'))
     # ROS launch parses scalar strings as YAML by default (IDs such as "001" must keep their type).
     monitor = {key: ParameterValue(assets[key], value_type=str) for key in ('map_id', 'map_sha256', 'hdmap_sha256')}
     monitor.update({key: ParameterValue(workflow[key], value_type=str) for key in (
@@ -108,6 +120,10 @@ def generate_launch_description():
         DeclareLaunchArgument('map_id'), DeclareLaunchArgument('results_root', default_value='/data/results'),
         DeclareLaunchArgument('engine_dir', default_value=''), DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('compose_orb', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('replay_bag', default_value=''),
+        DeclareLaunchArgument('replay_rate', default_value='1.0'),
+        DeclareLaunchArgument('replay_player_name', default_value='atd_validation_player'),
+        DeclareLaunchArgument('trace_publications', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('visualize_landmarks', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('gazebo_imu_frequency', default_value='', choices=['', '200', '400']),
         DeclareLaunchArgument('simulation_freshness', default_value='false', choices=['true', 'false']),

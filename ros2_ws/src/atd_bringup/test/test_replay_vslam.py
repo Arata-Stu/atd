@@ -16,54 +16,54 @@ class ReplaySessionTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        self.launch, self.rviz, self.player = [Mock() for _ in range(3)]
-        for child in (self.launch, self.rviz, self.player):
+        self.launch, self.rviz = Mock(), Mock()
+        for child in (self.launch, self.rviz):
             child.poll.side_effect = lambda c=child: c.returncode
             child.returncode = None
         self.spawn = self.stack.enter_context(patch.object(replay.subprocess, 'Popen',
-            side_effect=[self.launch, self.rviz, self.player]))
+            side_effect=[self.launch, self.rviz]))
+        self.source = self.stack.enter_context(patch.object(replay, 'TypedBagInput')).return_value
+        self.source.finished = False
+        self.source.counts.return_value = dict(left_published=20, right_published=20, imu_published=0)
         self.stop = self.stack.enter_context(patch.object(replay, 'stop'))
         self.ready = self.stack.enter_context(patch('atd_bringup.replay_readiness.wait_and_resume'))
-        self.tick = self.stack.enter_context(patch.object(replay.time, 'sleep'))
+        self.tick = self.source.spin
         self.output = self.stack.enter_context(redirect_stdout(StringIO()))
         self.config = Path(__file__).resolve().parents[1] / 'config/bag_vslam.rviz'
 
     def session(self, ground_truth=None, result=None, **options):
-        replay.run_session(Mock(), 'two words/run', 0.5, self.config, 'qos.yaml', ground_truth, result, **options)
+        replay.run_session(Mock(), 'two words/run', 0.5, self.config, ground_truth, result, **options)
 
     def test_eof_keeps_viewer_open_until_closed(self):
-        def resume(node, *, player_name, check_running, ground_truth, vio, rviz_name):
+        def resume(node, *, player_name, check_running, ground_truth, vio, rviz_name, bag_input):
             self.assertFalse(vio)
             self.assertFalse(ground_truth)
             self.assertEqual(rviz_name, '/rviz2')
             check_running()
-            cmd = self.spawn.call_args.args[0]
-            self.assertEqual(cmd[cmd.index('--remap') + 1], '__node:=' + player_name.lstrip('/'))
-            self.player.returncode = 0
+            self.assertIs(bag_input, self.source)
+            self.assertIn('player_name:=' + player_name.lstrip('/'), self.spawn.call_args_list[0].args[0])
+            self.source.finished = True
         self.ready.side_effect = resume
         self.tick.side_effect = lambda _: setattr(self.rviz, 'returncode', 0)
         self.session()
         self.assertIn('末尾に到達', self.output.getvalue())
-        launch, rviz, player = [call.args[0] for call in self.spawn.call_args_list]
-        self.assertEqual(launch[-2:], ['bag_vslam.launch.py', 'slam_max_map_size:=0'])
+        launch, rviz = [call.args[0] for call in self.spawn.call_args_list]
+        self.assertIn('bag_vslam.launch.py', launch)
+        self.assertIn('slam_max_map_size:=0', launch)
         self.assertIn(str(self.config), rviz)
         self.assertIn('use_sim_time:=true', rviz)
-        self.assertIn('two words/run', player)
-        for arg in ('--start-paused', '--disable-keyboard-controls', '--clock'):
-            self.assertIn(arg, player)
-        self.assertEqual(player[player.index('--rate') + 1], '0.5')
-        self.assertEqual(player[player.index('--qos-profile-overrides-path') + 1], 'qos.yaml')
-        self.assertEqual(player[player.index('--topics') + 1:], list(replay.STEREO_TOPICS))
+        self.assertIn('bag_path:=two words/run', launch)
+        self.assertIn('rate:=0.5', launch)
         self.assertEqual([c.args[0] for c in self.stop.call_args_list],
-                         [self.player, self.rviz, self.launch])
+                         [self.rviz, self.launch])
         displays = yaml.safe_load(self.config.read_text())['Visualization Manager']['Displays']
         self.assertEqual({d['Topic']['Value'] for d in displays if d['Enabled'] and 'Topic' in d},
                          {SLAM_ODOMETRY, '/visual_slam/vis/landmarks_cloud',
                           '/visual_slam/vis/loop_closure_cloud', '/atd/replay/ground_truth_path',
-                          '/atd/replay/position_error',
-                          '/camera/camera/infra1/image_rect_raw', '/camera/camera/infra2/image_rect_raw'})
+                          '/atd/replay/position_error'})
         eyes = [d['Topic'] for d in displays if d['Class'] == 'rviz_default_plugins/Image']
-        self.assertEqual(len(eyes), 2)
+        self.assertEqual({topic['Value'] for topic in eyes},
+                         {'/camera/camera/infra1/image_rect_raw', '/camera/camera/infra2/image_rect_raw'})
         for topic in eyes:
             self.assertEqual((topic['Reliability Policy'], topic['Durability Policy']), ('Best Effort', 'Volatile'))
         gt, = [d for d in displays if d['Class'] == 'rviz_default_plugins/Path']
@@ -82,15 +82,15 @@ class ReplaySessionTests(unittest.TestCase):
                          ('/atd/replay/position_error', 'Reliable', 'Transient Local'))
 
     def test_gazebo_replay_starts_overlay_before_resume_and_keeps_it_after_eof(self):
-        trace, result, spin = Mock(), Mock(), Mock()
+        trace, result, spin = Mock(), Mock(summary={}), Mock()
         observer = Mock(spin_once=spin)
         overlay = self.stack.enter_context(patch.object(replay, 'ground_truth_viewer', return_value=nullcontext(observer)))
 
-        def resume(node, *, player_name, check_running, ground_truth, vio, rviz_name):
+        def resume(node, *, player_name, check_running, ground_truth, vio, rviz_name, bag_input):
             check_running()
             self.assertTrue(ground_truth)
             overlay.assert_called_once_with(trace, result, visualize=True)
-            self.player.returncode = 0
+            self.source.finished = True
 
         def close(**_):
             result.mark_eof.assert_called_once()
@@ -105,14 +105,14 @@ class ReplaySessionTests(unittest.TestCase):
         self.assertEqual(spin.call_count, 2)
         observer.inspect_loop_graph.assert_called_once_with()
         self.assertEqual([c.args[0] for c in self.stop.call_args_list],
-                         [self.player, self.rviz, self.launch])
+                         [self.rviz, self.launch])
 
     def test_headless_reaches_eof_and_collects_delayed_odometry_without_rviz(self):
         self.config = None
-        self.spawn.side_effect = [self.launch, self.player]
-        self.ready.side_effect = lambda *args, **kwargs: setattr(self.player, 'returncode', 0)
+        self.spawn.side_effect = [self.launch]
+        self.ready.side_effect = lambda *args, **kwargs: setattr(self.source, 'finished', True)
         clock = [0.]
-        trace, result = Mock(), Mock(last_stamp=None)
+        trace, result = Mock(), Mock(last_stamp=None, summary={})
 
         def spin(timeout_sec):
             result.mark_eof.assert_not_called()
@@ -130,22 +130,23 @@ class ReplaySessionTests(unittest.TestCase):
         self.assertTrue(self.ready.call_args.kwargs['ground_truth'])
         self.assertIsNone(self.ready.call_args.kwargs['rviz_name'])
         overlay.assert_called_once_with(trace, result, visualize=False)
-        self.assertEqual([call.args[0][0] for call in self.spawn.call_args_list], ['ros2', 'ros2'])
-        self.assertEqual([call.args[0] for call in self.stop.call_args_list], [self.player, self.launch])
+        self.assertEqual([call.args[0][0] for call in self.spawn.call_args_list], ['ros2'])
+        self.assertEqual([call.args[0] for call in self.stop.call_args_list], [self.launch])
+        self.assertEqual(result.summary['sensor_input_counts']['left_published'], 20)
         result.mark_eof.assert_called_once_with()
         observer.inspect_loop_graph.assert_called_once_with()
 
     def test_headless_empty_comparison_is_a_failure(self):
         self.config = None
-        self.spawn.side_effect = [self.launch, self.player]
-        self.player.returncode = 0
-        result = Mock(last_stamp=None)
+        self.spawn.side_effect = [self.launch]
+        self.source.finished = True
+        result = Mock(last_stamp=None, summary={})
         with patch.object(replay.time, 'monotonic', side_effect=[0., 0., 2.]), patch.object(
                 replay, 'ground_truth_viewer', return_value=nullcontext(Mock())):
             with self.assertRaisesRegex(RuntimeError, '0 件'):
                 self.session(Mock(), result)
         result.mark_eof.assert_not_called()
-        self.assertEqual(self.stop.call_count, 2)
+        self.assertEqual(self.stop.call_count, 1)
 
     def test_bag_without_ground_truth_only_subscribes_to_its_estimate_and_sensors(self):
         with TemporaryDirectory() as directory:
@@ -162,7 +163,7 @@ class ReplaySessionTests(unittest.TestCase):
         self.session(slam_max_map_size=300)
         self.assertIn('slam_max_map_size:=300', self.spawn.call_args_list[0].args[0])
         self.assertNotIn('bag を再生しています', self.output.getvalue())
-        self.assertEqual(self.stop.call_count, 3)
+        self.assertEqual(self.stop.call_count, 2)
 
     def test_cli_accepts_reproducible_limits_and_rejects_out_of_range_values_before_selecting_bag(self):
         with patch.object(replay, 'select_bag', return_value='bag') as select, patch.object(replay, 'run') as run:
@@ -181,11 +182,10 @@ class ReplaySessionTests(unittest.TestCase):
         self.ready.side_effect = KeyboardInterrupt()
         with self.assertRaises(KeyboardInterrupt):
             self.session(imu=ImuProfile('camera_gyro_optical_frame', 400.0))
-        launch, _, player = [call.args[0] for call in self.spawn.call_args_list]
+        launch, _ = [call.args[0] for call in self.spawn.call_args_list]
         self.assertIn('imu_frequency:=400.0', launch)
         self.assertIn('tracking_mode:=1', launch)
         self.assertIn('imu_frame:=camera_gyro_optical_frame', launch)
-        self.assertEqual(player[player.index('--topics') + 1:], [*replay.STEREO_TOPICS, replay.IMU_TOPIC])
         self.assertTrue(self.ready.call_args.kwargs['vio'])
 
     def test_gyro_bridge_sends_gyro_to_replay_without_switching_orb_to_vio(self):
@@ -250,17 +250,24 @@ class ReplaySessionTests(unittest.TestCase):
         self.assertEqual(self.output.getvalue().count('last frame'), 1)
 
     def test_playback_failure_after_resume_is_reported(self):
-        self.player.returncode = 2
-        with self.assertRaisesRegex(RuntimeError, 'rosbag2.*exit 2'):
+        self.source.spin.side_effect = RuntimeError('bag 再生に失敗')
+        with self.assertRaisesRegex(RuntimeError, 'bag 再生に失敗'):
             self.session()
-        self.assertEqual(self.stop.call_count, 3)
+        self.assertEqual(self.stop.call_count, 2)
+
+    def test_failed_ipc_gate_does_not_label_the_run_as_intra_process(self):
+        result = Mock(summary={})
+        self.ready.side_effect = TimeoutError('intra-process reader')
+        with self.assertRaises(TimeoutError):
+            self.session(result=result)
+        self.assertNotIn('sensor_input_transport', result.summary)
 
     def test_mapper_exits_during_startup(self):
         self.launch.returncode = 1
         self.ready.side_effect = lambda node, **kwargs: kwargs['check_running']()
         with self.assertRaisesRegex(RuntimeError, 'cuVSLAM'):
             self.session()
-        self.assertEqual(self.stop.call_count, 3)
+        self.assertEqual(self.stop.call_count, 2)
 
     def test_partial_start_reaps_the_children_that_started(self):
         self.spawn.side_effect = [self.launch, FileNotFoundError('rviz2')]
@@ -272,4 +279,4 @@ class ReplaySessionTests(unittest.TestCase):
         self.ready.side_effect = KeyboardInterrupt()
         with self.assertRaises(KeyboardInterrupt):
             self.session()
-        self.assertEqual(self.stop.call_count, 3)
+        self.assertEqual(self.stop.call_count, 2)

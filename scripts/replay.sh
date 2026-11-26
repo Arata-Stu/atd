@@ -38,7 +38,8 @@ RViz では cuVSLAM の直近の推定姿勢を橙の矢印で表示します。
 --headless は RViz を開かずに Gazebo の正解軌跡との誤差を保存し、再生の末尾で終了します。
 --slam-max-map-size は SLAM 地図の姿勢数上限です。既定の 0 は無制限で、300 を指定すると従来の条件で比較できます。
 通常の再生には ROS domain 75（ATD_REPLAY_ROS_DOMAIN_ID で変更可能）、--validate-map の固定地図検証には 95（--domain で変更可能）を使います。
-bag 再生の DDS は loopback UDP。以前の Gazebo bag の計測条件を再現する場合は ATD_REPLAY_DDS=shm を指定します。
+固定地図ベンチマークは画像を追跡ノードと同じプロセス内で渡します。通常の実行に通信設定の指定は不要です。
+別プロセスの時刻・TF・診断などには loopback UDP を使います。ATD_REPLAY_DDS=shm はプロセス間 DDS の比較用です。
 ホストから使う場合は、先に atd dev で開発コンテナを起動してください。
 EOF
             exit 0 ;;

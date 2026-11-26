@@ -20,4 +20,4 @@ def select_replay_dds():
         raise ValueError(f'再生用 Fast DDS 設定がありません: {path}')
     # LOCALHOST を指定すると rmw_fastrtps が XML の transport に別の SHM/UDP を追加する。
     os.environ.update(FASTDDS_DEFAULT_PROFILES_FILE=str(path), ROS_AUTOMATIC_DISCOVERY_RANGE='SYSTEM_DEFAULT')
-    print(f'再生 DDS: {label} ({path})', flush=True)
+    print(f'別プロセス間の DDS 設定: {label} ({path})', flush=True)

@@ -1,7 +1,75 @@
 """rosbag2 再生の接続・QoS・一時停止状態を検証する。"""
+import json
 import os
 import shlex
 from time import monotonic
+
+
+class TypedBagInput:
+    """型付き bag 配信元のプロセス内接続と再生完了を監視する。"""
+
+    def __init__(self, node, *, source='/atd_sensor_bag_input'):
+        from rclpy.qos import DurabilityPolicy, QoSProfile
+        from std_msgs.msg import Bool
+        from std_srvs.srv import Trigger
+
+        self.node = node
+        self.source = source
+        self._complete = None
+        self._connections = node.create_client(Trigger, source + '/connections')
+        self._end = node.create_subscription(
+            Bool, source + '/finished', self._set_finished,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+
+    def _set_finished(self, message):
+        self._complete = message.data
+
+    @property
+    def finished(self):
+        if self._complete is False:
+            raise RuntimeError(f'{self.source} の bag 再生に失敗しました。配信元の起動ログを確認してください')
+        return self._complete is True
+
+    def wait_for_connections(self, check_running, timeout):
+        return self._measure(check_running, timeout, require_readers=True)
+
+    def counts(self, check_running, timeout):
+        return self._measure(check_running, timeout, require_readers=False)
+
+    def _measure(self, check_running, timeout, *, require_readers):
+        import rclpy
+        from std_srvs.srv import Trigger
+
+        deadline = monotonic() + timeout
+        detail = self.source + '/connections'
+
+        def poll():
+            if check_running is not None:
+                check_running()
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f'bag 配信元のプロセス内接続を確認できません: {detail}')
+            rclpy.spin_once(self.node, timeout_sec=min(.1, remaining))
+
+        while not self._connections.service_is_ready():
+            poll()
+        while True:
+            future = self._connections.call_async(Trigger.Request())
+            while not future.done():
+                poll()
+            reply = future.result()
+            if reply.success or not require_readers:
+                return json.loads(reply.message)
+            detail = reply.message
+            poll()
+
+    def close(self):
+        self.node.destroy_subscription(self._end)
+        self.node.destroy_client(self._connections)
+
+    def spin(self, timeout):
+        import rclpy
+        rclpy.spin_once(self.node, timeout_sec=timeout)
 
 
 def _name(name, namespace):

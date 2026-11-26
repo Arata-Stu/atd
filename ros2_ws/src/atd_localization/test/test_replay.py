@@ -129,16 +129,18 @@ def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, stat
     monkeypatch.setattr(replay, 'inspect_inputs', lambda *args: (['/left', '/right', '/left_info', '/right_info', '/tf_static'], .5, window))
     def fake_ros(args, resolved, replay_bag, topics, duration, report, output):
         assert resolved == meta and replay_bag == records / 'b/run'
-        launch = replay.launch_command(args.results_root, args.map_id, args.engine_dir)
+        launch = replay.launch_command(args.results_root, args.map_id, args.engine_dir, replay_bag, args.rate, 'player')
         assert launch[1:4] == ['launch','atd_localization','localization.launch.py'] and 'use_sim_time:=true' in launch
-        play = replay.play_command(replay_bag, topics, '/tmp/qos', args.rate)
-        assert '--clock' in play and play[play.index('--topics')+1:] == topics
+        assert {'replay_bag:=' + str(replay_bag), 'replay_rate:=1.0', 'replay_player_name:=player',
+                'compose_orb:=true'} <= set(launch)
         assert not {'/tf','/localization/status','/vehicle/command','/clock'} & set(topics)
         if status == 'error':
             raise ValueError('launch failed')
         report.observe('run', 0, status, '', 10**9, [0., .2] if status == 'tracking' else None)
         if status == 'tracking':
             report.observe('run', 0, status, '', 15*10**8, [1., .2])
+        return dict(sensor_input_transport='ros2_intra_process', bag_input=dict(
+            before_replay=dict(left_intra_readers=2, right_intra_readers=2)))
     monkeypatch.setattr(replay, 'run_ros', fake_ros)
     run_id = 'a' * 32
     args = ['--map', 'course', '--bag', 'b/run', '--run-id', run_id,
@@ -149,7 +151,11 @@ def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, stat
     result = json.loads(path.read_text())
     assert (path.parent / 'hdmap.json').read_bytes() == hdmap.read_bytes()
     assert result['outcome'] == {'tracking':'tracked_to_end','lost':'no_tracking','error':'failed'}[status]
-    assert result['sensor_input_transport'] == 'ros2_inter_process'
+    if status == 'error':
+        assert 'sensor_input_transport' not in result
+    else:
+        assert result['sensor_input_transport'] == 'ros2_intra_process'
+        assert result['bag_input']['before_replay']['left_intra_readers'] == 2
     assert result['tracking'] == 'vo'
     assert result['bag'] == 'b/run' and result['source_metadata_sha256'] == source_hash
     assert replay.main(args) == 1
@@ -243,10 +249,7 @@ def test_orb_startup_publishes_one_shot_calibration_before_ready_and_play(monkey
         publisher.publish.assert_called_once_with(message)
 
 
-def test_orb_validation_uses_only_dynamic_images_in_the_paused_player():
-    command = replay.play_command('/bag', ['/infra1', '/infra2'], '/qos', .5, paused_player='orb_player')
-    assert '--start-paused' in command and '__node:=orb_player' in command
-    assert command[command.index('--topics')+1:] == ['/infra1', '/infra2']
+def test_orb_validation_uses_left_observation_timestamp():
     window = stereo_window([10, 20, 30], [11, 21, 31], 1, left_stamp=True)
     assert (window['first_stamp_ns'], window['last_stamp_ns']) == (10, 30)
 
@@ -262,6 +265,8 @@ def test_fixed_map_paused_player_waits_for_slam_vgl_and_monitor_on_remapped_topi
     def endpoint(name, topic, qos=True):
         return SimpleNamespace(node_name=name, node_namespace='/', topic_type=topic_types[topic], qos_profile=qos)
     pubs = {t: [endpoint('player', t)] for t in topic_types}
+    for topic in ('/l', '/r', '/li', '/ri'):
+        pubs[topic] = [endpoint('atd_sensor_bag_input', topic)]
     pubs['/tf_static'].append(endpoint('visual_slam', '/tf_static'))
     subs = {t: [endpoint(n, t) for n in ('visual_slam', 'visual_global_localization', 'atd_localization_monitor')]
             for t in topic_types}
@@ -281,3 +286,6 @@ def test_fixed_map_paused_player_waits_for_slam_vgl_and_monitor_on_remapped_topi
     for topic in ('/clock', '/l', '/r'):
         subs[topic] = [endpoint('orbslam3_node', topic)]
     assert not replay.validation_connections(node, '/player', workflow, orb=True)
+    pubs['/l'].append(endpoint('separate_bag_player', '/l'))
+    with pytest.raises(RuntimeError, match='競合'):
+        replay.validation_connections(node, '/player', workflow, orb=True)

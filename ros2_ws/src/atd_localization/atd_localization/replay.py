@@ -23,10 +23,11 @@ from atd_mapping.replay_dds import select_replay_dds
 from .replay_dds import replay_dds_profile
 from .replay_inputs import independent_bag, inspect_inputs
 from .replay_report import TrackingReport
-from .replay_player import _check_publishers, _connection_issues, _endpoints, resume_when_connected
+from .replay_player import TypedBagInput, _check_publishers, _connection_issues, _endpoints, resume_when_connected
 
 STATUS = '/localization/status'
 DOMAIN = 95
+SENSOR_INPUT = '/atd_sensor_bag_input'
 
 
 def choose(label, choices):
@@ -49,40 +50,38 @@ def choose(label, choices):
     return choices[int(answer) - 1]
 
 
-def launch_command(results, map_id, engine):
+def launch_command(results, map_id, engine, bag, rate, player_name, *, trace_publications=False):
     args = ['ros2', 'launch', 'atd_localization', 'localization.launch.py',
-            'map_id:=' + map_id, 'results_root:=' + str(results), 'use_sim_time:=true']
+            'map_id:=' + map_id, 'results_root:=' + str(results), 'use_sim_time:=true',
+            'replay_bag:=' + str(bag), 'replay_rate:=' + str(rate), 'replay_player_name:=' + player_name,
+            'compose_orb:=true']
     if engine:
         args.append('engine_dir:=' + engine)
+    if trace_publications:
+        args.append('trace_publications:=true')
     return args
 
 
-def play_command(bag, topics, qos, rate, *, paused_player=None):
-    return ['ros2', 'bag', 'play', str(bag), '--clock', '--rate', str(rate),
-            '--qos-profile-overrides-path', str(qos),
-            *(['--start-paused', '--disable-keyboard-controls', '--remap', f'__node:={paused_player}'] if paused_player else []),
-            '--topics', *topics]
-
-
-def validation_connections(node, player_name, workflow, *, orb, observe_images=False):
+def validation_connections(node, player_name, workflow, *, orb):
     """停止中の bag と実際に追跡・再定位を行う購読先の型・QoS を確認する。"""
     cameras = ['/orbslam3_node'] if orb else ['/visual_slam', '/visual_global_localization']
     clocks = cameras if orb else [*cameras, '/atd_localization_monitor']
-    readers = [*cameras, node.get_fully_qualified_name()] if observe_images else cameras
-    links = [(workflow[side + '_image'], 'sensor_msgs/msg/Image', readers) for side in ('left', 'right')]
+    links = [(workflow[side + '_image'], 'sensor_msgs/msg/Image', SENSOR_INPUT, cameras)
+             for side in ('left', 'right')]
     if not orb:
         # These component names and remapped CameraInfo inputs are shared with localization.launch.py.
-        links += [(workflow[side + '_info'], 'sensor_msgs/msg/CameraInfo', clocks) for side in ('left', 'right')]
+        links += [(workflow[side + '_info'], 'sensor_msgs/msg/CameraInfo', SENSOR_INPUT, clocks)
+                  for side in ('left', 'right')]
         # tf2 can create its own listener node; validate the actual typed reader in this isolated domain.
-        links.append((workflow['tf_static'], 'tf2_msgs/msg/TFMessage', [None]))
-    links.append(('/clock', 'rosgraph_msgs/msg/Clock', clocks))
+        links.append((workflow['tf_static'], 'tf2_msgs/msg/TFMessage', player_name, [None]))
+    links.append(('/clock', 'rosgraph_msgs/msg/Clock', player_name, clocks))
     issues = []
-    for topic, kind, consumers in links:
-        pubs = _check_publishers(node, topic, kind, player_name, issues)
+    for topic, kind, producer, consumers in links:
+        pubs = _check_publishers(node, topic, kind, producer, issues)
         readers = node.get_subscriptions_info_by_topic(topic)
         for consumer in consumers:
             subs = _endpoints(readers, kind, consumer)
-            issues.extend(_connection_issues(topic, pubs, subs, player_name, consumer or 'TF listener'))
+            issues.extend(_connection_issues(topic, pubs, subs, producer, consumer or 'TF listener'))
     return issues
 
 
@@ -90,7 +89,9 @@ def trace_connections(node):
     """画像の処理時間を配信するノードと診断用の購読先を開始前に確認する。"""
     missing = []
     observer = node.get_fully_qualified_name()
-    links = [('/visual_slam/status', 'isaac_ros_visual_slam_interfaces/msg/VisualSlamStatus',
+    links = [(SENSOR_INPUT + '/' + side + '_published', 'std_msgs/msg/Header', SENSOR_INPUT, [observer])
+             for side in ('left', 'right')]
+    links += [('/visual_slam/status', 'isaac_ros_visual_slam_interfaces/msg/VisualSlamStatus',
               '/visual_slam', [observer]),
              ('/visual_slam/tracking/odometry', 'nav_msgs/msg/Odometry', '/visual_slam', [observer]),
              ('/localization/pose_hint', 'geometry_msgs/msg/PoseWithCovarianceStamped', '/visual_global_localization',
@@ -106,7 +107,6 @@ def trace_connections(node):
 
 def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
     import rclpy
-    from ament_index_python.packages import get_package_share_directory
     from atd_interfaces.msg import LocalizationStatus
     from rclpy.signals import SignalHandlerOptions
 
@@ -146,20 +146,28 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
 
         node.create_subscription(LocalizationStatus, STATUS, observe, 20)
         if trace is not None:
-            trace.subscribe(node, meta['workflow'])
+            trace.subscribe(node, SENSOR_INPUT)
         orb = meta.get('backend') == 'orbslam3'
+        sensor = TypedBagInput(node, source=SENSOR_INPUT)
+        stack.callback(sensor.close)
+        cu_frames = set()
         if not orb:
             from isaac_ros_visual_slam_interfaces.srv import LocalizeInMap
             client = node.create_client(LocalizeInMap, '/visual_slam/localize_in_map')
+            if trace is None:
+                from isaac_ros_visual_slam_interfaces.msg import VisualSlamStatus
+                from rclpy.qos import qos_profile_sensor_data
+                node.create_subscription(VisualSlamStatus, '/visual_slam/status',
+                    lambda msg: cu_frames.add(stamp_ns(msg.header.stamp)), qos_profile_sensor_data)
         start = time.monotonic()
         while time.monotonic() - start < 1.:
             rclpy.spin_once(node, timeout_sec=.1)
         feedback = [STATUS, *(['/orbslam3/ready', '/orbslam3/processed'] if orb else [])]
         if any(node.count_publishers(t) for t in [*topics, *feedback, '/tf', '/clock']):
             raise ValueError('検証 domain に既存の sensor/TF/clock/localization publisher があります')
-        playback_topics = topics
         paused_player = f'atd_validation_{os.getpid()}'
         bootstrap = None
+        processed_stamp = None
         if orb:
             from .orb_replay import OrbBootstrap, recorded_calibration
             from rclpy.qos import QoSProfile, DurabilityPolicy
@@ -167,15 +175,14 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
 
             calibration, _ = recorded_calibration(bag)
             bootstrap = OrbBootstrap(node, calibration)
-            playback_topics = [topic for topic in topics if topic not in bootstrap.topics]
-            processed_stamp = None
 
             def processed(msg):
                 nonlocal processed_stamp
                 processed_stamp = stamp_ns(msg.stamp)
             node.create_subscription(Header, '/orbslam3/processed', processed,
                                      QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-        command = launch_command(args.results_root, args.map_id, args.engine_dir)
+        command = launch_command(args.results_root, args.map_id, args.engine_dir, bag, args.rate, paused_player,
+                                 trace_publications=trace is not None)
         launch = subprocess.Popen(command, start_new_session=True)
         stack.callback(stop, launch)
         deadline = time.monotonic() + args.ready_timeout
@@ -191,29 +198,30 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
         else:
             raise ValueError('保存地図の自己位置推定ノードの準備がタイムアウトしました')
         identity = publisher_signature(node, feedback)
-        qos = Path(get_package_share_directory('atd_mapping')) / 'config/replay_qos.yaml'
-        player = subprocess.Popen(play_command(bag, playback_topics, qos, args.rate, paused_player=paused_player),
-                                  start_new_session=True)
-        stack.callback(stop, player)
-        def check_children():
-            if launch.poll() is not None or player.poll() is not None:
-                raise ValueError('自己位置推定または bag player が再生開始前に終了しました')
+        def check_launch():
+            if launch.poll() is not None:
+                raise ValueError('自己位置推定または bag 入力の component container が終了しました')
 
         def missing():
-            issues = validation_connections(node, '/' + paused_player, meta['workflow'], orb=orb,
-                                            observe_images=trace is not None)
+            issues = validation_connections(node, '/' + paused_player, meta['workflow'], orb=orb)
             if trace is not None:
                 issues.extend(trace_connections(node))
             return issues
 
-        initialize = (lambda: bootstrap.wait(check_children, args.ready_timeout)) if bootstrap else None
-        resume_when_connected(node, paused_player, args.ready_timeout, missing, check_children, initialize)
+        initial_connections = {}
+
+        def initialize():
+            initial_connections.update(sensor.wait_for_connections(check_launch, args.ready_timeout))
+            if bootstrap:
+                bootstrap.wait(check_launch, args.ready_timeout)
+
+        resume_when_connected(node, paused_player, args.ready_timeout, missing, check_launch, initialize)
         deadline = time.monotonic() + duration / args.rate * 2 + args.ready_timeout
         next_check = time.monotonic()
         checked = [*topics, '/clock']
         if not orb:
             checked.remove(meta['workflow']['tf_static'])
-        while player.poll() is None:
+        while not sensor.finished:
             rclpy.spin_once(node, timeout_sec=.05)
             if launch.poll() is not None or time.monotonic() > deadline:
                 raise ValueError('再生中に自己位置推定が終了、またはタイムアウトしました')
@@ -224,15 +232,19 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
                 if publisher_signature(node, feedback) != identity or any(node.count_publishers(t) > 1 for t in checked):
                     raise ValueError('再生中に入力または自己位置 publisher が変わりました')
                 next_check = time.monotonic() + 1.
-        if player.returncode:
-            raise ValueError(f'rosbag 再生が失敗しました（exit {player.returncode}）')
         deadline = time.monotonic() + args.drain_timeout
         def still_draining():
+            # cuVSLAM may stamp either side of the last validated (<= 5 ms) stereo pair.
+            end = report.stereo['last_stamp_ns']
             if trace is not None:
-                # tail_tracked can already be true half a second before the final image.
-                # Drain independent DDS queues through the full observation deadline.
-                return True
-            return (processed_stamp != report.stereo['last_stamp_ns'] if orb else not report.summary()['tail_tracked'])
+                # End once the actual final input, processed frame and map pose have arrived.
+                # After EOF the live monitor's freshness watchdog will correctly report stale.
+                return not (trace.observed_tail(report.stereo) and report.last_unique_pose
+                            and report.last_unique_pose[1] >= end - 5_000_000)
+            if orb:
+                return processed_stamp != end
+            return not (report.last_unique_pose and report.last_unique_pose[1] >= end - 5_000_000
+                        and cu_frames and max(cu_frames) >= end - 5_000_000)
 
         while time.monotonic() < deadline and still_draining():
             rclpy.spin_once(node, timeout_sec=.05)
@@ -249,6 +261,20 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
             raise ValueError('検証完了前に自己位置推定が終了・再起動しました')
         if not report.session_id:
             raise ValueError('状態ノードから検証結果を受信できませんでした')
+        counts = sensor.counts(check_launch, args.ready_timeout)
+        for side in ('left', 'right'):
+            if counts[side + '_published'] != report.stereo[side + '_images']:
+                raise ValueError(f'bag の {side} 画像の発行数が記録と一致しません: '
+                                 f'{counts[side + "_published"]} / {report.stereo[side + "_images"]}')
+        print(f'型付き bag 入力: 発行 左 {counts["left_published"]} / 右 {counts["right_published"]} 枚、'
+              f'再生開始時のプロセス内購読 左 {initial_connections["left_intra_readers"]} / '
+              f'右 {initial_connections["right_intra_readers"]}', flush=True)
+        evidence = dict(sensor_input_transport='ros2_intra_process', bag_input=dict(
+            before_replay=initial_connections, after_replay=counts))
+        if not orb and trace is None:
+            evidence['processed_frames_observed'] = len(cu_frames)
+            print(f'cuVSLAM の処理完了通知 {len(cu_frames)} 時刻', flush=True)
+        return evidence
 
 
 def main(argv=None):
@@ -264,7 +290,7 @@ def main(argv=None):
     parser.add_argument('--ready-timeout', type=float, default=120., help='起動準備待ち秒')
     parser.add_argument('--drain-timeout', type=float, default=8., help='最終入力の処理待ち秒')
     parser.add_argument('--diagnose-frame-gaps', action='store_true',
-                        help='cuVSLAM の画像到達と処理完了、地図照合の時刻を同じ再生で記録する')
+                        help='型付き画像の発行通知・cuVSLAM 処理完了・地図照合の時刻を記録する')
     args = parser.parse_args(argv)
     if not 1 <= args.domain <= 101 or args.domain in (93, 94) or not .05 <= args.rate <= 4:
         parser.error('domain は 1〜101（地図作成用93・94を除く）、rate は0.05〜4です')
@@ -303,14 +329,13 @@ def main(argv=None):
                       map_id=args.map_id, map_sha256=meta['map_sha256'],
                       hdmap_sha256=meta['hdmap_sha256'], source_bag=meta['source_bag'],
                       source_metadata_sha256=meta['source_metadata_sha256'], bag=args.bag, metadata_sha256=digest,
-                      frame='map', body_frame='base_link', tracking='vo', replay_rate=args.rate, ros_domain_id=args.domain,
-                      sensor_input_transport='ros2_inter_process')
+                      frame='map', body_frame='base_link', tracking='vo', replay_rate=args.rate, ros_domain_id=args.domain)
         result['dds_profile'] = replay_dds_profile()
         save_validation_hdmap(args.results_root, meta, output)
         recorded_stamps = {}
         if args.diagnose_frame_gaps:
             from .replay_frame_trace import FrameTrace, print_frame_summary
-            result.update(schema='atd.cuvslam.frame_diagnosis.v1')
+            result.update(schema='atd.cuvslam.frame_diagnosis.v2')
             topics, duration, stereo = inspect_inputs(bag, meta, recorded_stamps=recorded_stamps)
         else:
             topics, duration, stereo = inspect_inputs(bag, meta)
@@ -319,13 +344,14 @@ def main(argv=None):
         if args.diagnose_frame_gaps:
             trace = FrameTrace()
             try:
-                run_ros(args, meta, bag, topics, duration, report, output, trace=trace)
+                result.update(run_ros(args, meta, bag, topics, duration, report, output, trace=trace))
             finally:
                 measured = trace.write(output, recorded_stamps)
                 result['frame_trace'] = 'frame_trace.json'
+                result['processed_frames_observed'] = measured['processed_frames']
             print_frame_summary(measured)
         else:
-            run_ros(args, meta, bag, topics, duration, report, output)
+            result.update(run_ros(args, meta, bag, topics, duration, report, output))
         result.update(report.summary(), trajectory='trajectory.csv')
         print(f"{result['outcome']}  追跡時間率 {result['tracking_time_fraction']:.1%}  "
               f"有効姿勢 {result['pose_samples']} 件", flush=True)

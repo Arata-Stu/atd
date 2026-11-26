@@ -129,7 +129,11 @@ atd replay "$TEST_BAG" --backend orbslam3 --map odaiba_s1_orb --tracking vio --g
 2. **ORB ステレオ**は保存した Atlas と画像を照合し、地図上で確認できた姿勢を出す。
 3. **ORB ステレオ＋IMU** は ORB-SLAM3 の `IMU_STEREO` で `odom → base_link` を推定する。同じ画像から抽出した特徴とステレオ対応を固定地図のトラッカーでも使う。複数画像で確認した地図姿勢と同じ撮影時刻の VIO 姿勢から `map → odom` を更新する。次の地図照合までは、この変換で VIO の出力を地図座標に写す。VIO を失った場合や新しいサブマップに切り替わった場合は、再び地図照合が確定するまで地図姿勢の出力を止める。
 
-ORB の2方式とも rosbag2 Player と追跡ノードを同じプロセスで動かす。3番目では画像の DDS 再配信や特徴の二重抽出を要しない。cuVSLAM baseline の地図検証は従来どおり別プロセスの Player を使う。結果の `dds_profiles` と `sensor_input_transports` で入力条件を確認できる。
+3方式とも bag の型付き画像を追跡ノードと同じプロセスのメモリ内で渡す。cuVSLAM の検証では、bag 入力・cuVSLAM・cuVGL を同じ component container にロードし、左右それぞれでプロセス内の購読接続を確認してから再生する。既存の ORB 対応コンテナでは `atd-build --packages-up-to atd_bringup` で再生処理を更新できる。
+
+比較時の cuVSLAM は GPU を使い、ORB の2方式は現在の CPU 実装を使う。cuVSLAM のオドメトリが GPU を有効にしたことは、カメラ入力後の `[visual_slam]: Use use_gpu: true` で確認できる。Jetson でも同じログを確認し、処理速度は実機で計測する。ORB の GPU 高速化は採用決定後に行う。
+
+cuVSLAM の `report.json` では、`bag_input.before_replay` に左右のプロセス内購読者数、`bag_input.after_replay` に左右の発行枚数、`processed_frames_observed` に追跡ノードの処理完了を観測した時刻数が残る。3方式の比較結果では `sensor_input_transports` で画像の経路を確認できる。`dds_profiles` は、別プロセスへ渡す時刻・TF・診断などに使う DDS 設定を示す。通常の比較では実車と同じループバック UDP のまま実行する。
 
 各実行が表示した run ID を入力する。cuVSLAM には `runs/localization/`、ORB の2方式には `runs/orbslam3/` の ID を使う。
 
@@ -146,13 +150,13 @@ VIO の `summary.json` には `local_vio_samples`（慣性初期化後のロー�
 
 macOS のネイティブ ROS 2 で、地図作成とは別の合成走行を 0.25 倍速で再生した。ステレオ 1,260 対と IMU 5,605 件をプロセス内で受け取り、全対を処理した。慣性初期化後のローカル姿勢は 939 件、地図補正は 413 件、地図上の姿勢は 937 件。地図を外れて戻る区間では、新しい照合が途切れた 5.81 秒間にも 524 件を出力し、再び地図上で照合できた。937 件すべてで同時刻の TF を合成した姿勢と出力が一致した（変換行列の要素の最大絶対差 8.9×10⁻¹⁶）。Atlas・HDMap を含む地図資産のハッシュは実行前後で一致した。お台場の3方式比較は Linux Notebook で計測する。
 
-cuVSLAM の処理フレームが飛んだときは、同じ地図・bag・倍率で画像到達と追跡処理を記録する。追加の画像購読を伴う診断は、通常のベンチマークと別に `runs/cuvslam_frame_gaps/<run>/` に保存する。
+cuVSLAM の処理フレームが飛んだときは、同じ地図・bag・倍率で画像の発行と追跡処理を記録する。診断時だけ、bag 入力は画像を発行するたびに同じ撮影時刻を小さなメッセージで通知する。画像本体の購読者は通常の検証と同じ。診断結果は `runs/cuvslam_frame_gaps/<run>/` に保存する。
 
 ```bash
 atd replay --validate-map odaiba_s1_cu --bag "$TEST_BAG" --rate 1 --diagnose-frame-gaps
 ```
 
-`frame_trace.json` の `largest_processed_gap` は cuVSLAM の処理完了ステータスを受信した画像時刻の最大間隔。区間内で bag に記録されたペア数、独立した DDS 購読者に届いたペア数、区間両端のコールバック時間・VO 計算時間、その前後の地図照合は `frame_trace.csv` と突き合わせられる。独立購読者と cuVSLAM はそれぞれ自身の受信キューを持つ。
+`frame_trace.json` の `largest_processed_gap` は cuVSLAM の処理完了ステータスを受信した画像時刻の最大間隔。区間内で bag に記録されたペア数、発行通知を左右とも観測できたペア数、区間両端のコールバック時間・VO 計算時間、その前後の地図照合は `frame_trace.csv` と突き合わせられる。発行通知の件数と cuVSLAM 自身の処理完了件数を区別する。
 
 お台場 3 m/s・1周の同一 bag を等速で検証した際、直接起動した `validate_bag` に通常のループバック UDP の XML を指定した run では追跡時間率 0.2%・有効姿勢7件だった。ORB 再生と同じ共有メモリ＋UDP の XML を指定して cuVSLAM を再実行すると 98.7%・2,594件で、0.25秒を超えた姿勢間隔は0回。地図は両方とも `odaiba_s1_cu` で、収録済みステレオペアの最大間隔は11.11 ms。この比較の cuVSLAM run は順に `0bc147f187b4463e8fb19c4524f9eb1a` と `20261126T120637Z-4c46210bee6c`。このときの検証入口は ROS の探索範囲を `LOCALHOST` に上書きしていた。既存ログから DDS が各画像を実際にどの transport に渡したかは分からない。
 

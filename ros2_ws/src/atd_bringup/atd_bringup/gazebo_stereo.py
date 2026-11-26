@@ -11,7 +11,7 @@ def sensor_ingress(sim_time):
     )
 
 
-def stereo_container(sim_time, *, live_sensors=False, mapping=False, visualize_landmarks=False, slam_max_map_size=0,
+def stereo_container(sim_time, *, live_sensors=False, bag_input=None, mapping=False, visualize_landmarks=False, slam_max_map_size=0,
                      tracking_mode=0, imu_frame='camera_gyro_optical_frame', imu_frequency=200.0):
     mapping_params = {'slam_max_map_size': slam_max_map_size} if mapping else {}
     if visualize_landmarks:
@@ -40,9 +40,14 @@ def stereo_container(sim_time, *, live_sensors=False, mapping=False, visualize_l
         ],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
+    components = [tracker]
+    if live_sensors:
+        components.append(sensor_ingress(sim_time))
+    if bag_input is not None:
+        components.append(bag_input)
     return ComposableNodeContainer(
         name='atd_gazebo_container', namespace='', package='rclcpp_components',
         executable='component_container_mt', output='screen', parameters=[{'use_sim_time': sim_time}],
-        composable_node_descriptions=[tracker, sensor_ingress(sim_time)] if live_sensors else [tracker],
+        composable_node_descriptions=components,
         on_exit=[Shutdown(reason='Gazebo 用ステレオ追跡が終了しました')],
     )

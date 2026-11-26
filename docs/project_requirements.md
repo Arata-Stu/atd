@@ -58,6 +58,7 @@
 - ROS package のビルドは `scripts/build.sh` / コンテナ内の `atd-build` に分離する。`scripts/tools/python.sh` / `atd-python` は用途別 Python 環境の sync・check・shell・run を扱い、colcon のビルド処理を持たせない。
 - 実機・Gazebo・bag replay に共通して、センサー取得から処理結果までのメモリコピーを最小限にする。画像・深度・IMU の ROS 側の配信元と処理ノードは同一プロセスに配置し、composable node、component container、型付きの ROS 2 intra-process 通信を使う。Gazebo と ROS のプロセス境界ではセンサー用共有メモリを使う。
 - GPU 処理が連続する区間は、対応する CUDA バッファを次段まで引き継ぐ。画像の形式変換、シリアライズ、CPU・GPU 間転送、可視化・記録用の追加購読でコピーがどこに生じるかを確認する。性能比較では実際のセンサー入力経路と受信件数を記録する。
+- 本番の cuVSLAM は Jetson Orin Nano の GPU を使う。ORB-SLAM3 のステレオ・Stereo-Inertial は現在の CPU 実装で評価し、採用が決まった場合に GPU 高速化を実装する。
 - Python node を作成する場合も、CMake と `ament_cmake_auto` を基本とする。
 - Python の直接起動用スクリプトは実行権限に注意し、`colcon build` 後に実行できる形で配置・確認する。
 
@@ -223,6 +224,7 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - 会話中に確認した `rmw_cyclonedds_cpp` の公式リポジトリでは、非 CPU バッファの CPU fallback 対応 PR が未マージであった。このため Fast DDS を初期標準の候補として提案した。
 - その後の実装指示に基づき、初期構成として Fast DDS の loopback UDP 設定を実装した。実機通信の確認は未実施である。
 - 実車の走行時は、D455 のステレオ画像・CameraInfo・有効な IMU を自己位置推定と同じ component container 内で受け渡す。プロセス内は rclcpp の intra-process、プロセス間の DDS はループバック UDPv4 を標準とする。
+- Notebook の固定地図ベンチマークでも、bag のセンサー配信元を各方式の追跡ノードと同じプロセスに配置する。プロセス内のセンサー入力と、別プロセスの時刻・TF・監視に使う DDS の設定を個別に記録する。
 - Gazebo のライブ走行は、シミュレーターとの境界にセンサー専用の共有メモリを使い、受信 component から tracker までを実車と同じ構成にする。時刻・TF・制御・診断は通常の ROS インターフェースを使う。外部購読者による画像表示と bag 記録は、その購読者への転送を伴う。
 - CUDA buffer backend は条件を満たす同一ホスト内の通信で GPU メモリを共有する。DDS の UDP 設定と CUDA バッファの共有は別の層として扱う。
 

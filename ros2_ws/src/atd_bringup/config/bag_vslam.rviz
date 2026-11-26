@@ -81,7 +81,7 @@ Visualization Manager:
         Durability Policy: Transient Local
     - Class: rviz_default_plugins/Image
       Name: Left IR
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /camera/camera/infra1/image_rect_raw
         Depth: 5
@@ -90,7 +90,7 @@ Visualization Manager:
         Durability Policy: Volatile
     - Class: rviz_default_plugins/Image
       Name: Right IR
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /camera/camera/infra2/image_rect_raw
         Depth: 5

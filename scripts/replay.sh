@@ -7,9 +7,8 @@ source "$root/scripts/lib/detect_host.sh"
 
 domain="${ATD_REPLAY_ROS_DOMAIN_ID:-75}"
 dry_run=false
-command=(env "ROS_DOMAIN_ID=$domain"
-    FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
-    ros2 run atd_bringup replay_vslam)
+executable=replay_vslam
+args=()
 while (($#)); do
     case "$1" in
         --help|-h)
@@ -20,6 +19,7 @@ Linux Notebook の Isaac ROS コンテナで選択した SLAM と RViz を起動
 ORB-SLAM3 によるステレオ地図作成: atd replay BAG --backend orbslam3 --save-map MAP_ID --headless
 保存地図で別走行の 15 秒地点から再定位: atd replay OTHER_BAG --backend orbslam3 --map MAP_ID --start-offset 15 --headless
 ORB-SLAM3 VIO 比較: atd replay BAG --backend orbslam3 --tracking vio --imu-calibration IMU.yaml --headless
+固定地図の姿勢途絶を収録済みジャイロで評価: atd replay --imu-gaps RUN_ID [--bag DIR] [--results-root DIR]
 ORB-SLAM3 の状態と軌跡は /data/results/runs/orbslam3/ に保存します。
 対話端末で引数なしの atd replay を実行すると、VO（左右画像）・VIO（左右画像＋統合 IMU）を選んでから bag を選びます。
 BAG を省略すると対話端末で記録を選べます。直接指定する場合はコンテナ内の bag パスを使います。
@@ -35,11 +35,16 @@ RViz では cuVSLAM の直近の推定姿勢を橙の矢印で表示します。
 EOF
             exit 0 ;;
         --dry-run) dry_run=true ;;
-        --) command+=("$@"); break ;;
-        *) command+=("$1") ;;
+        --imu-gaps) executable=evaluate_orb_gyro ;;
+        --) args+=("$@"); break ;;
+        *) args+=("$1") ;;
     esac
     shift
 done
+command=(env "ROS_DOMAIN_ID=$domain"
+    FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
+    ros2 run atd_bringup "$executable")
+if ((${#args[@]})); then command+=("${args[@]}"); fi
 
 if [[ ! "$domain" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( domain > 232 )); then
     printf 'atd replay: ATD_REPLAY_ROS_DOMAIN_ID は 0〜232 の整数で指定してください。\n' >&2

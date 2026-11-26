@@ -250,6 +250,11 @@ exit 130
         self.assertIn('atd_pc_dev', args)
         self.assertEqual(args[args.index('/usr/local/bin/atd-shell') + 1:], command)
 
+        result = self.invoke('replay', '--imu-gaps', 'fixed-run', '--dry-run')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = shlex.split(result.stdout.split('command: ', 1)[1])
+        self.assertEqual(args[-5:], ['ros2', 'run', 'atd_bringup', 'evaluate_orb_gyro', 'fixed-run'])
+
         # コンテナ内の起動時に ATD shell で overlay を読み直すところまで確認する。
         shell = self.root / 'docker/scripts/atd-shell.sh'
         shell.parent.mkdir(parents=True)

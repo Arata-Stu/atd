@@ -12,7 +12,7 @@ target_link_libraries(stereo_bag_input Threads::Threads)
 rclcpp_components_register_nodes(stereo_bag_input "atd_localization::StereoBagInput")
 
 install(PROGRAMS scripts/localization_monitor scripts/validate_bag DESTINATION lib/${PROJECT_NAME})
-install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)

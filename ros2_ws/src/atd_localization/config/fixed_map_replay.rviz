@@ -1,0 +1,45 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Enabled: true
+  Global Options:
+    Fixed Frame: map
+    Background Color: 35; 38; 41
+    Frame Rate: 20
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (1 m)
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 100
+      Alpha: 0.15
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Saved HDMap
+      Enabled: true
+      Topic:
+        Value: /localization/replay/hdmap
+        Depth: 1
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Localized pose and trajectory
+      Enabled: true
+      Topic:
+        Value: /localization/replay/trajectory
+        Depth: 1
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Target Frame: <Fixed Frame>
+      Scale: 18
+      X: 0
+      Y: 0
+Window Geometry:
+  Width: 1100
+  Height: 760

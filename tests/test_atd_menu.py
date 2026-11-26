@@ -291,11 +291,15 @@ exit 130
         shell.write_text('#!/bin/bash\nprintf "%s\\0" "$@" > "$MENU_TEST_CALLS"\n')
         shell.chmod(0o755)
         command = ['env', 'ATD_REPLAY_DDS=udp', 'ros2', 'run', 'atd_localization', 'validate_bag']
-        self.menu('replay', keys=b'3\n1\n', MENU_TEST_CONTAINER='1')
-        self.assert_call(*command)
-        self.menu(picks=['replay', 'saved-map', 'vgl', 'quit'], MENU_TEST_CONTAINER='1')
+        self.menu('replay', keys=b'3\n1\n1\n', MENU_TEST_CONTAINER='1')
+        self.assert_call(*command, '--rviz')
+        self.menu(picks=['replay', 'saved-map', 'vgl', 'off', 'quit'], MENU_TEST_CONTAINER='1')
         self.assert_call(*command, '--map-correction-source', 'vgl')
+        self.menu('replay', picks=['saved-map', 'vgl', 'rviz'], MENU_TEST_CONTAINER='1')
+        self.assert_call(*command, '--map-correction-source', 'vgl', '--rviz')
         self.menu('replay', picks=['saved-map', 'back'], MENU_TEST_CONTAINER='1')
+        self.assertFalse(self.calls.exists())
+        self.menu('replay', picks=['saved-map', 'cuvslam', 'back'], MENU_TEST_CONTAINER='1')
         self.assertFalse(self.calls.exists())
 
         options = ['--bag', 'odaiba/7mps lap', '--rate', '1']
@@ -303,6 +307,11 @@ exit 130
         self.assertEqual(result.returncode, 0, result.stderr)
         args = shlex.split(result.stdout.split('command: ', 1)[1])
         self.assertEqual(args[args.index('/usr/local/bin/atd-shell') + 1:], command + options)
+        result = self.invoke('replay', '--dry-run', '--validate-map', 'odaiba_s1_cu', *options, '--rviz')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = shlex.split(result.stdout.split('command: ', 1)[1])
+        self.assertEqual(args[args.index('/usr/local/bin/atd-shell') + 1:],
+                         command + ['--map', 'odaiba_s1_cu', *options, '--rviz'])
         for conflicting in (['--select-map', '--validate-map', 'odaiba'], ['--validate-map', 'odaiba', '--select-map']):
             with self.subTest(conflicting=conflicting):
                 result = self.invoke('replay', '--dry-run', *conflicting)

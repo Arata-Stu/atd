@@ -118,6 +118,7 @@ def test_coverage_only_counts_distinct_fresh_samples_in_same_episode():
     ([], 'cuvslam', None),
     (['--map-correction-source', 'vgl'], 'vgl', 1.),
     (['--map-correction-source', 'vgl', '--vgl-frequency', '0'], 'vgl', 0.),
+    (['--rviz'], 'cuvslam', None),
 ])
 def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, status, code,
                                                     mode_args, source, frequency):
@@ -133,7 +134,14 @@ def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, stat
     monkeypatch.setattr(assets, 'map_metadata', lambda *_: meta)
     window = dict(first_stamp_ns=10**9, last_stamp_ns=15*10**8)
     monkeypatch.setattr(replay, 'inspect_inputs', lambda *args: (['/left', '/right', '/left_info', '/right_info', '/tf_static'], .5, window))
-    def fake_ros(args, resolved, replay_bag, topics, duration, report, output):
+    from unittest.mock import Mock
+    viewer = Mock()
+    start = Mock(return_value=viewer)
+    stop = Mock()
+    monkeypatch.setattr(replay, 'start_rviz', start)
+    monkeypatch.setattr(replay, 'stop', stop)
+    def fake_ros(args, resolved, replay_bag, topics, duration, report, output, *, rviz):
+        assert rviz is (viewer if args.rviz else None)
         assert resolved == meta and replay_bag == records / 'b/run'
         launch = replay.launch_command(args.results_root, args.map_id, args.engine_dir, replay_bag, args.rate, 'player',
                                        map_correction_source=args.map_correction_source, vgl_frequency=args.vgl_frequency)
@@ -152,9 +160,19 @@ def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, stat
             before_replay=dict(left_intra_readers=2, right_intra_readers=2)))
     monkeypatch.setattr(replay, 'run_ros', fake_ros)
     run_id = 'a' * 32
+    report_file = results / 'runs/localization' / run_id / 'report.json'
+    def check_saved_before_closing():
+        assert json.loads(report_file.read_text())['outcome'] in ('tracked_to_end', 'no_tracking')
+    viewer.wait.side_effect = check_saved_before_closing
     args = ['--map', 'course', '--bag', 'b/run', '--run-id', run_id,
             '--results-root', str(results), '--record-root', str(records), *mode_args]
     assert replay.main(args) == code
+    if '--rviz' in args:
+        start.assert_called_once_with(95)
+        stop.assert_called_once_with(viewer)
+        assert viewer.wait.call_count == (0 if status == 'error' else 1)
+    else:
+        start.assert_not_called()
     [path] = (results / 'runs/localization').glob('*/report.json')
     assert path.parent.name == run_id
     result = json.loads(path.read_text())

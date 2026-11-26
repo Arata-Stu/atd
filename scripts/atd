@@ -225,7 +225,7 @@ run_from_menu() {
         replay)
             title="$title / 再生方式"
             options=(vo 'VO（左右画像・RViz）' vio 'VIO（左右画像＋統合 IMU・RViz）'
-                     saved-map '保存地図で自己位置を検証（ステレオ・等速）') ;;
+                     saved-map '保存地図で自己位置を検証（ステレオ・等速・RViz 表示可）') ;;
         display)
             options=(status '現在の設定を表示' cui '次回起動を CUI に設定' gui '次回起動を GUI に設定') ;;
         performance)
@@ -240,13 +240,17 @@ run_from_menu() {
         build/all|performance/apply|cache/prune) "$@" ;;
         build/*) "$@" --packages-up-to "$action" ;;
         replay/saved-map)
-            local correction
+            local correction display
             correction="$(choose "$title / 地図補正" cuvslam 'cuVSLAM（cuVGL で初期位置を推定・既定）' \
                 vgl 'cuVGL（1 Hz で地図を照合）' back '再生を取り消す')" || return 0
-            case "$correction" in
-                cuvslam) "$@" --select-map ;;
-                vgl) "$@" --select-map --map-correction-source vgl ;;
-            esac ;;
+            [[ "$correction" != back ]] || return 0
+            display="$(choose "$title / 走行中の表示" rviz 'RViz で推定姿勢と軌跡を表示' \
+                off '画面なしで検証' back '再生を取り消す')" || return 0
+            [[ "$display" != back ]] || return 0
+            options=(--select-map)
+            if [[ "$correction" = vgl ]]; then options+=(--map-correction-source vgl); fi
+            if [[ "$display" = rviz ]]; then options+=(--rviz); fi
+            "$@" "${options[@]}" ;;
         replay/*) "$@" --tracking "$action" ;;
         hotspot/2.4|hotspot/5) "$@" on --band "$action" ;;
         performance/check) "$@" --check ;;

@@ -19,7 +19,13 @@ Jetson ホストの ATD checkout で実行する。起動時に地図を選択�
 
 通常は Notebook Docker で下記 build 後に `atd-web` を起動し、[自己位置検証](http://127.0.0.1:8766/#localization) から地図と bag を選ぶ。検証結果の地図で Raceline、区間別の推定軌跡、喪失前と復帰時の観測地点を確認できる。[UI の操作](../../../apps/web/README.md#自己位置検証)
 
-Linux Notebook のホストまたはコンテナで `atd replay` を開き、「保存地図で自己位置を検証」→ 地図補正方式 → 保存地図 → 別走行の bag を選ぶ。等速で再生し、末尾で結果を保存する。地図が決まっている場合は `atd replay --validate-map odaiba_s1_cu` で bag の選択に直接進める。
+Linux Notebook のホストまたはコンテナで `atd replay` を開き、「保存地図で自己位置を検証」→ 地図補正方式 → RViz または画面なし → 保存地図 → 別走行の bag を選ぶ。等速で再生し、末尾で結果を保存する。地図を指定して RViz を開き、bag だけ選ぶこともできる。
+
+```bash
+atd replay --validate-map odaiba_s1_cu --rate 1 --rviz
+```
+
+RViz は `map` を固定フレームにし、HDMap に登録された境界・走行ラインと、地図上の推定姿勢（橙の矢印）・走行軌跡を重ねる。追跡を失った区間では線を切り、復帰後の最初の姿勢から描画を再開する。再生の末尾で結果を保存し、ウィンドウを閉じるまで最終軌跡を確認できる。再生中にウィンドウを閉じるとその検証を中止する。直接コマンドで `--rviz` を省略すると画面なしで実行する。
 
 TUI と直接指定は同じ通信設定を使う。bag 配信元・cuVSLAM・cuVGL は同一の component container 内でステレオ画像を渡す。別プロセスとの DDS 通信は既定で loopback UDPv4 を使う。別プロセス間の Fast DDS 共有メモリも有効にして比較する場合は、起動時に `ATD_REPLAY_DDS=shm atd replay` と指定する。実行時の DDS プロファイルと左右画像のプロセス内購読数は検証結果に記録される。
 

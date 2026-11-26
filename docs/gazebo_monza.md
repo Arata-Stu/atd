@@ -34,7 +34,7 @@ Ubuntu Notebook のデスクトップで使う。初回はホストで `atd dev 
 atd replay
 ```
 
-引数なしの `atd replay` または `atd` のメニューから `replay` を開く。保存地図を使う場合は「保存地図で自己位置を検証」を選び、地図補正方式・地図・別走行の bag を指定する。この経路は等速で再生し、結果を自己位置検証用に保存する。[固定地図での再生](../ros2_ws/src/atd_localization/README.md#notebook-で別の走行-bag-を検証する)
+引数なしの `atd replay` または `atd` のメニューから `replay` を開く。保存地図を使う場合は「保存地図で自己位置を検証」を選び、地図補正方式・走行中の表示・地図・別走行の bag を指定する。等速再生中に RViz で地図上の推定姿勢を観察でき、結果は自己位置検証用に保存される。[固定地図での再生](../ros2_ws/src/atd_localization/README.md#notebook-で別の走行-bag-を検証する)
 
 RViz で新規の軌跡を見る場合は、追跡方式（VO は左右画像、VIO は左右画像と統合 IMU）、再生する bag の順に選ぶ。VIO には `/camera/camera/imu` を記録した bag を使う。cuVSLAM と RViz が起動し、左右の画像・CameraInfo と車体から両カメラへの静的 TF を記録から確認する。購読の準備が整うと 0.5 倍速の再生が始まる。RViz は `map` 座標でランドマークと直近の推定姿勢を表示する。左右の IR 画像は既定で購読を止めている。画像を確認するときは Displays の **Left IR** または **Right IR** を有効にすると、選んだ画像が RViz にも配信される。bag の末尾でも画面は開いたままで、RViz を閉じるか端末で Ctrl+C を押すと一式が終了する。地図はメモリ上で生成される。
 

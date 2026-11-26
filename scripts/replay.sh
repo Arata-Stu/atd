@@ -27,8 +27,9 @@ RViz では cuVSLAM の直近の推定姿勢を橙の矢印で表示します。
 --headless は RViz を開かずに Gazebo の正解軌跡との誤差を保存し、再生の末尾で終了します。
 --slam-max-map-size は SLAM 地図の姿勢数上限です。既定の 0 は無制限で、300 を指定すると従来の条件で比較できます。
 通常の再生は ROS domain 75（ATD_REPLAY_ROS_DOMAIN_ID で変更可能）、保存地図の検証は既定 95 です。
-保存地図の検証: atd replay --validate-map MAP_ID --bag BAG --rate 1 [--map-correction-source cuvslam|vgl]
+保存地図の検証: atd replay --validate-map MAP_ID --bag BAG --rate 1 [--map-correction-source cuvslam|vgl] [--rviz]
 --select-map で保存地図を、--bag を省略すると別走行の bag を対話的に選びます。保存地図の検証は既定で等速です。
+--rviz を付けると、保存地図の座標で推定姿勢と軌跡を表示しながら検証します。TUI では「走行中の表示」から選べます。
 VGL 補正は --vgl-frequency で照合頻度を指定します（既定 1 Hz、0 は初回＋手動）。
 --diagnose-frame-gaps で入力画像と処理済みフレームの間隔を調べられます。
 ホストから使う場合は、先に atd dev で開発コンテナを起動してください。

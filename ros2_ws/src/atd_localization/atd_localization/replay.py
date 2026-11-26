@@ -112,28 +112,45 @@ def trace_connections(node):
     return missing
 
 
-def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
+def start_rviz(domain):
+    from ament_index_python.packages import get_package_share_directory
+
+    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+        raise ValueError('RViz の画面出力先がありません。Notebook のデスクトップから atd dev を起動してください')
+    if not shutil.which('rviz2'):
+        raise ValueError('Notebook コンテナに rviz2 が見つかりません')
+    config = Path(get_package_share_directory('atd_localization')) / 'config/fixed_map_replay.rviz'
+    if not config.is_file():
+        raise ValueError(f'RViz 設定がありません: {config}。atd-build --packages-up-to atd_localization を実行してください')
+    return subprocess.Popen(['rviz2', '-d', str(config), '--ros-args', '-p', 'use_sim_time:=true'],
+                            env=dict(os.environ, ROS_DOMAIN_ID=str(domain), ROS_STATIC_PEERS=''),
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+
+
+def check_rviz(rviz):
+    if rviz is not None:
+        code = rviz.poll()
+        if code == 0:
+            raise KeyboardInterrupt  # RViz を閉じた操作で再生も中止する。
+        if code is not None:
+            raise RuntimeError(f'RViz が終了しました（exit {code}）。画面接続と起動ログを確認してください')
+
+
+def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None, rviz=None):
     import rclpy
     from atd_interfaces.msg import LocalizationStatus
     from rclpy.signals import SignalHandlerOptions
 
     os.environ.update(ROS_DOMAIN_ID=str(args.domain), ROS_STATIC_PEERS='')
-    def interrupt(*_):
-        raise KeyboardInterrupt
-    old_handler = signal.signal(signal.SIGTERM, interrupt)
     with ExitStack() as stack:
-        stack.callback(signal.signal, signal.SIGTERM, old_handler)
-        lock_dir = args.results_root / 'runs/localization'
-        lock_dir.mkdir(parents=True, exist_ok=True)
-        lock = stack.enter_context((lock_dir / f'.domain-{args.domain}.lock').open('a'))
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as e:
-            raise ValueError('同じ ROS domain で別の検証を実行中です') from e
         rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
         stack.callback(rclpy.try_shutdown)
         node = rclpy.create_node('atd_localization_replay_report')
         stack.callback(node.destroy_node)
+        view = None
+        if rviz is not None:
+            from .replay_view import ReplayView
+            view = ReplayView(node, output / 'hdmap.json')
         stream = stack.enter_context((output / 'trajectory.csv').open('x', newline=''))
         writer = csv.writer(stream)
         writer.writerow(['stamp_ns', 'epoch', 'x_m', 'y_m', 'z_m', 'qx', 'qy', 'qz', 'qw',
@@ -150,6 +167,10 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
                 sample = (p.x, p.y, p.z, q.x, q.y, q.z, q.w, msg.speed_mps, msg.yaw_rate_rps)
             if report.observe(msg.session_id, msg.epoch, msg.state, msg.reason, stamp, sample):
                 writer.writerow([stamp, msg.epoch, *sample])
+                if view is not None:
+                    view.observe(msg, report.intervals[-1])
+            elif view is not None and msg.state != 'tracking':
+                view.observe(msg, None)
 
         node.create_subscription(LocalizationStatus, STATUS, observe, 20)
         if trace is not None:
@@ -181,6 +202,7 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
         deadline = time.monotonic() + args.ready_timeout
         while time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=.1)
+            check_rviz(rviz)
             if launch.poll() is not None:
                 raise ValueError('自己位置推定 launch の起動に失敗しました')
             if (node.count_publishers(STATUS) == 1 and (localize_service is None or localize_service.service_is_ready())
@@ -191,6 +213,7 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
             raise ValueError('保存地図の自己位置推定ノードの準備がタイムアウトしました')
         identity = publisher_signature(node, feedback)
         def check_launch():
+            check_rviz(rviz)
             if launch.poll() is not None:
                 raise ValueError('自己位置推定または bag 入力の component container が終了しました')
 
@@ -199,6 +222,8 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
                                             map_correction_source=args.map_correction_source)
             if trace is not None:
                 issues.extend(trace_connections(node))
+            if view is not None and not view.ready():
+                issues.append('RViz の地図・推定軌跡の購読')
             return issues
 
         initial_connections = {}
@@ -212,9 +237,10 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
         checked = [*topics, '/clock']
         checked.remove(meta['workflow']['tf_static'])
         while not sensor.finished:
+            check_launch()
             rclpy.spin_once(node, timeout_sec=.05)
-            if launch.poll() is not None or time.monotonic() > deadline:
-                raise ValueError('再生中に自己位置推定が終了、またはタイムアウトしました')
+            if time.monotonic() > deadline:
+                raise ValueError('bag の再生がタイムアウトしました')
             if time.monotonic() >= next_check:
                 # cuVSLAM also advertises /tf_static. Permit its writer while still detecting competing players.
                 _check_publishers(node, meta['workflow']['tf_static'], 'tf2_msgs/msg/TFMessage', '/' + paused_player, [])
@@ -234,9 +260,8 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
                         and cu_frames and max(cu_frames) >= end - 5_000_000)
 
         while time.monotonic() < deadline and still_draining():
+            check_launch()
             rclpy.spin_once(node, timeout_sec=.05)
-            if launch.poll() is not None:
-                raise ValueError('再生末尾の処理中に自己位置推定が終了しました')
         if publisher_signature(node, feedback) != identity or launch.poll() is not None:
             raise ValueError('検証完了前に自己位置推定が終了・再起動しました')
         if not report.session_id:
@@ -254,6 +279,8 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
         if trace is None:
             evidence['processed_frames_observed'] = len(cu_frames)
             print(f'cuVSLAM の処理完了通知 {len(cu_frames)} 時刻', flush=True)
+        if view is not None:
+            view.flush(wait_for_ack=True)
         return evidence
 
 
@@ -269,6 +296,7 @@ def main(argv=None):
     parser.add_argument('--vgl-frequency', type=float, help='vgl 方式の照合頻度 [Hz]（既定1、0は初回成功後に手動）')
     parser.add_argument('--run-id', help='Web ジョブが指定する新規 run ID（小文字16進32桁）')
     parser.add_argument('--rate', type=float, default=1., help='bag 再生倍率（0.05〜4）')
+    parser.add_argument('--rviz', action='store_true', help='保存地図と推定軌跡を RViz で表示する')
     parser.add_argument('--domain', type=int, default=DOMAIN, help='隔離する ROS domain（既定95）')
     parser.add_argument('--ready-timeout', type=float, default=120., help='起動準備待ち秒')
     parser.add_argument('--drain-timeout', type=float, default=8., help='最終入力の処理待ち秒')
@@ -290,8 +318,20 @@ def main(argv=None):
         parser.error('run-id は小文字の16進32桁で指定してください')
     args.results_root = args.results_root.resolve()
     args.record_root = args.record_root.resolve()
+
+    def interrupt(*_):
+        raise KeyboardInterrupt
+
+    with ExitStack() as children:
+        old_handler = signal.signal(signal.SIGTERM, interrupt)
+        children.callback(signal.signal, signal.SIGTERM, old_handler)
+        return validate(args, children)
+
+
+def validate(args, children):
     from .assets import map_metadata, save_validation_hdmap
     output = None
+    rviz = None
     result = {}
     try:
         if not args.map_id:
@@ -316,7 +356,8 @@ def main(argv=None):
                       map_id=args.map_id, map_sha256=meta['map_sha256'],
                       hdmap_sha256=meta['hdmap_sha256'], source_bag=meta['source_bag'],
                       source_metadata_sha256=meta['source_metadata_sha256'], bag=args.bag, metadata_sha256=digest,
-                      frame='map', body_frame='base_link', tracking='vo', replay_rate=args.rate, ros_domain_id=args.domain)
+                      frame='map', body_frame='base_link', tracking='vo', replay_rate=args.rate,
+                      ros_domain_id=args.domain, rviz_enabled=args.rviz)
         result['dds_profile'] = replay_dds_profile()
         if args.map_correction_source == 'vgl':
             result['vgl_frequency_hz'] = args.vgl_frequency
@@ -330,10 +371,21 @@ def main(argv=None):
             topics, duration, stereo = inspect_inputs(bag, meta)
         result.update(inputs=topics, input_shape=meta['input_shape'], stereo=stereo)
         report = TrackingReport(stereo, max(.5, .3 * args.rate))
+        lock_dir = args.results_root / 'runs/localization'
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock = children.enter_context((lock_dir / f'.domain-{args.domain}.lock').open('a'))
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as e:
+            raise ValueError('同じ ROS domain で別の検証を実行中です') from e
+        if args.rviz:
+            rviz = start_rviz(args.domain)
+            children.callback(stop, rviz)
+            print('RViz の表示準備を待ってから再生します。再生中にウィンドウを閉じると検証を中止します。', flush=True)
         if args.diagnose_frame_gaps:
             trace = FrameTrace()
             try:
-                result.update(run_ros(args, meta, bag, topics, duration, report, output, trace=trace))
+                result.update(run_ros(args, meta, bag, topics, duration, report, output, trace=trace, rviz=rviz))
             finally:
                 measured = trace.write(output, recorded_stamps)
                 result['frame_trace'] = 'frame_trace.json'
@@ -343,11 +395,10 @@ def main(argv=None):
                                                                    if event.stream == 'map_to_odom'})
             print_frame_summary(measured)
         else:
-            result.update(run_ros(args, meta, bag, topics, duration, report, output))
+            result.update(run_ros(args, meta, bag, topics, duration, report, output, rviz=rviz))
         result.update(report.summary(), trajectory='trajectory.csv')
         print(f"{result['outcome']}  追跡時間率 {result['tracking_time_fraction']:.1%}  "
               f"有効姿勢 {result['pose_samples']} 件", flush=True)
-        return 0 if result['outcome'] == 'tracked_to_end' else 2
     except KeyboardInterrupt:
         result.update(outcome='cancelled')
         print('検証を中止しました', file=sys.stderr)
@@ -361,3 +412,10 @@ def main(argv=None):
             temporary = output / '.report.tmp'
             temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + '\n')
             temporary.replace(output / 'report.json')
+    if rviz is not None:
+        print(f'結果を保存しました: {output}。最終軌跡を確認後、RViz を閉じてください。', flush=True)
+        try:
+            rviz.wait()
+        except KeyboardInterrupt:
+            pass  # 結果の保存後は Ctrl+C でも表示を終了できる。
+    return 0 if result['outcome'] == 'tracked_to_end' else 2

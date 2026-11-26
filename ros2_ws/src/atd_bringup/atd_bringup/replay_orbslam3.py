@@ -16,7 +16,7 @@ from atd_mapping.frames import stamp_ns
 
 from .replay_gt_geometry import Alignment, PlanarPose
 from .replay_inputs import SLAM_ODOMETRY, STEREO_WORKFLOW, recorded_imu
-from .replay_orb_inputs import inputs_from_bag, noise_settings
+from .replay_orb_inputs import inputs_from_bag, resolve_imu_noise
 
 
 def orb_executable():
@@ -68,7 +68,7 @@ class OrbReplay:
     tracker = '/orbslam3_node'
     seed_source = '/atd_bag_replay'
 
-    def __init__(self, stack, root, node, bag, options, imu, course, executable, *, gyro_topic=None):
+    def __init__(self, stack, root, node, bag, options, imu, course, executable, *, gyro_topic=None, gazebo=False):
         import rclpy
         from atd_interfaces.msg import LocalizationStatus
         from atd_localization.orb_assets import map_workspace, orb_map_metadata
@@ -89,6 +89,11 @@ class OrbReplay:
         folder = Path(os.environ.get('ATD_REPLAY_RECORD_ROOT', '/data/record/rosbags')).expanduser().resolve()
         self.bag_id = str(bag.relative_to(folder)) if bag.is_relative_to(folder) else bag.name
         self.bag_hash = hashlib.sha256((bag / 'metadata.yaml').read_bytes()).hexdigest()
+        imu_noise = {}
+        if imu:
+            source, values = resolve_imu_noise(options.imu_calibration, gazebo=gazebo)
+            imu_noise = dict(source=source, values=values)
+            print(f'ORB-SLAM3 Stereo-Inertial の IMU ノイズ設定: {source}', flush=True)
         self.inputs = inputs_from_bag(bag, options.start_offset, vio=bool(imu))
         self.params = dict(mode='mapping', use_sim_time=True, stereo_inertial=bool(imu),
                            camera_fps=self.inputs.camera_fps)
@@ -111,8 +116,7 @@ class OrbReplay:
             self.params.update(atlas_path=str(self.atlas))
             self.save_client = node.create_client(Trigger, '/orbslam3/save_map')
         if imu:
-            self.params.update(imu_frame=imu.frame, imu_frequency=imu.frequency,
-                               **noise_settings(options.imu_calibration))
+            self.params.update(imu_frame=imu.frame, imu_frequency=imu.frequency, **imu_noise['values'])
 
         name = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid4().hex[:12]
         self.directory = root / 'runs/orbslam3' / name
@@ -129,6 +133,8 @@ class OrbReplay:
                             dds_profile=replay_dds_profile(), status='running')
         if self.metadata:
             self.summary['source_metadata_sha256'] = self.metadata['source_metadata_sha256']
+        if imu:
+            self.summary.update(imu_noise=imu_noise, imu_frame=imu.frame, imu_frequency_hz=imu.frequency)
         self._summary()
         stack.push(self._exit)
         self.recording = stack.enter_context(ExitStack())
@@ -173,6 +179,11 @@ class OrbReplay:
             self.poses += 1
             if self.first_pose is None:
                 self.first_pose = stamp
+                if imu:
+                    # The ORB node gates VIO odometry on tracking OK and initialized inertial mapping.
+                    seconds = (stamp - self.inputs.first_left_ns) / 1e9
+                    self.summary['time_to_first_vio_pose_s'] = seconds
+                    print(f'ORB-SLAM3 慣性初期化後の最初の有効姿勢: 先頭の対象画像から {seconds:.3f} 秒', flush=True)
 
         def status(msg):
             if not self.metadata or msg.map_id != options.map or msg.map_sha256 != self.metadata['map_sha256']:
@@ -237,6 +248,9 @@ class OrbReplay:
         deadline = time.monotonic() + .75
         while time.monotonic() < deadline:
             spin(.01)
+        if not self.poses and self.options.tracking == 'vio':
+            raise RuntimeError('慣性初期化後の有効な ORB-SLAM3 姿勢を観測できませんでした。'
+                               'IMU の時刻・固定 TF と、移動開始・旋回時の初期化ログを確認してください')
         if not self.poses or (self.metadata and self.first_tracking is None):
             raise RuntimeError('対象地図への再定位を確認できません' if self.metadata else '有効なステレオ姿勢がありません')
         if result and not result.summary['sample_count']:
@@ -245,6 +259,9 @@ class OrbReplay:
             self.summary['initial_error'] = result.summary['initial_error']
         # RViz can stay open after EOF. Finalize all outputs while the graph is still alive.
         self.recording.close()
+        if self.options.tracking == 'vio':
+            print(f'ORB-SLAM3 Stereo-Inertial: 対象 {self.inputs.pairs} 対、処理完了通知 {self.processed} 件、'
+                  f'慣性初期化後の有効姿勢 {self.poses} 件', flush=True)
         if self.bridge:
             report = self.bridge.summary
             if not report['counts'].get('gyro_samples'):

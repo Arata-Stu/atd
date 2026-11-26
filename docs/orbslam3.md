@@ -53,14 +53,22 @@ Notebook の転送画面で地図全体を Jetson に転送し、Jetson ホス�
 
 地図を省略すると一覧から選べる。ORB 地図を選ぶと、launch が Atlas・校正・背景点群の hash を照合して `orbslam3_node` を起動する。公開する姿勢は画像の時刻における `map` 上の `base_link`。姿勢確定前・喪失中・入力途絶時は走行に使用できる姿勢を出さない。Web UI「自己位置検証」でもこの地図と別の bag を選択できる。
 
-## IMU を追加して比較する
+## 公式の Stereo-Inertial を試す
 
 ```bash
-atd replay day2/lap --backend orbslam3 --headless
-atd replay day2/lap --backend orbslam3 --tracking vio --imu-calibration /path/to/imu-noise.yaml --headless
+BAG=gazebo-odaiba-2026-11-23_01-19-26_640x480-90Hz_imu-400Hz_1lap_3mps
+atd replay "$BAG" --backend orbslam3 --tracking vio --rate 0.5 --headless
 ```
 
-ステレオ＋IMU は、新規セッションでの追跡比較に実装した。固定 Atlas の作成・再定位にはステレオ単独を使う。VIO には同じ撮影時刻系の統合 IMU `/camera/camera/imu` と、カメラ・IMU 間の固定 TF が必要。D455 は既定で加速度・ジャイロを別々に配信するため、収録時に統合出力も準備する。IMU 校正 YAML の最上位に `gyro_noise_density`、`accel_noise_density`、`gyro_random_walk`、`accel_random_walk` を記載する。各値には ORB-SLAM3 の連続時間 IMU モデルの SI 単位を用いる。カメラの外部姿勢とステレオ基線は実測 TF と投影行列で照合する。
+ORB 本体の `IMU_STEREO` に左右画像・加速度・角速度を入力し、新規地図で走行を追跡する。半速は同じ走行・撮影時刻を保ったまま処理の余裕を増やす。画像のみとの比較は上のコマンドで `--tracking vo` に変え、同じ bag・倍率で別々に再生する。保存済み Atlas への定位はステレオ専用。
+
+ATD Gazebo の記録と照合できた bag では、公式 EuRoC 例のノイズ密度とバイアスのランダムウォークを試験用の重みとして使う。シミュレーターは加法雑音を入れていない。IMU 周波数と外部姿勢は bag の観測と固定 TF を使う。使用した重みは `runs/orbslam3/<run>/summary.json` の `imu_noise` に残る。[ATD の設定](../ros2_ws/src/atd_bringup/config/orb_imu_gazebo.yaml)・[ORB-SLAM3 の公式設定](https://github.com/UZ-SLAMLab/ORB_SLAM3/blob/4452a3c4ab75b1cde34e5505a36ec3f9edcdc4c4/Examples/Stereo-Inertial/EuRoC.yaml)
+
+`慣性初期化後の最初の有効姿勢` は先頭の対象画像から最初の VIO 姿勢までの bag 時間。終了時には処理完了通知と初期化後の有効姿勢件数を表示する。初期化前は特徴が見えていても姿勢件数に含めない。
+
+Mac のネイティブ ROS 2 で、640×480・25 Hz のステレオと同期した 400 Hz IMU の合成 MCAP を半速再生した。入力300対すべての処理完了を確認し、最初の VIO 姿勢は2.60秒、初期化後の有効姿勢は235件だった。お台場の走行データは Notebook で個別に評価する。
+
+D455 で試す場合は、左右画像と同じ時計で統合 IMU `/camera/camera/imu` と固定 TF を収録し、`--imu-calibration /path/to/imu-noise.yaml` で校正値を指定する。YAML の最上位に `gyro_noise_density`、`accel_noise_density`、`gyro_random_walk`、`accel_random_walk` を SI 単位で指定する。
 
 ## 固定地図で途絶を補完し、再取得時の段差を見る
 

@@ -23,7 +23,8 @@ cuVSLAM の保存地図で画像の途絶を診断: atd replay --validate-map MA
 --gyro-bridge auto（既定）は収録ジャイロがあれば補完し、off は画像で確認できた姿勢だけを表示します。
 cuVSLAM と ORB-SLAM3 の同条件の run を比較: atd replay --compare CUV_RUN_ID ORB_RUN_ID
 固定地図で cuVSLAM・ORB 観測・ORB ジャイロ補完を比較: atd replay --compare CU_VALIDATION_ID ORB_GYRO_RUN_ID --record-root /data/record/rosbags
-ORB-SLAM3 VIO 比較: atd replay BAG --backend orbslam3 --tracking vio --imu-calibration IMU.yaml --headless
+ORB-SLAM3 Stereo-Inertial を Gazebo bag で試す: atd replay BAG --backend orbslam3 --tracking vio --headless
+実センサーの ORB-SLAM3 VIO には --imu-calibration IMU.yaml を追加します。
 固定地図の姿勢途絶を収録済みジャイロで評価: atd replay --imu-gaps RUN_ID [--bag DIR] [--results-root DIR]
 ORB-SLAM3 の状態と軌跡は /data/results/runs/orbslam3/ に保存します。
 対話端末で引数なしの atd replay を実行すると、VO（左右画像）・VIO（左右画像＋統合 IMU）を選んでから bag を選びます。

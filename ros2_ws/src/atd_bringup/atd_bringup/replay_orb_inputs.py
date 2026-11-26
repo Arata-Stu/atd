@@ -2,6 +2,7 @@
 from array import array
 from dataclasses import dataclass
 import math
+from pathlib import Path
 from statistics import median
 
 from atd_mapping.bag_inputs import load_metadata
@@ -77,3 +78,15 @@ def noise_settings(path):
             type(v) in (float, int) and math.isfinite(v) and v > 0 for v in value.values()):
         raise ValueError('IMU 校正 YAML に正の有限値で指定してください: ' + ', '.join(sorted(keys)))
     return {k: float(v) for k, v in value.items()}
+
+
+def resolve_imu_noise(path, *, gazebo):
+    """明示校正を優先し、ATD Gazebo と照合済みの録画にだけ基準の重みを使う。"""
+    if path is not None:
+        path = Path(path).expanduser().resolve()
+        return str(path), noise_settings(path)
+    if not gazebo:
+        raise ValueError('この bag の ORB-SLAM3 VIO には --imu-calibration で IMU 校正 YAML を指定してください')
+    from ament_index_python.packages import get_package_share_directory
+    profile = Path(get_package_share_directory('atd_bringup')) / 'config/orb_imu_gazebo.yaml'
+    return 'gazebo_euroc_reference', noise_settings(profile)

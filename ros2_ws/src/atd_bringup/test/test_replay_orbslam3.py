@@ -13,7 +13,7 @@ from atd_localization.replay_inputs import stereo_window
 from atd_bringup import replay_orbslam3, replay_vslam
 from atd_bringup.replay_gt_geometry import Alignment, PlanarPose, Trace
 from atd_bringup.replay_gt_node import GroundTruthPath
-from atd_bringup.replay_orb_inputs import noise_settings
+from atd_bringup.replay_orb_inputs import noise_settings, resolve_imu_noise
 from atd_bringup.replay_orbslam3 import orb_executable, saved_alignment
 from atd_bringup.replay_result import ReplayResult
 
@@ -119,7 +119,7 @@ class OrbReplayTests(unittest.TestCase):
     def test_no_ambiguous_or_unsupported_modes(self):
         with redirect_stderr(StringIO()), patch.object(replay_vslam, 'select_bag') as select:
             for args in (['--map', 'a'], ['--start-offset', '1'], ['--start-offset', 'nan', '--map', 'a'],
-                         ['--tracking', 'vio'], ['--map', 'a', '--save-map', 'b'],
+                         ['--tracking', 'vo', '--imu-calibration', 's.yaml'], ['--map', 'a', '--save-map', 'b'],
                          ['--map', 'a', '--tracking', 'vio', '--imu-calibration', 's.yaml']):
                 backend = [] if args == ['--map', 'a'] else ['--backend', 'orbslam3']
                 with self.subTest(args=args), self.assertRaises(SystemExit):
@@ -130,6 +130,9 @@ class OrbReplayTests(unittest.TestCase):
                                                 '--start-offset', '17.5', '--headless']), 0)
             options = run.call_args.kwargs['orb_options']
             self.assertEqual((options.map, options.start_offset, options.tracking), ('track', 17.5, 'vo'))
+            self.assertEqual(replay_vslam.main(['bag', '--backend', 'orbslam3', '--tracking', 'vio', '--headless']), 0)
+            options = run.call_args.kwargs['orb_options']
+            self.assertEqual((options.tracking, options.map, options.imu_calibration), ('vio', None, None))
 
     def test_imu_noise_requires_all_four_calibrated_positive_values(self):
         with TemporaryDirectory() as folder:
@@ -140,6 +143,24 @@ class OrbReplayTests(unittest.TestCase):
             values = dict(gyro_noise_density=.1, accel_noise_density=.2, gyro_random_walk=.003, accel_random_walk=.04)
             path.write_text(json.dumps(values))
             self.assertEqual(noise_settings(path), values)
+
+    def test_gazebo_reference_is_scoped_to_verified_recordings_and_explicit_override_wins(self):
+        share = Path(__file__).resolve().parents[1]
+        index = Mock()
+        index.get_package_share_directory.return_value = str(share)
+        with patch.dict('sys.modules', {'ament_index_python.packages': index}):
+            name, values = resolve_imu_noise(None, gazebo=True)
+            self.assertEqual(name, 'gazebo_euroc_reference')
+            self.assertEqual(values, dict(gyro_noise_density=1.7e-4, accel_noise_density=2.e-3,
+                                          gyro_random_walk=1.9393e-5, accel_random_walk=3.e-3))
+        with self.assertRaisesRegex(ValueError, '--imu-calibration'):
+            resolve_imu_noise(None, gazebo=False)
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / 'measured.yaml'
+            override = {key: value * 2 for key, value in values.items()}
+            path.write_text(json.dumps(override))
+            for simulation in (True, False):
+                self.assertEqual(resolve_imu_noise(path, gazebo=simulation), (str(path.resolve()), override))
 
 
 if __name__ == '__main__':

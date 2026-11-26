@@ -235,7 +235,8 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_op
                 gyro = gap_gyro_topic(bag, required=orb_options.gyro_bridge == 'on')
                 if gyro is None:
                     print('bag にジャイロがありません。ORB の観測姿勢で再生します。', flush=True)
-            orb = OrbReplay(stack, root, node, bag, orb_options, imu, course, executable, gyro_topic=gyro)
+            orb = OrbReplay(stack, root, node, bag, orb_options, imu, course, executable,
+                            gyro_topic=gyro, gazebo=ground_truth is not None)
             hidden.update(('/visual_slam/vis/landmarks_cloud', '/visual_slam/vis/loop_closure_cloud'))
             if trace and orb.metadata and not orb.fixed_alignment:
                 print('このコースと照合できる地図作成時の GT 座標変換がないため、絶対誤差は評価しません。', flush=True)
@@ -278,7 +279,8 @@ def main(argv=None):
     parser.add_argument('--gyro-bridge', choices=('auto', 'on', 'off'), default='auto',
                         help='固定 ORB 地図の途絶補完。auto は収録ジャイロがあれば有効（既定）、on は記録必須')
     parser.add_argument('--start-offset', type=float, default=0., help='固定地図を検証する bag の途中開始位置 [s]')
-    parser.add_argument('--imu-calibration', type=Path, help='ORB-SLAM3 VIO 用 IMU ノイズ校正 YAML')
+    parser.add_argument('--imu-calibration', type=Path,
+                        help='ORB-SLAM3 VIO 用 IMU ノイズ校正 YAML。ATD Gazebo bag は省略時に試験値を使用')
     args = parser.parse_args(argv)
     if args.gyro_bridge != 'auto' and not (args.backend == 'orbslam3' and args.map):
         parser.error('--gyro-bridge は --backend orbslam3 --map ID と一緒に指定してください')
@@ -291,8 +293,8 @@ def main(argv=None):
             parser.error('--slam-max-map-size は cuVSLAM の設定です')
         if args.tracking == 'vio' and (args.map or args.save_map):
             parser.error('固定地図の作成・再定位には --tracking vo を指定してください')
-        if bool(args.imu_calibration) != (args.tracking == 'vio'):
-            parser.error('ORB-SLAM3 の --tracking vio には --imu-calibration が必要です')
+        if args.imu_calibration and args.tracking != 'vio':
+            parser.error('--imu-calibration は --tracking vio と一緒に指定してください')
     if not math.isfinite(args.rate) or args.rate <= 0:
         parser.error('--rate には正の有限値を指定してください')
     if not 0 <= args.slam_max_map_size <= 2147483647:

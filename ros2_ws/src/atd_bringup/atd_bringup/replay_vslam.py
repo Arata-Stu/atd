@@ -31,6 +31,17 @@ class ViewerClosed(Exception):
     """RViz のウィンドウを閉じて再生セッションを終了した。"""
 
 
+def _show_node_output(reader, *, drain=False):
+    # The node writes straight to a regular file, so teardown never waits on a log pipe.
+    while chunk := reader.read(64 * 1024):
+        try:
+            print(chunk, end='', flush=True)
+        except BrokenPipeError:
+            return  # The original bytes remain in the run even if the console is closed.
+        if not drain:
+            break  # Bound work between ROS spins even during an ORB warning burst.
+
+
 def replay_config(preset, directory, hidden, *, bridge=False):
     """今回配信しない topic を RViz の表示から取り除く。"""
     config = yaml.safe_load(preset.read_text())
@@ -60,8 +71,8 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
     from .replay_readiness import wait_and_resume
 
     with ExitStack() as children:
-        def start(command):
-            process = subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL)
+        def start(command, **streams):
+            process = subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL, **streams)
             children.callback(stop, process)
             return process
 
@@ -72,11 +83,18 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
             topics.append(IMU_TOPIC)
         name = 'ORB-SLAM3' if orb else 'cuVSLAM'
         if orb:
-            launch_args = orb.command
             topics = [topic for topic in topics if topic not in orb.seed_topics]
             if orb.gyro_topic:
                 topics.append(orb.gyro_topic)
-        launch = start(launch_args)
+            log_path = orb.directory / 'orbslam3.log'
+            output = children.enter_context(log_path.open('xb'))
+            reader = children.enter_context(log_path.open(encoding='utf-8', errors='replace'))
+            # LIFO: drain the last output after the tracker has stopped, before closing the file.
+            children.callback(_show_node_output, reader, drain=True)
+            orb.summary.update(node_log=log_path.name)
+            launch = start(orb.command, stdout=output, stderr=subprocess.STDOUT)
+        else:
+            launch = start(launch_args)
         rviz = None
         if rviz_config is not None:
             rviz = start(['rviz2', '-d', str(rviz_config), '--ros-args',
@@ -94,7 +112,20 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                         '--topics', *topics])
 
         def check_viewer():
+            if orb:
+                _show_node_output(reader)
             if launch.poll() is not None:
+                if orb:
+                    code = launch.returncode
+                    detail = f'exit {code}'
+                    orb.summary.update(node_exit_code=code)
+                    if code < 0:
+                        try:
+                            signame = signal.Signals(-code).name
+                        except ValueError:
+                            signame = f'signal {-code}'
+                        detail += f', {signame}'
+                    raise RuntimeError(f'{name} が終了しました（{detail}）。ノードログ: {log_path}')
                 raise RuntimeError(f'{name} が終了しました（exit {launch.returncode}）。起動ログを確認してください')
             if rviz is not None and rviz.poll() is not None:
                 if rviz.returncode:

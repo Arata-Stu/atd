@@ -19,6 +19,25 @@ from atd_bringup.replay_result import ReplayResult
 
 
 class OrbReplayTests(unittest.TestCase):
+    def test_vio_tail_can_be_explicitly_skipped_for_missing_imu(self):
+        orb = replay_orbslam3.OrbReplay.__new__(replay_orbslam3.OrbReplay)
+        orb.inputs, orb.options = NS(last_left_ns=20, pairs=2), NS(tracking='vio')
+        orb.processed, orb.last_processed, orb.poses, orb.first_pose = 1, 10, 1, 10
+        orb.imu_skipped, orb.last_imu_skipped = 1, 20
+        orb.bridge = orb.metadata = orb.first_tracking = orb.save_client = None
+        orb.summary, orb._summary, orb.recording = {'status': 'running'}, Mock(), Mock()
+        with patch.dict('sys.modules', {'std_srvs.srv': Mock()}):
+            with patch.object(replay_orbslam3, 'time', NS(monotonic=iter((0, 1, 2)).__next__)):
+                orb.finish(Mock(), Mock(), None)
+            self.assertEqual(orb.summary['status'], 'complete')
+            self.assertEqual(orb.summary['last_processed_stamp_ns'], 10)
+            self.assertEqual(orb.summary['last_imu_skipped_stamp_ns'], 20)
+            self.assertEqual(orb.summary['imu_skipped_frames_observed'], 1)
+            orb.last_imu_skipped = 15
+            with patch.object(replay_orbslam3, 'time', NS(monotonic=iter((0, 31)).__next__)):
+                with self.assertRaisesRegex(RuntimeError, '末尾画像処理を確認できません'):
+                    orb.finish(Mock(), Mock(), None)
+
     def test_final_csvs_are_readable_while_rviz_remains_open(self):
         subscriptions = {}
 

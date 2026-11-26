@@ -84,8 +84,8 @@ class OrbReplay:
         self.gyro_topic = gyro_topic
         self.bridge = None
         self.stage = self.fixed_alignment = self.save_client = None
-        self.last_processed = self.first_pose = self.first_tracking = None
-        self.poses = self.processed = 0
+        self.last_processed = self.last_imu_skipped = self.first_pose = self.first_tracking = None
+        self.poses = self.processed = self.imu_skipped = 0
         folder = Path(os.environ.get('ATD_REPLAY_RECORD_ROOT', '/data/record/rosbags')).expanduser().resolve()
         self.bag_id = str(bag.relative_to(folder)) if bag.is_relative_to(folder) else bag.name
         self.bag_hash = hashlib.sha256((bag / 'metadata.yaml').read_bytes()).hexdigest()
@@ -170,6 +170,13 @@ class OrbReplay:
                 self.last_processed = stamp
                 self.processed += 1
 
+        def imu_skipped(msg):
+            stamp = stamp_ns(msg.stamp)
+            if self.inputs.first_left_ns <= stamp <= self.inputs.last_left_ns and (
+                    self.last_imu_skipped is None or stamp > self.last_imu_skipped):
+                self.last_imu_skipped = stamp
+                self.imu_skipped += 1
+
         def odometry(msg):
             stamp = stamp_ns(msg.header.stamp)
             if msg.header.frame_id != 'map' or msg.child_frame_id != 'base_link':
@@ -199,6 +206,9 @@ class OrbReplay:
 
         subscribe(Header, '/orbslam3/processed', processed,
                   QoSProfile(depth=256, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        if imu:
+            subscribe(Header, '/orbslam3/imu_skipped', imu_skipped,
+                      QoSProfile(depth=256, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         subscribe(Odometry, SLAM_ODOMETRY, odometry, QoSProfile(depth=256))
         if self.metadata:
             subscribe(LocalizationStatus, '/localization/status', status, QoSProfile(depth=256))
@@ -223,6 +233,9 @@ class OrbReplay:
         self.summary.update(processed_frames_observed=self.processed, last_processed_stamp_ns=self.last_processed,
                             trajectory_samples=self.poses, first_pose_stamp_ns=self.first_pose,
                             first_tracking_stamp_ns=self.first_tracking)
+        if self.options.tracking == 'vio':
+            self.summary.update(imu_skipped_frames_observed=self.imu_skipped,
+                                last_imu_skipped_stamp_ns=self.last_imu_skipped)
         if self.first_tracking is not None:
             self.summary['time_to_tracking_s'] = (self.first_tracking - self.inputs.first_left_ns) / 1e9
         self._summary()
@@ -236,18 +249,25 @@ class OrbReplay:
         def bridge_pending():
             return self.bridge is not None and self.bridge.last_frame_ns != self.inputs.last_left_ns
 
-        while (self.last_processed != self.inputs.last_left_ns or bridge_pending()) and time.monotonic() < deadline:
+        def tail_pending():
+            return self.inputs.last_left_ns not in (self.last_processed, self.last_imu_skipped)
+
+        while (tail_pending() or bridge_pending()) and time.monotonic() < deadline:
             check_running()
             spin(.02)
-        if self.last_processed != self.inputs.last_left_ns:
+        if tail_pending():
+            hint = ('末尾画像まで画像対と統合 IMU が届いたか確認してください'
+                    if self.options.tracking == 'vio' else '再生倍率を下げて再試行してください')
             raise RuntimeError(f'ORB-SLAM3 の末尾画像処理を確認できません: '
-                               f'{self.last_processed} / {self.inputs.last_left_ns} ns。再生倍率を下げて再試行してください')
+                               f'{self.last_processed} / {self.inputs.last_left_ns} ns。{hint}')
         if bridge_pending():
             raise RuntimeError(f'ジャイロ補完で末尾画像を確認できません: {self.bridge.last_frame_ns} / '
                                f'{self.inputs.last_left_ns} ns')
         deadline = time.monotonic() + .75
         while time.monotonic() < deadline:
+            check_running()
             spin(.01)
+        check_running()
         if not self.poses and self.options.tracking == 'vio':
             raise RuntimeError('慣性初期化後の有効な ORB-SLAM3 姿勢を観測できませんでした。'
                                'IMU の時刻・固定 TF と、移動開始・旋回時の初期化ログを確認してください')
@@ -261,7 +281,7 @@ class OrbReplay:
         self.recording.close()
         if self.options.tracking == 'vio':
             print(f'ORB-SLAM3 Stereo-Inertial: 対象 {self.inputs.pairs} 対、処理完了通知 {self.processed} 件、'
-                  f'慣性初期化後の有効姿勢 {self.poses} 件', flush=True)
+                  f'IMU 不足で見送った画像対の通知 {self.imu_skipped} 件、慣性初期化後の有効姿勢 {self.poses} 件', flush=True)
         if self.bridge:
             report = self.bridge.summary
             if not report['counts'].get('gyro_samples'):

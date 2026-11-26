@@ -64,9 +64,15 @@ ORB 本体の `IMU_STEREO` に左右画像・加速度・角速度を入力し�
 
 ATD Gazebo の記録と照合できた bag では、公式 EuRoC 例のノイズ密度とバイアスのランダムウォークを試験用の重みとして使う。シミュレーターは加法雑音を入れていない。IMU 周波数と外部姿勢は bag の観測と固定 TF を使う。使用した重みは `runs/orbslam3/<run>/summary.json` の `imu_noise` に残る。[ATD の設定](../ros2_ws/src/atd_bringup/config/orb_imu_gazebo.yaml)・[ORB-SLAM3 の公式設定](https://github.com/UZ-SLAMLab/ORB_SLAM3/blob/4452a3c4ab75b1cde34e5505a36ec3f9edcdc4c4/Examples/Stereo-Inertial/EuRoC.yaml)
 
-`慣性初期化後の最初の有効姿勢` は先頭の対象画像から最初の VIO 姿勢までの bag 時間。終了時には処理完了通知と初期化後の有効姿勢件数を表示する。初期化前は特徴が見えていても姿勢件数に含めない。
+`慣性初期化後の最初の有効姿勢` は先頭の対象画像から最初の VIO 姿勢までの bag 時間。終了時には処理完了通知、IMU 不足で見送った画像対、初期化後の有効姿勢の件数を表示する。短い IMU の欠測で前積分に必要な観測が揃わなければ、その画像対を見送り、受信した IMU は次の画像対まで保持する。件数は `summary.json` の `imu_skipped_frames_observed` に記録する。400 Hz の設定で IMU 観測が 50 ms を超えて途切れた場合はエラーになる。
+
+初期化時の `not IMU meas` は、ORB が連続する画像の IMU 前積分を待つときに出る。`New Map created with … points` はステレオ画像から初期地図を作った時点を示す。慣性初期化の成否は最初の VIO 姿勢で確認する。ORB ノードの標準出力・標準エラーは `/data/results/runs/orbslam3/<run>/orbslam3.log` に残る。再生中にノードが異常終了した場合は、同じ run の `summary.json` にも終了コードと理由が残る。
 
 Mac のネイティブ ROS 2 で、640×480・25 Hz のステレオと同期した 400 Hz IMU の合成 MCAP を半速再生した。入力300対すべての処理完了を確認し、最初の VIO 姿勢は2.60秒、初期化後の有効姿勢は235件だった。お台場の走行データは Notebook で個別に評価する。
+
+お台場 3 m/s・1 周の Notebook run では、初期地図を 575 点で作成後、再生 3.70 秒で SIGSEGV が発生した。端末ログから停止した関数は特定できていない。ATD 版では、特徴点がゼロのステレオ画像でも IMU 用のフレームを初期化し、先頭画像や最初のキーフレームを処理する前の時刻を安全に扱うよう修正した。
+
+修正後に Mac のネイティブ ROS 2 で、1.25 秒の静止後に発進する 640×480・90 Hz、IMU 400 Hz の合成 bag を半速再生した。720 対を処理し、最初の VIO 姿勢は 3.57 秒、全体で 399 姿勢だった。同じ走行に 0.45 秒の遮蔽を加えると 720 対を完走し、遮蔽前に 147 姿勢、遮蔽開始から末尾までは 0 姿勢だった。別に IMU を途中と末尾で間引いた試験では 2 対の見送りを観測し、途中の欠測後も姿勢が出た。加速度変化が小さい別の合成走行では、末尾まで再生しても有効な VIO 姿勢が得られない場合があった。
 
 D455 で試す場合は、左右画像と同じ時計で統合 IMU `/camera/camera/imu` と固定 TF を収録し、`--imu-calibration /path/to/imu-noise.yaml` で校正値を指定する。YAML の最上位に `gyro_noise_density`、`accel_noise_density`、`gyro_random_walk`、`accel_random_walk` を SI 単位で指定する。
 

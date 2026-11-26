@@ -1,5 +1,6 @@
 from contextlib import ExitStack, nullcontext, redirect_stderr, redirect_stdout
 from io import StringIO
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -189,6 +190,7 @@ class ReplaySessionTests(unittest.TestCase):
 
     def test_gyro_bridge_sends_gyro_to_replay_without_switching_orb_to_vio(self):
         orb = Mock(command=['orb', '--ros-args'], params={'mode': 'localization'},
+                   directory=Path(self.stack.enter_context(TemporaryDirectory())), summary={},
                    seed_topics={'/tf_static'}, gyro_topic='/camera/camera/gyro/sample')
         orb.options.start_offset = 0
         self.ready.side_effect = KeyboardInterrupt()
@@ -204,6 +206,35 @@ class ReplaySessionTests(unittest.TestCase):
         arrows = {d['Topic']['Value']: d['Shape']['Color'] for d in preset['Visualization Manager']['Displays']
                   if d['Class'].endswith('/Odometry')}
         self.assertNotEqual(arrows['/orbslam3/continuous_odometry'], arrows[SLAM_ODOMETRY])
+
+    def test_orb_crash_preserves_node_output_including_exit_cleanup(self):
+        directory = Path(self.stack.enter_context(TemporaryDirectory()))
+        orb = Mock(command=['orb'], directory=directory, summary={}, seed_topics=set(),
+                   gyro_topic=None, params={'mode': 'mapping'})
+        orb.options.start_offset = 0
+
+        def resume(node, **kwargs):
+            streams = self.spawn.call_args_list[0].kwargs
+            self.assertEqual(streams['stderr'], replay.subprocess.STDOUT)
+            os.write(streams['stdout'].fileno(), b'initializing IMU\n')
+            kwargs['check_running']()
+            self.assertIn('initializing IMU', self.output.getvalue())
+            def crash():
+                os.write(streams['stdout'].fileno(), b'last frame\n')
+                self.launch.returncode = -11
+                return -11
+
+            self.launch.poll.side_effect = crash
+            kwargs['check_running']()
+
+        self.ready.side_effect = resume
+        path = directory / 'orbslam3.log'
+        with self.assertRaisesRegex(RuntimeError, 'exit -11, SIGSEGV') as context:
+            self.session(orb=orb)
+        self.assertIn(str(path), str(context.exception))
+        self.assertEqual(path.read_bytes(), b'initializing IMU\nlast frame\n')
+        self.assertEqual(orb.summary, {'node_log': path.name, 'node_exit_code': -11})
+        self.assertEqual(self.output.getvalue().count('last frame'), 1)
 
     def test_playback_failure_after_resume_is_reported(self):
         self.player.returncode = 2

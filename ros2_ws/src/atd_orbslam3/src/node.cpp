@@ -1,5 +1,6 @@
 #include "calibration.hpp"
 #include "confirmation.hpp"
+#include "stereo_imu_buffer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -205,18 +206,19 @@ public:
         [this](Imu::ConstSharedPtr imu) {
           if (finished_) { return; }
           const auto stamp = ns(imu->header);
-          if (stamp <= 0 || stamp <= imu_stamp_) { return; }
+          if (stamp <= imu_buffer_.latest_stamp()) { return; }
           const auto & a = imu->linear_acceleration;
           const auto & g = imu->angular_velocity;
           if (imu->header.frame_id != inertial_->frame || !std::isfinite(a.x) || !std::isfinite(a.y) ||
               !std::isfinite(a.z) || !std::isfinite(g.x) || !std::isfinite(g.y) || !std::isfinite(g.z)) {
             throw std::runtime_error("invalid combined IMU frame or values");
           }
-          imu_stamp_ = stamp;
-          imu_queue_.push_back(std::move(imu));
-          if (imu_queue_.size() > 4096) { imu_queue_.pop_front(); }
+          imu_buffer_.push(stamp, {static_cast<float>(a.x), static_cast<float>(a.y), static_cast<float>(a.z),
+                                  static_cast<float>(g.x), static_cast<float>(g.y), static_cast<float>(g.z),
+                                  stamp * 1e-9});
           drain();
         });
+      imu_skipped_ = create_publisher<Header>("/orbslam3/imu_skipped", rclcpp::QoS(1).transient_local());
     }
     ready_ = create_publisher<std_msgs::msg::Bool>("/orbslam3/ready", rclcpp::QoS(1).transient_local());
     odometry_ = create_publisher<Odometry>("/visual_slam/vis/slam_odometry", rclcpp::QoS(12));
@@ -268,7 +270,7 @@ private:
       const auto difference = ns(right.front()->header) - stamp;
       if (difference > tolerance_ns_ || stamp <= last_stamp_) { left.pop_front(); continue; }
       if (difference < -tolerance_ns_) { right.pop_front(); continue; }
-      if (inertial_ && imu_stamp_ < stamp) { return; }
+      if (inertial_ && imu_buffer_.latest_stamp() < stamp) { return; }
       auto left_image = left.front(), right_image = right.front();
       if (left_image->header.frame_id != frames_[0] || right_image->header.frame_id != frames_[1]) {
         throw std::runtime_error("unexpected stereo image optical frames");
@@ -337,25 +339,10 @@ private:
     const auto stamp = ns(left.header);
     std::vector<ORB_SLAM3::IMU::Point> measurements;
     if (inertial_) {
-      // Only the first image may precede the IMU stream. The future sample remains queued.
-      const double gap = std::max(.05, 4. / inertial_->hz);
-      while (!imu_queue_.empty() && ns(imu_queue_.front()->header) <= stamp) {
-        const auto & sample = *imu_queue_.front();
-        const auto sample_ns = ns(sample.header);
-        if (last_stamp_ && (sample_ns - used_imu_stamp_) * 1e-9 > gap) {
-          throw std::runtime_error("gap in combined IMU observations during stereo-inertial tracking");
-        }
-        const auto & a = sample.linear_acceleration;
-        const auto & w = sample.angular_velocity;
-        if (last_stamp_ || (stamp - sample_ns) * 1e-9 <= gap) {
-          measurements.emplace_back(a.x, a.y, a.z, w.x, w.y, w.z, sample_ns * 1e-9);
-        }
-        used_imu_stamp_ = sample_ns;
-        imu_queue_.pop_front();
-      }
-      if (!used_imu_stamp_ && !last_stamp_) { return; }
-      if ((stamp - used_imu_stamp_) * 1e-9 > gap) {
-        throw std::runtime_error("combined IMU does not cover the stereo observation");
+      measurements = imu_buffer_.take(stamp, last_stamp_, inertial_->hz);
+      if (measurements.empty()) {
+        imu_skipped_->publish(left.header);
+        return;
       }
     }
     const auto input_left = view(left, *camera_);
@@ -552,7 +539,7 @@ private:
   std::array<std::string, 2> frames_;
   std::array<Info::ConstSharedPtr, 2> camera_info_;
   std::array<std::deque<Image::ConstSharedPtr>, 2> image_queue_;
-  std::deque<Imu::ConstSharedPtr> imu_queue_;
+  StereoImuBuffer imu_buffer_;
   std::unique_ptr<ORB_SLAM3::System> core_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> transforms_;
   std::array<rclcpp::Subscription<Image>::SharedPtr, 2> images_;
@@ -561,7 +548,7 @@ private:
   rclcpp::Subscription<Imu>::SharedPtr imu_sub_;
   rclcpp::Publisher<Odometry>::SharedPtr odometry_;
   rclcpp::Publisher<Status>::SharedPtr status_, frame_status_;
-  rclcpp::Publisher<Header>::SharedPtr processed_;
+  rclcpp::Publisher<Header>::SharedPtr processed_, imu_skipped_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_;
   rclcpp::Service<Trigger>::SharedPtr save_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -571,7 +558,7 @@ private:
   bool calibration_dirty_ = true, changed_map_ = false;
   bool fixed_ = false, finished_ = false, shutdown_ = false, ever_tracked_ = false;
   int fps_ = 0;
-  std::int64_t last_stamp_ = 0, previous_stamp_ = 0, imu_stamp_ = 0, used_imu_stamp_ = 0;
+  std::int64_t last_stamp_ = 0, previous_stamp_ = 0;
   std::int64_t tolerance_ns_ = 0, last_clock_ = 0;
   double max_age_ = 0.;
 };

@@ -7,6 +7,7 @@ source "$root/scripts/lib/detect_host.sh"
 
 domain="${ATD_REPLAY_ROS_DOMAIN_ID:-75}"
 dry_run=false
+saved_map=false
 map_id=
 args=()
 while (($#)); do
@@ -16,7 +17,7 @@ while (($#)); do
 使い方: atd replay [BAG] [--tracking vo|vio] [--headless] [--rate RATE] [--slam-max-map-size N] [--dry-run]
 
 Linux Notebook の Isaac ROS コンテナで cuVSLAM と RViz を起動し、rosbag を再生します。
-対話端末で引数なしの atd replay を実行すると、VO（左右画像）・VIO（左右画像＋統合 IMU）を選んでから bag を選びます。
+対話端末の atd replay では、VO・VIO による RViz 再生、または保存地図での自己位置検証を選べます。
 BAG を省略すると対話端末で記録を選べます。直接指定する場合はコンテナ内の bag パスを使います。
 RViz では cuVSLAM の直近の推定姿勢を橙の矢印で表示します。Gazebo の正解軌跡は青で重ねます。
 画像時刻ごとの誤差は /data/results/runs/replay/ に保存し、Notebook UI の「VSLAM 軌跡誤差」で確認できます。
@@ -27,19 +28,27 @@ RViz では cuVSLAM の直近の推定姿勢を橙の矢印で表示します。
 --slam-max-map-size は SLAM 地図の姿勢数上限です。既定の 0 は無制限で、300 を指定すると従来の条件で比較できます。
 通常の再生は ROS domain 75（ATD_REPLAY_ROS_DOMAIN_ID で変更可能）、保存地図の検証は既定 95 です。
 保存地図の検証: atd replay --validate-map MAP_ID --bag BAG --rate 1 [--map-correction-source cuvslam|vgl]
+--select-map で保存地図を、--bag を省略すると別走行の bag を対話的に選びます。保存地図の検証は既定で等速です。
 VGL 補正は --vgl-frequency で照合頻度を指定します（既定 1 Hz、0 は初回＋手動）。
 --diagnose-frame-gaps で入力画像と処理済みフレームの間隔を調べられます。
 ホストから使う場合は、先に atd dev で開発コンテナを起動してください。
 EOF
             exit 0 ;;
         --dry-run) dry_run=true ;;
-        --validate-map)
-            if [[ -n "$map_id" || -z "${2:-}" || "$2" = -* ]]; then
-                printf 'atd replay: --validate-map に保存地図の ID を一つ指定してください。\n' >&2
+        --select-map|--validate-map)
+            if "$saved_map"; then
+                printf 'atd replay: --select-map または --validate-map のどちらかを一度だけ指定してください。\n' >&2
                 exit 2
             fi
-            map_id=$2
-            shift ;;
+            saved_map=true
+            if [[ "$1" = --validate-map ]]; then
+                if [[ -z "${2:-}" || "$2" = -* ]]; then
+                    printf 'atd replay: --validate-map に保存地図の ID を一つ指定してください。\n' >&2
+                    exit 2
+                fi
+                map_id=$2
+                shift
+            fi ;;
         --) shift; args+=("$@"); break ;;
         *) args+=("$1") ;;
     esac
@@ -51,8 +60,9 @@ case "$policy" in
     udp|shm) ;;
     *) printf 'atd replay: ATD_REPLAY_DDS は udp または shm を指定してください。\n' >&2; exit 2 ;;
 esac
-if [[ -n "$map_id" ]]; then
-    command=(env "ATD_REPLAY_DDS=$policy" ros2 run atd_localization validate_bag --map "$map_id")
+if "$saved_map"; then
+    command=(env "ATD_REPLAY_DDS=$policy" ros2 run atd_localization validate_bag)
+    if [[ -n "$map_id" ]]; then command+=(--map "$map_id"); fi
 else
     if [[ ! "$domain" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( domain > 232 )); then
         printf 'atd replay: ATD_REPLAY_ROS_DOMAIN_ID は 0〜232 の整数で指定してください。\n' >&2

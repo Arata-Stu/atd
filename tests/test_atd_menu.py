@@ -284,6 +284,30 @@ exit 130
             self.assertIn('ATD_REPLAY_ROS_DOMAIN_ID', result.stderr)
         self.assertFalse(self.calls.exists())
 
+    def test_saved_map_replay_menu_uses_localization_map_and_bag_pickers(self):
+        shutil.copy2(PROJECT / 'scripts/replay.sh', self.scripts / 'replay.sh')
+        shell = self.root / 'docker/scripts/atd-shell.sh'
+        shell.parent.mkdir(parents=True)
+        shell.write_text('#!/bin/bash\nprintf "%s\\0" "$@" > "$MENU_TEST_CALLS"\n')
+        shell.chmod(0o755)
+        command = ['env', 'ATD_REPLAY_DDS=udp', 'ros2', 'run', 'atd_localization', 'validate_bag']
+        self.menu('replay', keys=b'3\n1\n', MENU_TEST_CONTAINER='1')
+        self.assert_call(*command)
+        self.menu(picks=['replay', 'saved-map', 'vgl', 'quit'], MENU_TEST_CONTAINER='1')
+        self.assert_call(*command, '--map-correction-source', 'vgl')
+        self.menu('replay', picks=['saved-map', 'back'], MENU_TEST_CONTAINER='1')
+        self.assertFalse(self.calls.exists())
+
+        options = ['--bag', 'odaiba/7mps lap', '--rate', '1']
+        result = self.invoke('replay', '--dry-run', '--select-map', *options)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = shlex.split(result.stdout.split('command: ', 1)[1])
+        self.assertEqual(args[args.index('/usr/local/bin/atd-shell') + 1:], command + options)
+        for conflicting in (['--select-map', '--validate-map', 'odaiba'], ['--validate-map', 'odaiba', '--select-map']):
+            with self.subTest(conflicting=conflicting):
+                result = self.invoke('replay', '--dry-run', *conflicting)
+                self.assertEqual(result.returncode, 2, result.stderr)
+
     def test_jetson_docker_delegates_selected_band_to_host(self):
         self.menu(picks=['hotspot', '5', 'quit'], MENU_TEST_HOST='jetson', MENU_TEST_CONTAINER='1')
         arguments = self.ssh_args.read_bytes().decode().split('\0')[:-1]

@@ -3,13 +3,14 @@ import { api } from './api';
 import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { ACTIVE, STATUS } from './job_status';
 import { LocalizationResult } from './LocalizationResult';
-import { OUTCOMES } from './localization_validation';
+import { correctionLabel, OUTCOMES } from './localization_validation';
 import type { ValidationOptions, ValidationResult, ValidationRun } from './localization_validation';
 import type { Job } from './types';
 import { Field, Icon } from './ui';
 
 export function LocalizationWorkspace({jobs, onLog}: {jobs: Job[]; onLog: (id: string) => void}) {
   const [mapId, setMapId] = useState(''), [bag, setBag] = useState(''), [engine, setEngine] = useState(''), [rate, setRate] = useState('1');
+  const [correction, setCorrection] = useState('cuvslam'), [frequency, setFrequency] = useState('1');
   const [options, setOptions] = useState<{map: string; data: ValidationOptions} | null>(null);
   const [optionsError, setOptionsError] = useState(''), [actionError, setActionError] = useState('');
   const [submitted, setSubmitted] = useState<Job | null>(null), [pending, setPending] = useState(false), [stopping, setStopping] = useState('');
@@ -32,7 +33,9 @@ export function LocalizationWorkspace({jobs, onLog}: {jobs: Job[]; onLog: (id: s
   const choice = runId || runs?.[0]?.id || '';
   const current = result?.id === choice ? result : null;
   const speed = Number(rate);
+  const vglHz = Number(frequency);
   const canStart = data?.available && map?.ready && selectedBag?.eligible && Number.isFinite(speed) && speed >= .05 && speed <= 4 &&
+    (correction !== 'vgl' || (frequency.trim() !== '' && Number.isFinite(vglHz) && vglHz >= 0)) &&
     (!engine || data.engine_dirs.includes(engine)) && !pending && !active;
 
   useEffect(() => {
@@ -84,6 +87,7 @@ export function LocalizationWorkspace({jobs, onLog}: {jobs: Job[]; onLog: (id: s
     setActionError(''); setPending(true);
     try {
       const job = await api<Job>('localization/runs', {map_id: map.id, bag, revision: map.revision, rate: speed,
+        map_correction_source: correction, ...(correction === 'vgl' ? {vgl_frequency: vglHz} : {}),
         ...(engine ? {engine_dir: engine} : {})});
       followJob.current = job.id;
       setSubmitted(job); setStopping('');
@@ -119,6 +123,12 @@ export function LocalizationWorkspace({jobs, onLog}: {jobs: Job[]; onLog: (id: s
         {map?.issue && <p className="inline-note">{map.issue}</p>}
         {map?.ready && <details className="validation-options"><summary>再生設定</summary>
           <div className="validation-option-grid"><Field label="再生倍率"><input type="number" min=".05" max="4" step="any" required value={rate} onChange={e => setRate(e.target.value)}/></Field>
+            <Field label="地図補正元（map → odom）"><select value={correction} onChange={e => setCorrection(e.target.value)}>
+              <option value="cuvslam">cuVSLAM</option><option value="vgl">cuVGL</option>
+            </select></Field>
+            {correction === 'vgl' && <Field label="cuVGL 照合頻度 [Hz]（0 は初回・手動）">
+              <input type="number" min="0" step="any" required value={frequency} onChange={e => setFrequency(e.target.value)}/>
+            </Field>}
             <Field label="Notebook 用 VGL engine"><select value={engine} onChange={e => setEngine(e.target.value)}><option value="">自動選択</option>
               {data!.engine_dirs.map(path => <option key={path} value={path}>{path}</option>)}</select></Field></div>
         </details>}
@@ -133,7 +143,7 @@ export function LocalizationWorkspace({jobs, onLog}: {jobs: Job[]; onLog: (id: s
     <div className="validation-history">
       <Field label="検証履歴"><select value={choice} disabled={!runs?.length} onChange={e => { followJob.current = ''; setRunId(e.target.value); }}>
         {!runs?.length && <option value="">{historyError ? '履歴を読み込めません' : runs ? '保存された検証結果がありません' : '履歴を読み込み中…'}</option>}
-        {runs?.map(run => <option key={run.id} value={run.id}>{run.saved_at ? new Date(run.saved_at * 1000).toLocaleString('ja-JP') + ' · ' : ''}{run.map_id} · {run.bag} · {OUTCOMES[run.outcome] || run.outcome} · {run.id}</option>)}
+        {runs?.map(run => <option key={run.id} value={run.id}>{run.saved_at ? new Date(run.saved_at * 1000).toLocaleString('ja-JP') + ' · ' : ''}{run.map_id} · {run.bag} · {correctionLabel(run)} · {OUTCOMES[run.outcome] || run.outcome} · {run.id}</option>)}
       </select></Field>
       {runs?.some(item => item.id === choice) && <DeleteAnalysisButton key={choice} path={'analysis-results/localization/' + encodeURIComponent(choice)}
         detail={`自己位置検証「${runs.find(item => item.id === choice)?.bag}」（${choice}）を削除しますか？\n検証レポート・軌跡・この走行の前方軌道と速度比較が対象です。`}

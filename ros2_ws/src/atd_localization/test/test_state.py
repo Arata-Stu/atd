@@ -3,9 +3,7 @@ from math import sin, cos, pi
 
 import pytest
 
-from atd_localization.state import InitialHintRequest, RigidPose, TrackingState
-from concurrent.futures import Future
-from types import SimpleNamespace
+from atd_localization.state import RigidPose, TrackingState
 
 
 T = 10**10
@@ -209,50 +207,65 @@ def test_invalid_pose_speed_or_future_stamp_cannot_produce_valid_observation():
     assert state.status(5.)[2] is None
 
 
-def test_missed_startup_hint_is_requested_once_when_ready_even_if_hint_was_seen_by_only_one_consumer():
-    bootstrap = InitialHintRequest()
-    started = []
-    def request():
-        future = Future()
-        started.append(future)
-        return future
-    bootstrap.tick(0., stop=False, ready=lambda: False, request=request)
-    assert not started
-    for now in (1., 1.5, 2.):
-        bootstrap.tick(now, stop=False, ready=lambda: True, request=request)
-    assert len(started) == 1
-    started[0].set_result(SimpleNamespace(success=True))
-    for now in (3., 10., 100.):
-        bootstrap.tick(now, stop=False, ready=lambda: True, request=request)
-    assert bootstrap.done and not bootstrap.error and len(started) == 1
+@pytest.mark.parametrize('tf_first', [True, False])
+def test_vgl_uses_only_matched_causal_corrections_for_current_vo(tf_first):
+    state = TrackingState(map_correction_source='vgl')
+    stamp = T + 230_000_000  # VGL returns its result while VO is already 230 ms ahead.
+    camera(state, stamp)
+    state.diagnostic(stamp, 5., {'vo_status': 'OK', 'localized_in_exist_map': 'No'})
+    state.odometry(stamp, 5., RigidPose.checked((2., 0., 0.), I.xyzw), .9, .1)
+    correction = RigidPose.checked((1., 2., 0.), (0., 0., sin(pi/4), cos(pi/4)))
+    if tf_first:
+        state.transform(T, 5., correction)
+    else:
+        state.hint(T)
+    assert state.next_status(5.)[2] is None
+    if tf_first:
+        state.hint(T)
+    else:
+        state.transform(T, 5., correction)
+    sample = state.next_status(5.)[2]
+    assert sample.stamp == stamp and sample.pose.xyz == pytest.approx((1., 4., 0.))
+    assert sample.speed == .9 and sample.yaw_rate == .1
+    assert state.next_status(5., heartbeat=True) is None
+
+    # A match without its TF, an uncorroborated TF, and a future measured
+    # correction do not move intervening odometry into a different map pose.
+    later = stamp + 3_000_000_000
+    camera(state, later, 8.)
+    state.transform(later - 10, 8., I)
+    state.hint(later - 5)
+    state.hint(later + 5)
+    state.transform(later + 5, 8., I)
+    state.odometry(later, 8., I, 0., 0.)
+    assert state.next_status(8.)[2] is None  # The new VO diagnostic is still missing.
+    state.diagnostic(later, 8., {'vo_status': 'OK'})
+    assert state.next_status(8.)[2].pose == correction
+    state.odometry(later + 5, 8., I, 0., 0.)
+    state.diagnostic(later + 5, 8., {'vo_status': 'OK'})
+    assert state.next_status(8.)[2].pose == I
 
 
-def test_startup_hint_retry_is_bounded_even_if_service_hangs_or_fails():
-    bootstrap = InitialHintRequest()
-    calls = []
-    def request():
-        future = Future()
-        calls.append(future)
-        if len(calls) == 2:
-            future.set_result(SimpleNamespace(success=False, message='rejected'))
-        if len(calls) == 3:
-            raise RuntimeError('unavailable')
-        return future
-    for now in range(40):
-        bootstrap.tick(now, stop=False, ready=lambda: True, request=request)
-    assert len(calls) == 3 and calls[0].cancelled() and bootstrap.done and bootstrap.error
-
-
-def test_no_bootstrap_after_success_or_tracking_loss():
-    bootstrap = InitialHintRequest()
-    for stopped in (True, False):
-        bootstrap.tick(10., stop=stopped, ready=lambda: True, request=lambda: pytest.fail('unexpected VGL request'))
-
-
-def test_initial_request_waits_for_fresh_cuvslam_diagnostics_and_both_camera_infos():
-    state = TrackingState()
+def test_vgl_loss_rejects_delayed_old_match_and_clock_rewind_clears_anchor():
+    state = TrackingState(map_correction_source='vgl')
     camera(state)
-    assert not state.initialized_stereo(5.)
-    state.diagnostic(T, 5., dict(GOOD, localized_in_exist_map='No'))
-    assert state.initialized_stereo(5.)
-    assert not state.initialized_stereo(6.1)
+    state.transform(T, 5., I)
+    state.hint(T)
+    state.diagnostic(T, 5., {'vo_status': 'OK'})
+    state.odometry(T, 5., I, 0., 0.)
+    assert state.status(5.)[0] == 'tracking'
+    state.diagnostic(T + 1, 5., {'vo_status': 'Lost'})
+    state.hint(T + 2)
+    state.diagnostic(T + 3, 5., {'vo_status': 'Lost'})
+    state.transform(T + 2, 5., I)
+    state.odometry(T + 4, 5., I, 0., 0.)
+    state.diagnostic(T + 4, 5., {'vo_status': 'OK', 'localized_in_exist_map': 'Yes'})
+    assert state.status(5.)[0] == 'lost' and state.epoch == 1
+    state.hint(T + 4)
+    assert state.status(5.)[2] is None
+    state.transform(T + 4, 5., I)
+    assert state.status(5.)[2].stamp == T + 4
+    camera(state, T - 100)
+    state.diagnostic(T - 100, 5., {'vo_status': 'OK'})
+    state.odometry(T - 100, 5., I, 0., 0.)
+    assert state.status(5.)[0] == 'waiting_hint' and state.epoch == 2

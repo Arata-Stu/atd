@@ -269,14 +269,15 @@ class CommandMotionTests(unittest.TestCase):
     def test_endurance_saves_completed_laps_and_partial_distance_on_manual_stop(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
-            def start(children, stereo, course, check_stop, imu_hz):
+            def start(children, stereo, course, check_stop, imu_hz, ingress_ready):
                 scene = json.loads((out / "scene/scene.json").read_text())
                 self.assertEqual(scene["trajectory"]["laps"], 0)
                 self.assertIsNone(scene["trajectory"]["total_travel_seconds"])
                 self.assertEqual(imu_hz, 400)
                 self.assertEqual(scene["imu"]["streams"][run.IMU_TOPIC], {"frame_id": run.GYRO_FRAME, "rate_hz": 400})
                 bridge = json.loads((out / "bridge.yaml").read_text())
-                self.assertIn(run.IMU_TOPIC, [topic["ros_topic_name"] for topic in bridge])
+                self.assertEqual([topic["ros_topic_name"] for topic in bridge], ["/clock"])
+                self.assertEqual(ingress_ready, out.resolve() / "scene/sensor_ingress.ready")
                 self.assertIn("tf_" + run.GYRO_FRAME, children)
                 samples = scene["trajectory"]["samples_s_x_y_yaw"][:-1:2]
                 with (out / "scene/rig_motion.jsonl").open("w") as trace:

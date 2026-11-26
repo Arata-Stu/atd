@@ -61,13 +61,13 @@ def deployment(tmp_path):
     return tmp_path, folder, local
 
 
-def prepare(deployment, explicit=''):
+def prepare(deployment, explicit='', **options):
     root, _, _ = deployment
 
     def inspect(binaries, shape):
         assert set(binaries) == {'extractor', 'matcher'} and shape == [1, 3, 480, 640]
 
-    return prepare_runtime(root, 'course', explicit, root / 'work', hardware=HW, inspect=inspect)
+    return prepare_runtime(root, 'course', explicit, root / 'work', hardware=HW, inspect=inspect, **options)
 
 
 def test_validated_target_and_tf_owner_for_both_clocks(deployment):
@@ -96,6 +96,30 @@ def test_validated_target_and_tf_owner_for_both_clocks(deployment):
         assert resolved['hint_topic'] == '/localization/pose_hint'
         assert ('visual_localization/pose', resolved['hint_topic']) in resolved['remaps']['vgl']
         assert ('visual_slam/initial_pose', resolved['hint_topic']) in resolved['remaps']['cuvslam']
+        assert slam['enable_request_hint']
+        assert ('visual_slam/trigger_hint', '/localization/request_hint') in resolved['remaps']['cuvslam']
+        assert ('visual_localization/trigger_localization', '/localization/request_hint') in resolved['remaps']['vgl']
+
+
+@pytest.mark.parametrize('frequency,continuous,search_rate', [(1., True, 1.), (2.5, True, 2.5), (0., False, 1.)])
+def test_vgl_owns_map_tf_with_independent_stereo_odometry(deployment, frequency, continuous, search_rate):
+    root, _, _ = deployment
+    result = prepare(deployment, map_correction_source='vgl')
+    assert result['map_dir'] is None and not (root / 'work/cuvslam_map').exists()
+    resolved = component_configuration(Path(__file__).resolve().parents[2] / 'atd_mapping/config',
+            result['workflow'], result['map_dir'], result['map_root'], result['model_dir'], result['config_dir'],
+            namespace='/localization', use_sim_time=True, capture_visualization=True,
+            map_correction_source='vgl', vgl_frequency=frequency)
+    slam, vgl = resolved['parameters']['cuvslam'], resolved['parameters']['vgl']
+    assert slam['publish_odom_to_base_tf'] and not slam['publish_map_to_odom_tf']
+    assert not slam['enable_localization_n_mapping'] and not slam['enable_request_hint']
+    assert not slam['load_map_folder_path'] and not slam['enable_landmarks_view']
+    assert vgl['publish_map_to_odom_tf'] and not vgl['publish_map_to_base_tf']
+    assert vgl['enable_continuous_localization'] is continuous and vgl['vgl_frequency'] == search_rate
+    assert ('visual_localization/pose', '/localization/pose_hint') in resolved['remaps']['vgl']
+    assert ('visual_localization/trigger_localization', '/localization/request_hint') in resolved['remaps']['vgl']
+    assert not any(dest in ('/localization/pose_hint', '/localization/request_hint')
+                   for _, dest in resolved['remaps']['cuvslam'])
 
 
 @pytest.mark.parametrize('changed', ['nvidia/cuvslam_map/landmarks.mdb', 'nvidia/cuvgl_map/bow_index.pb',

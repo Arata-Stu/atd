@@ -35,7 +35,7 @@ class GazeboHostTests(unittest.TestCase):
                 self.assertEqual(len(commands), 1)
                 args = commands[0]
                 self.assertIn(f"type=bind,src={record_path},dst=/data/record", args)
-                self.assertIn("--shm-size=128m", args)
+                self.assertIn("FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/middleware_profiles/fastdds.xml", args)
                 self.assertFalse(any(arg.startswith("--ipc=") for arg in args))
                 for flag, expected in (("--mode", "bag"), ("--route", "lap"), ("--duration", "240")):
                     self.assertEqual(args[args.index(flag) + 1], expected)
@@ -273,8 +273,7 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
         self.assertIn("ROS_DOMAIN_ID=91", result.stdout)
         self.assertIn("--camera-height .14", result.stdout)
         self.assertIn("--pull=never", result.stdout)
-        self.assertIn("--shm-size=128m", result.stdout)
-        self.assertIn("FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml", result.stdout)
+        self.assertIn("FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/middleware_profiles/fastdds.xml", result.stdout)
         self.assertNotIn("atd_pc_dev", result.stdout)
 
     def test_diagnostics_can_reproduce_original_transport_without_shared_memory(self):
@@ -284,6 +283,9 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
         self.assertIn("--duration 15", result.stdout)
         self.assertIn("docker/middleware_profiles/fastdds.xml", result.stdout)
         self.assertNotIn("--shm-size", result.stdout)
+        shm = subprocess.check_output([*command, "shm"], text=True)
+        self.assertIn("--shm-size=128m", shm)
+        self.assertIn("docker/gazebo_monza/fastdds.xml", shm)
         for value in ([], ["invalid"]):
             self.assertNotEqual(subprocess.run([*command, *value], capture_output=True).returncode, 0)
 

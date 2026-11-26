@@ -7,7 +7,9 @@ import platform
 import re
 import shutil
 
-from atd_mapping.capture_config import CONFIG_FILES, digest, inspect_engines, require_file, tracking_workflow
+from atd_mapping.capture_config import (
+    CONFIG_FILES, MAP_CORRECTION_SOURCES, digest, inspect_engines, require_file, tracking_workflow,
+)
 
 
 def _identifier(value):
@@ -184,7 +186,10 @@ def _resolve_engine(root, profile, selected, hardware):
     return runtime, binaries
 
 
-def prepare_runtime(results_root, map_id, engine_dir, working_dir, hardware=None, inspect=inspect_engines):
+def prepare_runtime(results_root, map_id, engine_dir, working_dir, hardware=None, inspect=inspect_engines, *,
+                    map_correction_source='cuvslam'):
+    if map_correction_source not in MAP_CORRECTION_SOURCES:
+        raise ValueError('map_correction_source は cuvslam または vgl を指定してください')
     root, folder, metadata, profile = _source(results_root, map_id)
     nvidia = _path(folder, 'nvidia')
     slam = _path(nvidia, 'cuvslam_map')
@@ -202,13 +207,16 @@ def prepare_runtime(results_root, map_id, engine_dir, working_dir, hardware=None
         require_file(config / name)
     runtime, engines = _resolve_engine(root, profile, engine_dir, gpu_signature() if hardware is None else hardware)
     inspect(engines, metadata['input_shape'])
-    # LMDB may create lock files when opened. Only the private copy is passed to cuVSLAM.
-    private_slam = Path(working_dir) / 'cuvslam_map'
-    shutil.copytree(slam, private_slam, symlinks=True)
-    _verify_tree(private_slam, profile['cuvslam_sha256'])
-    databases = list(private_slam.glob('*.mdb'))
+    # Opening the map may create LMDB lock files. VO alone never opens it.
+    map_dir = None
+    if map_correction_source == 'cuvslam':
+        map_dir = Path(working_dir) / 'cuvslam_map'
+        shutil.copytree(slam, map_dir, symlinks=True)
+        slam = map_dir
+    _verify_tree(slam, profile['cuvslam_sha256'])
+    databases = list(slam.glob('*.mdb'))
     if not databases:
         raise ValueError('cuVSLAM 地図に .mdb ファイルがありません')
     for database in databases:
         require_file(database)
-    return dict(**metadata, map_dir=private_slam, map_root=nvidia, config_dir=config, model_dir=runtime)
+    return dict(**metadata, map_dir=map_dir, map_root=nvidia, config_dir=config, model_dir=runtime)

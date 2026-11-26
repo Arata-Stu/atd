@@ -57,7 +57,8 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
         from atd_planning.core import DEFAULT_HORIZON_M
         tuning = ('min_lookahead_m', 'lookahead_time_s', 'max_lookahead_m')
         controller = LookaheadConfig()
-        defaults.update(map_id='', results_root='/data/results', engine_dir='', line='raceline')
+        defaults.update(map_id='', results_root='/data/results', engine_dir='', line='raceline',
+                        map_correction_source='cuvslam', vgl_frequency='1.0')
         defaults.update({key: str(getattr(controller, key)) for key in tuning})
         pid = PIDConfig()
         speed_arguments = {'feedforward_path': DEFAULT_FEEDFORWARD_PATH,
@@ -71,13 +72,13 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
                                      choices=['true', 'false'] if key == 'joy_drive' else None)
                for key, value in defaults.items()]
     if camera:
-        actions += [
-            include('atd_sensors', 'd455.launch.py', {
-                'config': arguments['camera_config'], 'serial': arguments['camera_serial'],
-                **{key: arguments[key] for key in CAMERA_ARGUMENTS}}),
-            include('atd_vehicle_description', 'vehicle.launch.py', {
-                'config': arguments['vehicle_config'], 'profile': arguments['vehicle_profile']}),
-        ]
+        camera_args = {'config': arguments['camera_config'], 'serial': arguments['camera_serial'],
+                       **{key: arguments[key] for key in CAMERA_ARGUMENTS}}
+        if localization:
+            camera_args['target_container'] = '/atd_localization_container'
+        actions.append(include('atd_sensors', 'd455.launch.py', camera_args))
+        actions.append(include('atd_vehicle_description', 'vehicle.launch.py', {
+            'config': arguments['vehicle_config'], 'profile': arguments['vehicle_profile']}))
     if manual:
         # input.launch.py already owns the only web_bridge instance.
         inputs = {key: arguments[key] for key in INPUT_ARGUMENTS}
@@ -91,7 +92,7 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
                                          'serial': ParameterValue(arguments['pico_serial'], value_type=str)}]))
     if localization:
         actions.append(include('atd_localization', 'localization.launch.py',
-                               {key: arguments[key] for key in ('map_id', 'results_root', 'engine_dir')}))
+                               {key: arguments[key] for key in ('map_id', 'results_root', 'engine_dir', 'map_correction_source', 'vgl_frequency')}))
         def planning(context):
             if autonomous:
                 import json

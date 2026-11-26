@@ -7,7 +7,18 @@ export interface ValidationOptions {
   available: boolean;
   unavailable_reason: string;
 }
-export interface ValidationRun {id: string; map_id: string; bag: string; outcome: string; saved_at?: number}
+export interface ValidationRun {
+  id: string; map_id: string; bag: string; outcome: string; saved_at?: number;
+  map_correction_source: string; vgl_frequency_hz: number | null;
+}
+
+export function correctionLabel(run: ValidationRun): string {
+  if (run.map_correction_source === 'vgl') {
+    if (run.vgl_frequency_hz === 0) return 'cuVGL（初回・手動）';
+    return run.vgl_frequency_hz == null ? 'cuVGL' : `cuVGL（${run.vgl_frequency_hz} Hz）`;
+  }
+  return run.map_correction_source === 'cuvslam' ? 'cuVSLAM' : run.map_correction_source;
+}
 export interface Observation {time_s: number; point: Point}
 export interface TrackingGap {
   kind: 'lost' | 'stale' | 'gap';

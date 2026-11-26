@@ -97,7 +97,9 @@ class ClosedLoopJobTests(unittest.TestCase):
             self.assertIn('gazebo_closed_loop.launch.py', stack)
             self.assertIn('run_dir:=' + stack[stack.index('--output') + 1], stack)
             self.assertNotIn('autonomous.launch.py', stack)
-            self.assertIn('--ipc=host', gazebo)
+            profile = 'FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/middleware_profiles/fastdds.xml'
+            self.assertIn(profile, gazebo)
+            self.assertIn(profile, stack)
             for speed, override, expected in [('10', [], '10.0'), ('5', ['--full-throttle-speed', '10'], '10.0')]:
                 with self.subTest(speed=speed, override=override):
                     preview = subprocess.check_output([*cmd, '--speed', speed, *override], env=env, text=True)
@@ -127,12 +129,15 @@ class ClosedLoopJobTests(unittest.TestCase):
             argv = ['closed_loop_job.py', 'host', '--output', tmp, '--results', tmp,
                     '--circuit', 'odaiba', '--domain', '74', '--container', 'fixture',
                     '--profile', '/test.xml', '--map', 'test', '--line', 'centerline',
-                    '--speed', '1.5', '--web', '--tracking', 'vio', '--imu', '200', '--', 'gazebo', '--laps', '0']
+                    '--speed', '1.5', '--web', '--tracking', 'vio', '--imu', '200',
+                    '--map-correction-source', 'vgl', '--vgl-frequency', '0', '--', 'gazebo', '--laps', '0']
 
             def interrupt(_args, command, ros):
                 self.assertEqual(command[command.index('--imu') + 1], '200')
                 self.assertIn('tracking:=vio', ros)
                 self.assertIn('imu_frequency:=200', ros)
+                self.assertIn('map_correction_source:=vgl', ros)
+                self.assertIn('vgl_frequency:=0.0', ros)
                 (out / 'closed_loop.result.json').write_text(json.dumps(dict(status='stopped', laps_completed=3)))
                 raise KeyboardInterrupt
 
@@ -143,6 +148,7 @@ class ClosedLoopJobTests(unittest.TestCase):
             self.assertEqual(session['status'], 'stopped')
             self.assertTrue(session['web'])
             self.assertEqual((session['tracking'], session['imu_hz']), ('vio', 200))
+            self.assertEqual((session['map_correction_source'], session['vgl_frequency_hz']), ('vgl', 0.0))
 
     def test_result_or_early_exit_cancels_both_children(self):
         for outcome in ('completed', 'off_course', 'early', 'interrupted'):

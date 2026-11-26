@@ -1,6 +1,6 @@
 # ATD プロジェクト要件・決定事項
 
-最終更新: 2026-11-21
+最終更新: 2026-11-27
 
 この文書は、要件・規約と Docker 開発環境の初期実装方針をまとめたものである。
 「確定要件」はユーザーが明示した内容、「技術調査メモ」は会話中に確認した一次情報、「提案・候補」は採用未確定の内容を示す。
@@ -43,7 +43,7 @@
 - プロポと Bluetooth DualSense は、車両へのスロットル要求を共通の正規化値 [−1, +1] とし、中立 0 を 1500 µs、両端を 1000／2000 µs の PWM パルス幅に対応させる。現行 Rev6 の HOST 指令は前進側 +1 が 1000 µs、制動・後退側 −1 が 2000 µs である。実車での ESC の応答は校正・確認する。
 - 速度比較ではプロポ CH2 と計算スロットルを S.BUS raw、DualSense の `/teleop/command`（`source=joy`）を正規化スロットルで保持し、Pico が選択した操作経路と照合する。Notebook では元の単位に加え、Rev6 既定の正規化値または PWM 相当値に換算して重ねられる。
 - PC から遠隔で走行制御を与えない。走行制御に PC との通信を必須としない。
-- 車載系の ROS 2 / DDS の直接探索・topic・service・action 通信を Jetson 内部に限定し、外部ネットワークへの意図しない流出を防ぐ。
+- 実車の走行系は Jetson 内で、Gazebo・bag replay・解析は Notebook 内で完結させる。各ホストの ROS 2 / DDS の直接探索・通信はローカルに限定し、プロセス間の DDS には Fast DDS の UDPv4 ループバックを使う。
 - ノート PC から自己位置等の情報を観測するため、Foxglove Bridge 等を利用する予定である。bridge を介して明示的に提供する情報の外部通信は許容する。
 - PC での可視化に、PC を車載 DDS の参加者にする構成は前提としない。走行処理は PC との接続なしでも Jetson 内で完結させる。
 - Docker の外部通信を一律に遮断する要件ではない。必要なら `--network host` を維持する。
@@ -56,8 +56,10 @@
 - C++ を基本とし、効率を重視して実装する。
 - ビルドは `CMakeLists.txt` と `ament_cmake_auto` を原則として用いる。
 - ROS package のビルドは `scripts/build.sh` / コンテナ内の `atd-build` に分離する。`scripts/tools/python.sh` / `atd-python` は用途別 Python 環境の sync・check・shell・run を扱い、colcon のビルド処理を持たせない。
-- composable node / component container の利用を推奨する。
-- 特に大容量データを交換する処理は、composable な構成を想定して実装する。
+- 実機・Gazebo・bag replay に共通して、センサー取得から処理結果までのメモリコピーを最小限にする。画像・深度・IMU の ROS 側の配信元と処理ノードは同一プロセスに配置し、composable node、component container、型付きの ROS 2 intra-process 通信を使う。Gazebo と ROS のプロセス境界ではセンサー用共有メモリを使う。
+- GPU 処理が連続する区間は、対応する CUDA バッファを次段まで引き継ぐ。画像の形式変換、シリアライズ、CPU・GPU 間転送、可視化・記録用の追加購読でコピーがどこに生じるかを確認する。性能比較では実際のセンサー入力経路と受信件数を記録する。
+- 本番の cuVSLAM は Jetson Orin Nano の GPU を使う。
+- 保存地図での定位は、cuVGL の初回候補で cuVSLAM が地図に照合して `map → odom` を発行する方式を既定とする。比較用に、cuVSLAM が局所オドメトリを、cuVGL が地図照合と `map → odom` を担当する方式も選択できる。[自己位置検証](../ros2_ws/src/atd_localization/README.md#地図補正を-cuvgl-に任せる)
 - Python node を作成する場合も、CMake と `ament_cmake_auto` を基本とする。
 - Python の直接起動用スクリプトは実行権限に注意し、`colcon build` 後に実行できる形で配置・確認する。
 
@@ -221,6 +223,9 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - Isaac ROS 5 は `rosidl::Buffer` と CUDA buffer backend を利用する。従来の NITROS API をそのまま前提にしない。
 - 会話中に確認した `rmw_cyclonedds_cpp` の公式リポジトリでは、非 CPU バッファの CPU fallback 対応 PR が未マージであった。このため Fast DDS を初期標準の候補として提案した。
 - その後の実装指示に基づき、初期構成として Fast DDS の loopback UDP 設定を実装した。実機通信の確認は未実施である。
+- 実車の走行時は、D455 のステレオ画像・CameraInfo・有効な IMU を自己位置推定と同じ component container 内で受け渡す。プロセス内は rclcpp の intra-process、プロセス間の DDS はループバック UDPv4 を標準とする。
+- Notebook の固定地図ベンチマークでも、bag のセンサー配信元を各方式の追跡ノードと同じプロセスに配置する。プロセス内のセンサー入力と、別プロセスの時刻・TF・監視に使う DDS の設定を個別に記録する。
+- Gazebo のライブ走行は、シミュレーターとの境界にセンサー専用の共有メモリを使い、受信 component から tracker までを実車と同じ構成にする。時刻・TF・制御・診断は通常の ROS インターフェースを使う。外部購読者による画像表示と bag 記録は、その購読者への転送を伴う。
 - CUDA buffer backend は条件を満たす同一ホスト内の通信で GPU メモリを共有する。DDS の UDP 設定と CUDA バッファの共有は別の層として扱う。
 
 参照: [NITROS からの移行](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/rosidl_buffer/nitros_migration.html)、[CUDA buffer backend](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/rosidl_buffer/cuda_buffer_backend.html)、[Cyclone DDS の対応 PR #603](https://github.com/ros2/rmw_cyclonedds/pull/603)
@@ -326,7 +331,6 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 | 対象 | 提案内容 | 状態 |
 | --- | --- | --- |
 | ROS 依存の取得 | 変更しないパッケージ・システム依存は apt、自作 `atd_*` とソース・コンパイル条件を変更する対象は source build | 共通 apt 依存は manifest と起動スクリプトを実装済み。追加の個別パッケージは未選定 |
-| 高速データ経路 | component 間の intra-process 通信や CUDA バッファ共有を利用する | 個別処理の設計・実測は後工程。DDS の UDP / loopback 設定は実装済み |
 | Docker と通信範囲 | host network と DDS の loopback 制限を併用し、Foxglove Bridge は PC 向けに待受する | DDS の XML は実装済み・実通信は未検証。bridge の個別設定は後工程。`network_mode: none` は標準としない |
 | bridge の公開範囲 | 観測する topic と接続範囲を明示する。PC から走行制御を与えない要件に合わせて書込み機能の扱いを決める | Foxglove Bridge 等の利用は予定済み。個別設定は未決定 |
 | XML と QoS の管理 | DDS ネットワーク設定は XML、topic ごとの QoS はコード・パラメータを基本とする | ネットワーク XML は実装済み。topic ごとの QoS は後工程 |
@@ -385,6 +389,8 @@ Jetson 側の記録開始／停止・予備1・予備2は CH4〜CH16 または�
 | `../config/storage.env.example` | PC / Jetson ごとの記録先・解析結果保存先の設定例 |
 
 ## 7. 更新履歴
+
+- 2026-11-27 に実機・Gazebo・bag replay のコピー最小化と、Jetson・Notebook それぞれのホスト内で完結するセンサー経路を確定要件に明記した。
 
 - 2026-11-20 に同梱の Pico Rev6 firmware を `v0.2.0-led-bench` へ更新した。Pico 本体 LED の状態表示と CDC1 の `LED` 診断に対応した。
 

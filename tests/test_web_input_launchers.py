@@ -55,7 +55,7 @@ class EntryTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.args(), ['--host', 'pc', '--dry-run', 'ros', 'run', '--',
                     'env', 'ROS_DOMAIN_ID=' + domain,
-                    'FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml',
+                    'FASTDDS_DEFAULT_PROFILES_FILE=/etc/atd/fastdds.xml',
                     'ros2', 'launch', 'atd_bringup', 'gazebo.launch.py', 'use_sim_time:=true'])
 
     def test_rejects_mixed_vehicle_simulation_or_bad_domain(self):

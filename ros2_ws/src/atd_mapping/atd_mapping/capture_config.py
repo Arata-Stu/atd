@@ -11,6 +11,7 @@ import yaml
 
 CONFIG_FILES = ('keypoint_creation_config.pb.txt', 'localizer_config.pb.txt',
                 'matching_config.pb.txt', 'query_map_config.pb.txt')
+MAP_CORRECTION_SOURCES = ('cuvslam', 'vgl')
 DEFAULT_CAPTURE = dict(replay_rate=1.0, ready_timeout_s=120.0, drain_timeout_s=30.0,
                        settle_s=3.0, tail_tolerance_s=0.5)
 
@@ -64,27 +65,43 @@ def tracking_workflow(inputs):
 
 
 def component_configuration(config_dir, workflow, map_dir, map_root, model_dir, runtime_config, *,
-                            namespace, use_sim_time, capture_visualization):
+                            namespace, use_sim_time, capture_visualization, map_correction_source='cuvslam',
+                            vgl_frequency=1.0):
     """NVIDIA stereo tracking parameters and remaps shared by live localization and capture."""
+    if map_correction_source not in MAP_CORRECTION_SOURCES:
+        raise ValueError('map_correction_source は cuvslam または vgl を指定してください')
+    if type(vgl_frequency) not in (int, float) or not math.isfinite(vgl_frequency) or vgl_frequency < 0:
+        raise ValueError('vgl_frequency は 0 以上の有限な周波数を指定してください')
+    vgl_correction = map_correction_source == 'vgl'
+    if not vgl_correction and vgl_frequency != 1.0:
+        raise ValueError('vgl_frequency の変更には map_correction_source=vgl を指定してください')
     slam = yaml.safe_load((config_dir / 'capture_cuvslam.yaml').read_text())['/**/visual_slam']['ros__parameters']
     global_ = yaml.safe_load((config_dir / 'capture_vgl.yaml').read_text())['/**/visual_global_localization']['ros__parameters']
     common = dict(use_sim_time=use_sim_time, base_frame=workflow['base_frame'], map_frame='map', odom_frame='odom',
                   camera_optical_frames=[workflow['left_frame'], workflow['right_frame']])
-    slam.update(common, tracking_mode=0, load_map_folder_path=str(map_dir), save_map_folder_path='',
-                localize_on_startup=False, enable_request_hint=True,
+    slam.update(common, tracking_mode=0, load_map_folder_path='' if vgl_correction else str(map_dir),
+                save_map_folder_path='', localize_on_startup=False, enable_request_hint=not vgl_correction,
+                enable_localization_n_mapping=not vgl_correction,
+                publish_map_to_odom_tf=not vgl_correction, publish_odom_to_base_tf=True,
                 enable_ground_constraint_in_odometry=workflow['ground_constraint'],
                 enable_ground_constraint_in_slam=workflow['ground_constraint'])
-    if not capture_visualization:
+    if vgl_correction or not capture_visualization:
         slam.update(enable_slam_visualization=False, enable_landmarks_view=False)
     global_.update(common, map_dir=str(map_root / 'cuvgl_map'), model_dir=str(model_dir), config_dir=str(runtime_config))
-    if global_['publish_map_to_base_tf'] or global_['publish_map_to_odom_tf']:
-        raise ValueError('動的 TF は cuVSLAM だけが配信する必要があります')
+    if global_['publish_map_to_base_tf'] or (not vgl_correction and global_['publish_map_to_odom_tf']):
+        raise ValueError('VGL の TF 設定が指定された map → odom の配信元と競合します')
+    if vgl_correction:
+        global_.update(publish_map_to_odom_tf=True, enable_continuous_localization=vgl_frequency > 0)
+        # Event-driven VGL still needs a positive search frequency while triggered.
+        if vgl_frequency > 0:
+            global_['vgl_frequency'] = float(vgl_frequency)
     remaps = {}
     for kind, prefix in (('cuvslam', 'visual_slam'), ('vgl', 'visual_localization')):
         remaps[kind] = [(f'{prefix}/{topic}_{index}', workflow[key]) for topic, index, key in (
             ('image', 0, 'left_image'), ('image', 1, 'right_image'), ('camera_info', 0, 'left_info'), ('camera_info', 1, 'right_info'))]
     hint, request_hint = namespace + '/pose_hint', namespace + '/request_hint'
-    remaps['cuvslam'] += [('visual_slam/initial_pose', hint), ('visual_slam/trigger_hint', request_hint)]
+    if not vgl_correction:
+        remaps['cuvslam'] += [('visual_slam/initial_pose', hint), ('visual_slam/trigger_hint', request_hint)]
     remaps['vgl'] += [('visual_localization/pose', hint), ('visual_localization/trigger_localization', request_hint),
                       ('/diagnostics', namespace + '/vgl_diagnostics')]
     return dict(parameters={'cuvslam': slam, 'vgl': global_}, remaps=remaps, hint_topic=hint)

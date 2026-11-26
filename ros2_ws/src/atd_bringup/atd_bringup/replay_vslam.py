@@ -2,6 +2,7 @@
 import argparse
 from contextlib import ExitStack
 import fcntl
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -13,13 +14,15 @@ from tempfile import TemporaryDirectory
 import time
 
 import yaml
+from atd_localization.replay_player import TypedBagInput
 from atd_mapping.capture_snapshot import stop
+from atd_mapping.replay_dds import select_replay_dds
 
 from .replay_gt_course import load_course
 from .replay_gt_geometry import Trace
 from .replay_gt_node import ground_truth_viewer
 from .replay_gt_source import find_ground_truth
-from .replay_inputs import GROUND_TRUTH_ERROR, GROUND_TRUTH_PATH, IMU_TOPIC, STEREO_TOPICS, select_bag, validate_bag
+from .replay_inputs import GROUND_TRUTH_ERROR, GROUND_TRUTH_PATH, select_bag, validate_bag
 from .replay_result import ReplayResult
 
 
@@ -38,7 +41,7 @@ def estimated_only_config(preset, directory):
     return output
 
 
-def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=None, *, slam_max_map_size=0, imu=None):
+def run_session(node, bag, rate, rviz_config, ground_truth=None, result=None, *, slam_max_map_size=0, imu=None):
     from .replay_readiness import wait_and_resume
 
     with ExitStack() as children:
@@ -47,11 +50,14 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
             children.callback(stop, process)
             return process
 
-        launch_args = ['ros2', 'launch', 'atd_bringup', 'bag_vslam.launch.py', f'slam_max_map_size:={slam_max_map_size}']
-        topics = list(STEREO_TOPICS)
+        bag_input = TypedBagInput(node)
+        children.callback(bag_input.close)
+        player_name = f'atd_replay_player_{os.getpid()}'
+        launch_args = ['ros2', 'launch', 'atd_bringup', 'bag_vslam.launch.py',
+                       f'bag_path:={bag}', f'rate:={rate}', f'player_name:={player_name}',
+                       f'slam_max_map_size:={slam_max_map_size}']
         if imu:
             launch_args.extend(['tracking_mode:=1', f'imu_frame:={imu.frame}', f'imu_frequency:={imu.frequency}'])
-            topics.append(IMU_TOPIC)
         launch = start(launch_args)
         rviz = None
         if rviz_config is not None:
@@ -61,11 +67,6 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
         if ground_truth is not None:
             observer = children.enter_context(ground_truth_viewer(ground_truth, result, visualize=rviz is not None))
             spin_overlay = observer.spin_once
-        player_name = f'atd_replay_player_{os.getpid()}'
-        player = start(['ros2', 'bag', 'play', str(bag), '--start-paused', '--disable-keyboard-controls',
-                        '--clock', '--rate', str(rate), '--qos-profile-overrides-path', str(qos),
-                        '--remap', f'__node:={player_name}',
-                        '--topics', *topics])
 
         def check_viewer():
             if launch.poll() is not None:
@@ -75,26 +76,27 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                     raise RuntimeError(f'RViz が終了しました（exit {rviz.returncode}）。画面接続と起動ログを確認してください')
                 raise ViewerClosed()
 
-        def check_startup():
-            check_viewer()
-            if player.poll() is not None:
-                raise RuntimeError(f'再生開始前に rosbag2 が終了しました（exit {player.returncode}）')
-
         tracking = f'VIO (IMU {imu.frequency:g} Hz, {imu.frame})' if imu else 'VO'
         consumers = 'cuVSLAM と RViz' if rviz is not None else 'cuVSLAM と GT 比較用ノード'
         print(f'{bag} ({rate:g} 倍速)  {tracking}  slam_max_map_size={slam_max_map_size}'
               f'\n{consumers} の購読準備を待っています。', flush=True)
         finished = False
         try:
-            wait_and_resume(node, player_name=f'/{player_name}', check_running=check_startup,
-                            ground_truth=spin_overlay is not None, vio=imu is not None,
-                            rviz_name='/rviz2' if rviz is not None else None)
+            connections = wait_and_resume(
+                node, player_name=f'/{player_name}', check_running=check_viewer,
+                ground_truth=spin_overlay is not None, vio=imu is not None,
+                rviz_name='/rviz2' if rviz is not None else None, bag_input=bag_input)
+            if result is not None:
+                result.summary.update(sensor_input_transport='ros2_intra_process', bag_input_connections=connections)
             print('bag を再生しています。' + ('終了するには RViz を閉じるか Ctrl+C を押してください。'
                                            if rviz is not None else '末尾で比較結果を保存して終了します。'), flush=True)
             while True:
-                if not finished and player.poll() is not None:
-                    if player.returncode:
-                        raise RuntimeError(f'rosbag2 の再生に失敗しました（exit {player.returncode}）')
+                if not finished and bag_input.finished:
+                    counts = bag_input.counts(check_viewer, 5.)
+                    print(f"bag センサー発行: 左 {counts['left_published']} / 右 {counts['right_published']}"
+                          f" / IMU {counts['imu_published']} 件", flush=True)
+                    if result is not None:
+                        result.summary['sensor_input_counts'] = counts
                     if rviz is None:
                         # rosbag2 の終了後も GPU から遅れて届く姿勢は比較に含める。
                         stamp = result.last_stamp
@@ -117,9 +119,8 @@ def run_session(node, bag, rate, rviz_config, qos, ground_truth=None, result=Non
                         return
                     print('bag の末尾に到達しました。RViz で最終表示を確認できます。', flush=True)
                 check_viewer()
-                if spin_overlay is None:
-                    time.sleep(.15)
-                else:
+                bag_input.spin(0. if spin_overlay else .15)
+                if spin_overlay:
                     spin_overlay(timeout_sec=.15)
         except ViewerClosed:
             # An estimate can arrive just after the last image was played.
@@ -141,10 +142,8 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False):
         if not shutil.which('rviz2'):
             raise ValueError('コンテナに rviz2 がありません。Notebook の RViz 依存を準備してください')
         config = Path(get_package_share_directory('atd_bringup')) / 'config/bag_vslam.rviz'
-    qos = Path(get_package_share_directory('atd_mapping')) / 'config/replay_qos.yaml'
-    for path in (config, qos):
-        if path is not None and not path.is_file():
-            raise ValueError(f'{path} がありません。atd build --packages-up-to atd_bringup を実行してください')
+    if config is not None and not config.is_file():
+        raise ValueError(f'{config} がありません。atd build --packages-up-to atd_bringup を実行してください')
 
     def interrupt(*_):
         raise KeyboardInterrupt
@@ -159,9 +158,10 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False):
         except BlockingIOError as exc:
             raise ValueError(f'ROS domain {domain} では既に atd replay が実行中です') from exc
         imu = validate_bag(bag, vio=tracking == 'vio')
+        root = Path(os.environ.get('ATD_REPLAY_RESULTS_ROOT', '/data/results')).expanduser().resolve()
         trace = None
         try:
-            ground_truth = find_ground_truth(bag)
+            ground_truth = find_ground_truth(bag, root)
             if ground_truth is not None:
                 trace = Trace.from_file(ground_truth)
         except (OSError, ValueError) as exc:
@@ -177,18 +177,20 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False):
                 print('対応する Gazebo 正解軌跡が見つからないため、cuVSLAM の推定軌跡のみ表示します。', flush=True)
         if ground_truth is None:
             config = estimated_only_config(config, stack.enter_context(TemporaryDirectory(prefix='atd-replay-rviz-')))
+        select_replay_dds()
         rclpy.init(args=[], signal_handler_options=SignalHandlerOptions.NO)
         stack.callback(rclpy.try_shutdown)
         node = rclpy.create_node('atd_bag_replay')
         stack.callback(node.destroy_node)
         result = None
         if trace is not None:
-            root = Path('/data/results')
             course = load_course(bag, ground_truth, root)
             result = stack.enter_context(ReplayResult(root, bag, rate, trace, course,
                                                      slam_max_map_size=slam_max_map_size, imu=imu))
+            result.summary.update(backend='cuvslam', mode='mapping', alignment_source='first_estimate',
+                                  metadata_sha256=hashlib.sha256((bag / 'metadata.yaml').read_bytes()).hexdigest())
             print(f'Gazebo 正解軌跡: {ground_truth}\n比較結果の保存先: {result.directory}', flush=True)
-        run_session(node, bag, rate, config, qos, trace, result, slam_max_map_size=slam_max_map_size, imu=imu)
+        run_session(node, bag, rate, config, trace, result, slam_max_map_size=slam_max_map_size, imu=imu)
 
 
 def main(argv=None):
@@ -206,7 +208,12 @@ def main(argv=None):
     if not 0 <= args.slam_max_map_size <= 2147483647:
         parser.error('--slam-max-map-size には 0〜2147483647 の整数を指定してください')
     try:
-        bag = select_bag(args.bag)
+        roots = {}
+        if os.environ.get('ATD_REPLAY_RECORD_ROOT'):
+            roots['root'] = Path(os.environ['ATD_REPLAY_RECORD_ROOT']).expanduser().resolve()
+        if os.environ.get('ATD_REPLAY_RESULTS_ROOT'):
+            roots['results_root'] = Path(os.environ['ATD_REPLAY_RESULTS_ROOT']).expanduser().resolve()
+        bag = select_bag(args.bag, **roots)
         if bag is not None:
             run(bag, args.rate, slam_max_map_size=args.slam_max_map_size, tracking=args.tracking, headless=args.headless)
         return 0

@@ -7,9 +7,8 @@ source "$root/scripts/lib/detect_host.sh"
 
 domain="${ATD_REPLAY_ROS_DOMAIN_ID:-75}"
 dry_run=false
-command=(env "ROS_DOMAIN_ID=$domain"
-    FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
-    ros2 run atd_bringup replay_vslam)
+map_id=
+args=()
 while (($#)); do
     case "$1" in
         --help|-h)
@@ -26,21 +25,42 @@ RViz では cuVSLAM の直近の推定姿勢を橙の矢印で表示します。
 --tracking vio は左右画像と /camera/camera/imu を使用します。既定の vo はステレオ画像で追跡します。
 --headless は RViz を開かずに Gazebo の正解軌跡との誤差を保存し、再生の末尾で終了します。
 --slam-max-map-size は SLAM 地図の姿勢数上限です。既定の 0 は無制限で、300 を指定すると従来の条件で比較できます。
-再生専用の ROS_DOMAIN_ID は 75 です。ATD_REPLAY_ROS_DOMAIN_ID で変更できます。
+通常の再生は ROS domain 75（ATD_REPLAY_ROS_DOMAIN_ID で変更可能）、保存地図の検証は既定 95 です。
+保存地図の検証: atd replay --validate-map MAP_ID --bag BAG --rate 1 [--map-correction-source cuvslam|vgl]
+VGL 補正は --vgl-frequency で照合頻度を指定します（既定 1 Hz、0 は初回＋手動）。
+--diagnose-frame-gaps で入力画像と処理済みフレームの間隔を調べられます。
 ホストから使う場合は、先に atd dev で開発コンテナを起動してください。
 EOF
             exit 0 ;;
         --dry-run) dry_run=true ;;
-        --) command+=("$@"); break ;;
-        *) command+=("$1") ;;
+        --validate-map)
+            if [[ -n "$map_id" || -z "${2:-}" || "$2" = -* ]]; then
+                printf 'atd replay: --validate-map に保存地図の ID を一つ指定してください。\n' >&2
+                exit 2
+            fi
+            map_id=$2
+            shift ;;
+        --) shift; args+=("$@"); break ;;
+        *) args+=("$1") ;;
     esac
     shift
 done
 
-if [[ ! "$domain" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( domain > 232 )); then
-    printf 'atd replay: ATD_REPLAY_ROS_DOMAIN_ID は 0〜232 の整数で指定してください。\n' >&2
-    exit 2
+policy="${ATD_REPLAY_DDS:-udp}"
+case "$policy" in
+    udp|shm) ;;
+    *) printf 'atd replay: ATD_REPLAY_DDS は udp または shm を指定してください。\n' >&2; exit 2 ;;
+esac
+if [[ -n "$map_id" ]]; then
+    command=(env "ATD_REPLAY_DDS=$policy" ros2 run atd_localization validate_bag --map "$map_id")
+else
+    if [[ ! "$domain" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( domain > 232 )); then
+        printf 'atd replay: ATD_REPLAY_ROS_DOMAIN_ID は 0〜232 の整数で指定してください。\n' >&2
+        exit 2
+    fi
+    command=(env "ROS_DOMAIN_ID=$domain" "ATD_REPLAY_DDS=$policy" ros2 run atd_bringup replay_vslam)
 fi
+if ((${#args[@]})); then command+=("${args[@]}"); fi
 if ! "$dry_run" && [[ "$(uname -s)/$(uname -m)" != Linux/x86_64 || "$(detect_atd_host)" != pc ]]; then
     printf 'atd replay: Linux x86_64 の Notebook で実行してください。\n' >&2
     exit 1

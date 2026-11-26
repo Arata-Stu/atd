@@ -3,6 +3,7 @@ import json
 import time
 
 from circuits import load_lap
+from sensor_ingress import check_error
 from closed_loop_eval import CourseEvaluation
 
 
@@ -87,6 +88,7 @@ def run_trial(children, out, scene, report, start_stream, wait_for, check_childr
     result = None
 
     def check_stop():
+        check_error(out)
         if cancel.is_file():
             message = cancel.read_text().strip()
             kind, _, reason = message.partition("\n")

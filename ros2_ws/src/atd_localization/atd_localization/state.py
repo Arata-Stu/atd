@@ -1,4 +1,4 @@
-"""cuVSLAM の同じ画像時刻の診断・map→odom・VO を結合する。ROS 非依存。"""
+"""画像時刻の VO と追跡診断に、有効な地図補正を適用する。ROS 非依存。"""
 import math
 from dataclasses import dataclass
 
@@ -37,62 +37,15 @@ class Observation:
     yaw_rate: float
 
 
-class InitialHintRequest:
-    """Re-arm VGL once after discovery; bounded retries only for failed service calls."""
-    def __init__(self):
-        self.future = None
-        self.attempts = 0
-        self.next_check = 0.
-        self.done = False
-        self.error = ''
-
-    def tick(self, now, *, stop, ready, request):
-        if self.done:
-            return
-        if stop:
-            self.done = True
-            return
-        if self.future is not None:
-            if not self.future.done() and now < self.deadline:
-                return
-            try:
-                if not self.future.done():
-                    self.future.cancel()
-                    raise TimeoutError('応答待ちが期限を超えました')
-                result = self.future.result()
-                if not result.success:
-                    raise RuntimeError(result.message or 'サービスが要求を拒否しました')
-            except Exception as error:
-                self._failed(now, error)
-            else:
-                self.done = True
-                self.future = None
-            return
-        if now < self.next_check:
-            return
-        self.next_check = now + 0.5
-        if ready():
-            self.attempts += 1
-            try:
-                self.future = request()
-                self.deadline = now + 5.
-            except Exception as error:
-                self._failed(now, error)
-
-    def _failed(self, now, error):
-        self.future = None
-        self.next_check = now + 1.
-        if self.attempts >= 3:
-            self.done = True
-            self.error = f'VGL の初回候補の再要求に失敗しました。自己位置推定を再起動してください（{error}）'
-
-
 class TrackingState:
-    def __init__(self, max_age_s=1.0, *, allow_sparse_tf=False):
+    def __init__(self, max_age_s=1.0, *, allow_sparse_tf=False, map_correction_source='cuvslam'):
         if not math.isfinite(max_age_s) or max_age_s <= 0:
             raise ValueError('鮮度の判定秒数は正の有限値で指定してください')
+        if map_correction_source not in ('cuvslam', 'vgl'):
+            raise ValueError('map_correction_source は cuvslam または vgl が必要です')
+        self.map_correction_source = map_correction_source
         self.max_age_s = max_age_s
-        self.allow_sparse_tf = allow_sparse_tf
+        self.allow_sparse_tf = allow_sparse_tf or map_correction_source == 'vgl'
         self.epoch = 0
         self.clock_ns = -1
         self.sources = {}
@@ -104,6 +57,7 @@ class TrackingState:
         self.cameras = {}
         self.frames = {}
         self.corrections = {}
+        self.pending_vgl = {}
         self.registered_since = None
         self.last_sample = None
         self.last_output = None
@@ -138,8 +92,26 @@ class TrackingState:
             self.cameras[side] = (stamp, receipt)
 
     def hint(self, stamp):
-        if self._valid_stamp(stamp) and stamp > max(self.barrier, self.hint_stamp):
-            self.hint_stamp = stamp
+        if self._valid_stamp(stamp) and stamp > self.barrier:
+            self.hint_stamp = max(stamp, self.hint_stamp)
+            if self.map_correction_source == 'vgl':
+                self._vgl_part(stamp, 'match', True)
+
+    def _vgl_part(self, stamp, kind, value):
+        # cuVGL emits a pose on a match; it can emit the same-stamp TF only if
+        # it could also look up odom at exposure. Either message may arrive first.
+        parts = self.pending_vgl.setdefault(stamp, {})
+        parts[kind] = value
+        if 'match' in parts and 'transform' in parts:
+            self._store_correction(stamp, parts['transform'])
+            del self.pending_vgl[stamp]
+        elif len(self.pending_vgl) > 128:
+            del self.pending_vgl[min(self.pending_vgl)]
+
+    def _store_correction(self, stamp, pose):
+        self.corrections[stamp] = pose
+        if len(self.corrections) > 128:
+            del self.corrections[min(self.corrections)]
 
     def diagnostic(self, stamp, receipt, values):
         if not self._valid_stamp(stamp) or stamp <= self.last_diag:
@@ -147,6 +119,25 @@ class TrackingState:
         self.last_diag = stamp
         localized = values.get('localized_in_exist_map')
         vo_ok = values.get('vo_status') == 'OK'
+        if self.map_correction_source == 'vgl':
+            if vo_ok:
+                self._part(stamp, receipt, 'ok', True)
+            else:
+                # A delayed VGL result from before this VO loss cannot anchor
+                # the new odometry. Preserve already delivered, newer samples.
+                if self.registered:
+                    self.epoch += 1
+                self.registered = self.was_tracking = False
+                self.lost = True
+                self.barrier = stamp
+                if self.hint_stamp <= stamp:
+                    self.hint_stamp = -1
+                self.frames = {t: p for t, p in self.frames.items() if t > stamp}
+                self.corrections = {t: p for t, p in self.corrections.items() if t > stamp}
+                self.pending_vgl = {t: p for t, p in self.pending_vgl.items() if t > stamp}
+                self.registered_since = None
+                self.last_sample = None
+            return
         if localized == 'No':
             self.needs_clear = False
         if localized != 'Yes' or not vo_ok:
@@ -174,9 +165,10 @@ class TrackingState:
     def transform(self, stamp, receipt, pose):
         if self.allow_sparse_tf:
             if self._valid_stamp(stamp) and stamp > self.barrier:
-                self.corrections[stamp] = pose
-                if len(self.corrections) > 128:
-                    del self.corrections[min(self.corrections)]
+                if self.map_correction_source == 'vgl':
+                    self._vgl_part(stamp, 'transform', pose)
+                else:
+                    self._store_correction(stamp, pose)
             return
         self._part(stamp, receipt, 'transform', pose)
 
@@ -206,28 +198,30 @@ class TrackingState:
         self.last_sample = (Observation(stamp, pose, speed, yaw_rate), min(w for _, w in parts.values()))
 
     def _apply_sparse_correction(self):
-        if self.registered_since is None or not self.corrections:
+        # A completed VGL match is itself the registration. cuVSLAM mode
+        # needs its own registration diagnostic before accepting any map TF.
+        earliest = self.barrier + 1 if self.map_correction_source == 'vgl' else self.registered_since
+        if earliest is None or not self.corrections:
             return
         # VO and its tracking diagnostic still describe one image. At publication time
         # prefer its exact TF, or hold a measured correction from the same registration.
         stamp = max((t for t, parts in self.frames.items() if 'ok' in parts and 'odometry' in parts), default=0)
         if not stamp:
             return
-        correction = max((t for t in self.corrections if self.registered_since <= t <= stamp), default=0)
+        correction = max((t for t in self.corrections if earliest <= t <= stamp), default=0)
         if correction:
             self._compose(stamp, self.frames[stamp], self.corrections[correction])
             self.frames = {t: parts for t, parts in self.frames.items() if t > stamp}
+            if self.map_correction_source == 'vgl' and not self.registered:
+                self.registered_since = correction
+                self.registered = True
+                self.lost = False
 
     def _fresh(self, stamp, received, wall):
         # /clock can trail an image by one clock tick on replay. Old timestamps and
         # stopped ROS clocks are caught independently using ROS and steady time.
         return (-0.1 <= (self.clock_ns - stamp) * 1e-9 <= self.max_age_s
                 and 0 <= wall - received <= self.max_age_s)
-
-    def initialized_stereo(self, wall):
-        return (self.last_diag > 0 and -0.1 <= (self.clock_ns - self.last_diag) * 1e-9 <= self.max_age_s
-                and all(side in self.cameras and self._fresh(*self.cameras[side], wall)
-                        for side in ('left', 'right')))
 
     def status(self, wall):
         if self.allow_sparse_tf:
@@ -260,10 +254,14 @@ class TrackingState:
             if not self._fresh(camera[0], camera[1], wall) and not (self.allow_sparse_tf and self.lost):
                 return 'stale', f'新しい{label} CameraInfo を待っています', None
         if self.lost:
+            if self.map_correction_source == 'vgl':
+                return 'lost', 'VO 追跡喪失後の新しい VGL 地図補正と車体オドメトリを待っています', None
             return 'lost', '追跡喪失。新しい地図照合の確証が必要です。必要に応じて自己位置推定を再起動してください', None
         if self.hint_stamp < 0:
             return 'waiting_hint', 'VGL の初期位置候補を待っています', None
         if not self.registered:
+            if self.map_correction_source == 'vgl':
+                return 'localizing', 'VGL 照合と同じ時刻の地図補正 TF および追跡中の VO を待っています', None
             return 'localizing', 'cuVSLAM の保存地図への位置合わせを待っています', None
         if not self.last_sample or not self._fresh(self.last_sample[0].stamp, self.last_sample[1], wall):
             if self.allow_sparse_tf:

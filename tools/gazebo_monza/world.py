@@ -137,7 +137,7 @@ def cameras(link, height, pitch, circuit, far, width, image_height, camera_hz):
 def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
           circuit="odaiba", route=None, wait_for_capture=False, speed_mps=None, laps=1, record_ground_truth=False,
           resolution="640x480", imu_hz=0, camera_hz=DEFAULT_CAMERA_HZ, command_driven=False,
-          full_throttle_speed_mps=None):
+          full_throttle_speed_mps=None, sensor_ingress=False):
     if resolution not in RESOLUTIONS:
         raise ValueError("unsupported stereo resolution: " + str(resolution))
     if type(camera_hz) is not int or camera_hz not in CAMERA_RATES:
@@ -231,6 +231,13 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                                name=f"gz::sim::systems::{system}")
         if system == "Sensors":
             field(plugin, "render_engine", "ogre2")
+    if sensor_ingress:
+        sender = ET.SubElement(world, "plugin", filename="gz-sim-python-system-loader-system",
+                               name="gz::sim::systems::PythonSystemLoader")
+        field(sender, "module_name", "sensor_ingress")
+        field(sender, "course", circuit)
+        field(sender, "imu_hz", imu_hz)
+        field(sender, "ready_file", str(output / "sensor_ingress.ready"))
     lighting = ET.SubElement(world, "scene")
     field(lighting, "ambient", "0.66 0.70 0.75 1")
     field(lighting, "background", "0.50 0.72 0.91 1")

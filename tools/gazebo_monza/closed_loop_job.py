@@ -1,6 +1,7 @@
 """Notebook 上の Gazebo と保存地図を読む Isaac ROS スタックを1試行として管理する。"""
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -215,6 +216,9 @@ def supervise(args, gazebo_command, ros_command):
 
 def host(args):
     full_speed = resolve_full_throttle_speed(args.speed, args.full_throttle_speed)
+    if args.vgl_frequency is not None:
+        if args.map_correction_source != 'vgl' or not math.isfinite(args.vgl_frequency) or args.vgl_frequency < 0:
+            raise ValueError('--vgl-frequency は補正元 vgl で 0 以上の有限値を指定してください')
     imu = args.imu or ('400' if args.tracking == 'vio' else 'off')
     if args.tracking == 'vio' and imu == 'off':
         raise ValueError('VIO には --imu 200 または 400 が必要です')
@@ -230,7 +234,10 @@ def host(args):
     launch = ['ros2', 'launch', 'atd_bringup', 'gazebo_closed_loop.launch.py',
               f'map_id:={args.map}', f'line:={args.line}', f'max_speed_mps:={args.speed}',
               f'full_throttle_speed_mps:={full_speed}', f'tracking:={args.tracking}',
+              f'map_correction_source:={args.map_correction_source}',
               f'rviz:={str(args.rviz).lower()}', f'run_dir:={remote}']
+    if args.vgl_frequency is not None:
+        launch.append(f'vgl_frequency:={args.vgl_frequency}')
     if args.tracking == 'vio':
         launch.append('imu_frequency:=' + imu)
     if args.engine_dir:
@@ -254,6 +261,9 @@ def host(args):
                    max_speed_mps=args.speed, full_throttle_speed_mps=full_speed, engine_dir=args.engine_dir,
                    min_lookahead_override_m=args.min_lookahead,
                    rviz=args.rviz, web=args.web, started=time.time())
+    session['map_correction_source'] = args.map_correction_source
+    if args.map_correction_source == 'vgl':
+        session['vgl_frequency_hz'] = args.vgl_frequency if args.vgl_frequency is not None else 1.0
     try:
         check_isaac_mounts(results)
         signal.signal(signal.SIGTERM, signal.default_int_handler)
@@ -298,6 +308,8 @@ def main():
     launch.add_argument('--rviz', action='store_true')
     launch.add_argument('--web', action='store_true')
     launch.add_argument('--tracking', choices=('vo', 'vio'), default='vo')
+    launch.add_argument('--map-correction-source', choices=('cuvslam', 'vgl'), default='cuvslam')
+    launch.add_argument('--vgl-frequency', type=float)
     launch.add_argument('--imu', choices=IMU_MODES)
     launch.add_argument('--speed', required=True, type=float)
     launch.add_argument('--full-throttle-speed', type=float)

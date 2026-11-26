@@ -50,7 +50,8 @@ def fake_launch():
         'launch.launch_description_sources': module('launch.launch_description_sources',
                                                     PythonLaunchDescriptionSource=Action),
         'launch.substitutions': module('launch.substitutions', AndSubstitution=Action, LaunchConfiguration=Configuration),
-        'launch_ros.actions': module('launch_ros.actions', Node=Action, ComposableNodeContainer=Action),
+        'launch_ros.actions': module('launch_ros.actions', Node=Action, ComposableNodeContainer=Action,
+                                     LoadComposableNodes=Action),
         'launch_ros.descriptions': module('launch_ros.descriptions', ComposableNode=Action),
         'launch_ros.parameter_descriptions': module('launch_ros.parameter_descriptions', ParameterValue=Action),
     }
@@ -81,7 +82,11 @@ class CompositionTests(unittest.TestCase):
             entities = module['generate_launch_description']().entities
             context = {e.args[0]: e.default_value for e in entities if hasattr(e, 'default_value')}
             context['map_id'] = 'odaiba'
-            loc, plan, node = module['setup'](context)
+            loc, ingress, plan, node = module['setup'](context)
+            self.assertEqual(ingress.target_container, '/atd_localization_container')
+            source, = ingress.composable_node_descriptions
+            self.assertEqual(source.plugin, 'atd_sensors::GazeboSensorIngress')
+            self.assertEqual(source.extra_arguments, [{'use_intra_process_comms': True}])
             self.assertEqual([g.actions[0].args[0].args[0] for g in (loc, plan)], [
                 '/share/atd_localization/launch/localization.launch.py', '/share/atd_planning/launch/planning.launch.py'])
             for group in (loc, plan):
@@ -133,7 +138,7 @@ class CompositionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, '画面出力先'):
                     module['setup'](dict(context, rviz='true'))
             with patch.dict(os.environ, DISPLAY=':0'):
-                loc_debug, _, _, paths, viewer = module['setup'](dict(context, rviz='true'))
+                loc_debug, _, _, _, paths, viewer = module['setup'](dict(context, rviz='true'))
             self.assertEqual(dict(loc_debug.actions[0].launch_arguments)['visualize_landmarks'], 'true')
             self.assertEqual((paths.executable, viewer.executable), ('gazebo_closed_loop_paths', 'rviz2'))
             params, = paths.parameters
@@ -164,7 +169,7 @@ class CompositionTests(unittest.TestCase):
         src = Path(__file__).resolve().parents[2]
         assets = dict(workflow=dict(base_frame='base_link', left_image='/left', right_image='/right',
                                     left_info='/li', right_info='/ri', left_frame='left_optical',
-                                    right_frame='right_optical', ground_constraint=False),
+                                    right_frame='right_optical', ground_constraint=False, tf_static='/tf_static'),
                       map_id='odaiba', map_sha256='a' * 64, hdmap_sha256='b' * 64, input_shape=[1, 3, 480, 640],
                       map_root=Path('/map'), map_dir=Path('/map/cuvslam_map'),
                       model_dir=Path('/models'), config_dir=Path('/config'))
@@ -190,13 +195,35 @@ class CompositionTests(unittest.TestCase):
                         self.assertEqual(dict(slam.remappings)['visual_slam/imu'], '/camera/camera/imu')
                     else:
                         self.assertNotIn('visual_slam/imu', dict(slam.remappings))
+            _, replay = launch['setup'](dict(defaults, map_id='odaiba', use_sim_time='true',
+                                            replay_bag='/record/test', replay_rate='0.5'))
+            slam, vgl, source = replay.composable_node_descriptions
+            self.assertEqual(source.plugin, 'atd_localization::StereoBagInput')
+            self.assertTrue(all(c.extra_arguments == [{'use_intra_process_comms': True}] for c in (slam, vgl, source)))
+            params, = source.parameters
+            self.assertEqual((params['left_image'].args[0], params['right_image'].args[0]), ('/left', '/right'))
+            self.assertEqual((params['rate'], params['required_image_readers'], params['publish_calibration']),
+                             (.5, 2, True))
+            self.assertFalse(params['trace_publications'])
+            _, diagnostic = launch['setup'](dict(defaults, map_id='odaiba', use_sim_time='true',
+                                                replay_bag='/record/test', trace_publications='true'))
+            self.assertTrue(diagnostic.composable_node_descriptions[-1].parameters[0]['trace_publications'])
+            monitor, container = launch['setup'](dict(defaults, map_id='odaiba', map_correction_source='vgl',
+                                                       vgl_frequency='0'))
+            slam, vgl = container.composable_node_descriptions
+            self.assertEqual(monitor.parameters[0]['map_correction_source'], 'vgl')
+            self.assertFalse(slam.parameters[0]['publish_map_to_odom_tf'])
+            self.assertTrue(vgl.parameters[0]['publish_map_to_odom_tf'])
+            self.assertFalse(vgl.parameters[0]['enable_continuous_localization'])
 
     def test_gazebo_profile_runs_only_stereo_vo_with_the_simulation_clock(self):
         path = Path(__file__).resolve().parents[1] / 'launch/gazebo.launch.py'
         with fake_launch():
             clock, container = runpy.run_path(str(path))['generate_launch_description']().entities
         self.assertEqual((clock.args[0], clock.default_value, clock.choices), ('use_sim_time', 'true', ['true']))
-        tracker, = container.composable_node_descriptions
+        tracker, source = container.composable_node_descriptions
+        self.assertEqual(source.plugin, 'atd_sensors::GazeboSensorIngress')
+        self.assertEqual(source.extra_arguments, tracker.extra_arguments)
         self.assertEqual(container.package, 'rclcpp_components')
         self.assertEqual(tracker.package, 'isaac_ros_cuvslam')
         params, = tracker.parameters
@@ -220,8 +247,17 @@ class CompositionTests(unittest.TestCase):
     def test_bag_vslam_loads_the_mapper_component_for_live_visualization(self):
         path = Path(__file__).resolve().parents[1] / 'launch/bag_vslam.launch.py'
         with fake_launch():
-            limit, mode, frame, frequency, container = runpy.run_path(str(path))['generate_launch_description']().entities
-        tracker, = container.composable_node_descriptions
+            limit, mode, frame, frequency, bag, rate, player, setup = runpy.run_path(str(path))['generate_launch_description']().entities
+            context = {x.args[0]: x.default_value for x in (limit, mode, frame, frequency, bag, rate, player)}
+            live, = setup.function(context)
+            self.assertEqual(len(live.composable_node_descriptions), 1)
+            container, = setup.function(dict(context, bag_path='drive', tracking_mode='1'))
+        tracker, source = container.composable_node_descriptions
+        self.assertEqual(source.plugin, 'atd_localization::StereoBagInput')
+        self.assertEqual(source.extra_arguments, [{'use_intra_process_comms': True}])
+        sensor_params, = source.parameters
+        self.assertEqual(sensor_params['imu_topic'].args[0], '/camera/camera/imu')
+        self.assertEqual(sensor_params['required_image_readers'], 1)
         self.assertEqual((container.package, container.executable), ('rclcpp_components', 'component_container_mt'))
         self.assertEqual((tracker.package, tracker.plugin),
                          ('isaac_ros_cuvslam', 'nvidia::isaac_ros::visual_slam::VisualSlamNode'))
@@ -252,7 +288,9 @@ class CompositionTests(unittest.TestCase):
         with fake_launch():
             run_dir, map_dir, container, monitor = runpy.run_path(str(path))['generate_launch_description']().entities
         self.assertEqual([arg.args[0] for arg in (run_dir, map_dir)], ['run_dir', 'map_dir'])
-        params, = container.composable_node_descriptions[0].parameters
+        tracker, source = container.composable_node_descriptions
+        self.assertEqual(source.plugin, 'atd_sensors::GazeboSensorIngress')
+        params, = tracker.parameters
         self.assertTrue(params['enable_localization_n_mapping'])
         self.assertTrue(params['publish_map_to_odom_tf'])
         self.assertTrue(params['use_sim_time'])
@@ -286,6 +324,7 @@ class CompositionTests(unittest.TestCase):
         camera, vehicle, inputs = [dict(group.actions[0].launch_arguments) for group in self.groups(True)]
         self.assertEqual(camera['config'].name, 'camera_config')
         self.assertEqual(camera['serial'].name, 'camera_serial')
+        self.assertNotIn('target_container', camera)
         self.assertNotIn('profile', camera)
         self.assertEqual(vehicle['config'].name, 'vehicle_config')
         self.assertEqual(vehicle['profile'].name, 'vehicle_profile')
@@ -353,8 +392,9 @@ class CompositionTests(unittest.TestCase):
             '/share/atd_sensors/launch/d455.launch.py', '/share/atd_vehicle_description/launch/vehicle.launch.py',
             '/share/atd_web_bridge/launch/input.launch.py', '/share/atd_localization/launch/localization.launch.py',
             '/share/atd_planning/launch/planning.launch.py', '/share/atd_control/launch/control.launch.py'])
+        self.assertEqual(dict(included[0].launch_arguments)['target_container'], '/atd_localization_container')
         self.assertEqual({k: v.name for k, v in included[-3].launch_arguments},
-                         {k: k for k in ('map_id', 'results_root', 'engine_dir')})
+                         {k: k for k in ('map_id', 'results_root', 'engine_dir', 'map_correction_source', 'vgl_frequency')})
         self.assertEqual({k: v.name for k, v in included[-2].launch_arguments if k != 'horizon_m'},
                          {k: k for k in ('map_id', 'results_root', 'line')})
         self.assertEqual({k: v.name for k, v in included[-1].launch_arguments}, {
@@ -392,6 +432,7 @@ class CompositionTests(unittest.TestCase):
         included = {e.args[0].args[0]: dict(e.launch_arguments) for e in groups}
         self.assertIn('/share/atd_sensors/launch/d455.launch.py', included)
         self.assertIn('/share/atd_localization/launch/localization.launch.py', included)
+        self.assertEqual(included['/share/atd_sensors/launch/d455.launch.py']['target_container'], '/atd_localization_container')
         controller = included['/share/atd_control/launch/control.launch.py']
         self.assertEqual(included['/share/atd_web_bridge/launch/input.launch.py']['drive_tuning'], 'true')
         self.assertEqual(controller['drive_tuning'], 'true')

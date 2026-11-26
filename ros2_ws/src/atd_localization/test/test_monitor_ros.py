@@ -19,12 +19,13 @@ from std_srvs.srv import Trigger
 from tf2_msgs.msg import TFMessage
 
 
-def test_ros_stamped_inputs_result_in_single_signed_observation_and_loss():
+@pytest.mark.parametrize('correction_source', ['cuvslam', 'vgl'])
+def test_ros_stamped_inputs_result_in_single_signed_observation_and_loss(correction_source):
     context = Context()
     rclpy.init(context=context, domain_id=110 + os.getpid() % 50)
     params = dict(map_id='race', map_sha256='a'*64, hdmap_sha256='b'*64, left_info='/test/left',
                   right_info='/test/right', left_frame='l', right_frame='r', image_width=640, image_height=480,
-                  max_age_s=5.)
+                  max_age_s=5., map_correction_source=correction_source)
     monitor = LocalizationMonitor(context=context, parameter_overrides=[Parameter(k, value=v) for k, v in params.items()])
     driver = Node('visual_slam', context=context)
     executor = SingleThreadedExecutor(context=context)
@@ -48,9 +49,12 @@ def test_ros_stamped_inputs_result_in_single_signed_observation_and_loss():
             response.success = True
             return response
         driver.create_service(Trigger, '/localization/request_hint', trigger)
-        driver.create_subscription(PoseWithCovarianceStamped, '/localization/pose_hint', lambda _: None, 10)
+        if correction_source == 'cuvslam':
+            driver.create_subscription(PoseWithCovarianceStamped, '/localization/pose_hint', lambda _: None, 10)
         sub = driver.create_subscription(LocalizationStatus, '/localization/status', received.append, 10)
-        spin_until(lambda: sub.get_publisher_count() > 0 and all(p.get_subscription_count() > 0 for p in pubs))
+        hint_subscribers = 2 if correction_source == 'cuvslam' else 1
+        spin_until(lambda: sub.get_publisher_count() > 0 and pubs[0].get_subscription_count() == hint_subscribers
+                   and all(p.get_subscription_count() > 0 for p in pubs[1:]))
         stamp = driver.get_clock().now().to_msg()
         for frame, pub in zip(('l','r'), pubs[-2:]):
             info = CameraInfo(width=640, height=480)
@@ -60,9 +64,10 @@ def test_ros_stamped_inputs_result_in_single_signed_observation_and_loss():
             KeyValue(key='vo_status', value='OK'), KeyValue(key='localized_in_exist_map', value='No')])])
         diag.header.stamp = stamp
         pubs[3].publish(diag)
-        # Simulate the first volatile VGL hint having been missed: the monitor
-        # must request another only after both hint consumers have been discovered.
-        spin_until(lambda: bool(requests))
+        # Keep the native hint pending across heartbeats with the service ready.
+        received.clear()
+        spin_until(lambda: sum(m.state == 'waiting_hint' for m in received) >= 10 or requests)
+        assert not requests
         assert not any(m.state == 'tracking' for m in received)
         # All remaining state changes, including the completed frame and loss,
         # must be published by input callbacks without a heartbeat tick.
@@ -82,9 +87,10 @@ def test_ros_stamped_inputs_result_in_single_signed_observation_and_loss():
         odom.twist.twist.linear.x = -.5
         odom.twist.twist.angular.z = .1
         tf = TransformStamped(child_frame_id='odom')
-        tf.header.stamp, tf.header.frame_id = stamp, 'map'
+        tf.header.stamp = hint.header.stamp if correction_source == 'vgl' else stamp
+        tf.header.frame_id = 'map'
         tf.transform.rotation.w, tf.transform.translation.y = 1., 3.
-        diag.status[0].values[1].value = 'Yes'
+        diag.status[0].values[1].value = 'No' if correction_source == 'vgl' else 'Yes'
         diag.header.stamp = stamp
         for pub, msg in zip(pubs[1:4], (odom, TFMessage(transforms=[tf]), diag)):
             pub.publish(msg)
@@ -98,7 +104,7 @@ def test_ros_stamped_inputs_result_in_single_signed_observation_and_loss():
         pubs[3].publish(diag)
         spin_until(lambda: received[-1].state == 'lost')
         assert received[-1].epoch > sample.epoch
-        assert requests == [True]
+        assert not requests
     finally:
         executor.shutdown()
         driver.destroy_node()

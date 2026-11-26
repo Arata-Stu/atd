@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 import subprocess
 import time
+from typing import Literal
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,6 +27,8 @@ class ValidationRun(BaseModel):
     revision: int = Field(ge=1)
     rate: float = Field(default=1.0, ge=.05, le=4., allow_inf_nan=False)
     engine_dir: str | None = None
+    map_correction_source: Literal['cuvslam', 'vgl'] = 'cuvslam'
+    vgl_frequency: float | None = Field(default=None, ge=0., allow_inf_nan=False)
 
 
 @lru_cache(maxsize=1)
@@ -130,6 +133,8 @@ def options(store, selected):
 
 
 def payload(store, body):
+    if body.vgl_frequency is not None and body.map_correction_source != 'vgl':
+        raise ValueError('VGL 照合頻度は地図補正元に cuVGL を選んだ場合に指定できます')
     reference = store.live_reference(body.map_id)
     _check_map(reference, body.map_id)
     doc = reference['document']
@@ -141,6 +146,7 @@ def payload(store, body):
     if validator() is None:
         raise ValueError(BUILD_HINT)
     return dict(map_id=body.map_id, bag=bag, rate=body.rate, engine_dir=body.engine_dir, metadata_sha256=sha,
+                map_correction_source=body.map_correction_source, vgl_frequency=body.vgl_frequency,
                 hdmap_sha256=reference['hdmap_sha256'], map_sha256=reference['map_sha256'])
 
 
@@ -174,7 +180,14 @@ def execute(store, task, request):
                '--domain', str(DOMAIN), '--results-root', str(store.result_root), '--record-root', str(store.record_root)]
     if request['engine_dir'] is not None:
         command.extend(['--engine-dir', request['engine_dir']])
-    code = task.run(command, ros=True, allowed_exit_codes=(0, 2))
+    correction = request.get('map_correction_source', 'cuvslam')
+    frequency = request.get('vgl_frequency')
+    if correction == 'vgl':
+        command.extend(['--map-correction-source', correction])
+        if frequency is not None:
+            command.extend(['--vgl-frequency', str(frequency)])
+    env = dict(os.environ, ATD_REPLAY_DDS=os.environ.get('ATD_REPLAY_DDS', 'udp'))
+    code = task.run(command, env=env, ros=True, allowed_exit_codes=(0, 2))
     path = confined(store.result_root, Path('runs/localization') / identifier(task.key) / 'report.json')
     report = read_json(path)
     expected = dict(map_id=key, bag=bag, map_sha256=request['map_sha256'], hdmap_sha256=request['hdmap_sha256'],
@@ -182,6 +195,9 @@ def execute(store, task, request):
                     schema='atd.localization.validation.v1', frame='map', body_frame='base_link',
                     ros_domain_id=DOMAIN, replay_rate=request['rate'])
     outcomes = ('tracked_to_end',) if code == 0 else ('partial_tracking', 'no_tracking')
-    if any(report.get(k) != value for k, value in expected.items()) or report.get('outcome') not in outcomes:
+    if correction == 'vgl':
+        expected['vgl_frequency_hz'] = 1.0 if frequency is None else frequency
+    if (report.get('map_correction_source', report.get('backend', 'cuvslam')) != correction
+            or any(report.get(k) != value for k, value in expected.items()) or report.get('outcome') not in outcomes):
         raise ValueError('検証結果の出典・終了状態が要求と一致しません。ログを確認してください')
     return dict(run_id=task.key, map_id=key, bag=bag, outcome=report['outcome'])

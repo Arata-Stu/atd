@@ -33,7 +33,9 @@ def _report(folder):
 
 
 def _entry(run_id, report):
-    return dict(id=run_id, map_id=report['map_id'], bag=report['bag'], outcome=report['outcome'])
+    return dict(id=run_id, map_id=report['map_id'], bag=report['bag'], outcome=report['outcome'],
+                map_correction_source=report.get('map_correction_source', report.get('backend', 'cuvslam')),
+                vgl_frequency_hz=report.get('vgl_frequency_hz'))
 
 
 def list_runs(store, map_id=None):

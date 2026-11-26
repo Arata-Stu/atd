@@ -22,9 +22,10 @@ import sys
 import time
 
 p = argparse.ArgumentParser()
-for option in ('run-id','map','bag','rate','domain','results-root','record-root','engine-dir'):
+for option in ('run-id','map','bag','rate','domain','results-root','record-root','engine-dir','map-correction-source','vgl-frequency'):
     p.add_argument('--' + option)
 args = p.parse_args()
+assert os.environ['ATD_REPLAY_DDS'] == 'udp'
 root = Path(args.results_root)
 run = root / 'runs/localization' / args.run_id
 run.mkdir(parents=True)
@@ -45,6 +46,8 @@ report = dict(schema='atd.localization.validation.v1', map_id=args.map, bag=args
     metadata_sha256=bag_hash, source_bag=source['bag'], source_metadata_sha256=source['metadata_sha256'],
     frame='map', body_frame='base_link', ros_domain_id=int(args.domain), replay_rate=float(args.rate),
     outcome=os.environ.get('ATD_TEST_OUTCOME', 'partial_tracking'))
+if args.map_correction_source == 'vgl':
+    report.update(map_correction_source='vgl', vgl_frequency_hz=float(args.vgl_frequency or '1'))
 (run / 'report.json').write_text(json.dumps(report))
 sys.exit(0 if report['outcome'] == 'tracked_to_end' else 2)
 '''
@@ -52,6 +55,7 @@ sys.exit(0 if report['outcome'] == 'tracked_to_end' else 2)
 
 @pytest.fixture
 def api(tmp_path, monkeypatch):
+    monkeypatch.delenv('ATD_REPLAY_DDS', raising=False)
     record, results = tmp_path / 'record', tmp_path / 'results'
     for name, data in [('day1/lap', b'mapping'), ('copy/lap', b'mapping'), ('day2/lap', b'validation')]:
         bag = record / 'rosbags' / name
@@ -95,15 +99,18 @@ def test_options_and_preflight(api):
     assert not manual['ready'] and manual['issue']
     assert {r['id']:r['eligible'] for r in options['bags']} == {'day1/lap':False,'copy/lap':False,'day2/lap':True}
     for override in [{'map_id':'manual'}, {'revision':2}, {'bag':'../outside'}, {'bag':'copy/lap'},
-                     {'engine_dir':'models/vgl/unrelated'}]:
+                     {'engine_dir':'models/vgl/unrelated'}, {'vgl_frequency':1.0}]:
         body = dict(map_id='circuit', revision=1, bag='day2/lap') | override
         assert api.post('/api/localization/runs', json=body).status_code == 400
 
 
-@pytest.mark.parametrize('outcome', ['tracked_to_end', 'partial_tracking', 'no_tracking'])
-def test_job_result_belongs_to_this_run(api, monkeypatch, outcome):
+@pytest.mark.parametrize('outcome,mode,frequency', [
+    ('tracked_to_end', {}, None), ('partial_tracking', {'map_correction_source': 'vgl'}, 1.0),
+    ('no_tracking', {'map_correction_source': 'vgl', 'vgl_frequency': 0.0}, 0.0),
+])
+def test_job_result_belongs_to_this_run(api, monkeypatch, outcome, mode, frequency):
     monkeypatch.setenv('ATD_TEST_OUTCOME', outcome)
-    response = api.post('/api/localization/runs', json=dict(map_id='circuit', revision=1, bag='day2/lap', rate=.5))
+    response = api.post('/api/localization/runs', json=dict(map_id='circuit', revision=1, bag='day2/lap', rate=.5, **mode))
     assert response.status_code == 200, response.text
     job = response.json()
     assert 'ros-domain:95' in job['resources']
@@ -111,6 +118,9 @@ def test_job_result_belongs_to_this_run(api, monkeypatch, outcome):
     done = api.get('/api/jobs/' + job['id']).json()
     assert done['status'] == 'succeeded', api.get('/api/jobs/' + job['id'] + '/log').json()
     assert done['result'] == dict(run_id=job['id'], map_id='circuit', bag='day2/lap', outcome=outcome)
+    history = api.get('/api/localization/runs').json()['items']
+    assert history[0]['map_correction_source'] == mode.get('map_correction_source', 'cuvslam')
+    assert history[0]['vgl_frequency_hz'] == frequency
 
 
 def test_cancel_waits_for_cleanup_and_releases_resources(api, monkeypatch):

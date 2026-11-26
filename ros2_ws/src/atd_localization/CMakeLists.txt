@@ -5,6 +5,12 @@ ament_auto_find_build_dependencies()
 find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 
+find_package(Threads REQUIRED)
+ament_auto_add_library(stereo_bag_input SHARED src/stereo_bag_input.cpp)
+target_compile_features(stereo_bag_input PRIVATE cxx_std_17)
+target_link_libraries(stereo_bag_input Threads::Threads)
+rclcpp_components_register_nodes(stereo_bag_input "atd_localization::StereoBagInput")
+
 install(PROGRAMS scripts/localization_monitor scripts/validate_bag DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})

@@ -18,7 +18,7 @@ usage() {
   closed-loop  保存地図で自己位置を推定し、操舵・スロットルを Gazebo に戻して自動走行（既定2周）
   benchmark   録画を止めた状態で ROS 2 の受信を計測（既定 60 実時間秒）
   diagnose    同じ計測区間に Gazebo 側でも画像とシミュレーション時刻を観測（既定 20 実時間秒）
-  serve       /clock・ステレオ画像・CameraInfo・固定 TF を配信（既定 Ctrl+C まで）
+  serve       センサーを配信（既定 Ctrl+C まで）。bringup gazebo と走行する場合は --wait-for-stereo を指定
   --course ID         コースを選択（既定 odaiba、--circuit ID も使用可）
   --speed m/s         RC スケールの走行速度（シミュレーション時間）。省略時はコース既定
                       closed-loop では保存した走行ラインの目標速度にかける上限（0.2 m/s 以上、既定 1.5）
@@ -28,6 +28,8 @@ usage() {
   --map ID            closed-loop の保存地図 ID（省略すると指定ライン・解像度に合う地図から選択）
   --line 種類         closed-loop の raceline / centerline / custom（省略で保存済みラインから選択）
   --tracking vo|vio   closed-loop の追跡方式。vo は左右画像（既定）、vio は左右画像＋統合 IMU
+  --map-correction-source cuvslam|vgl   closed-loop の map → odom の発行元（既定 cuvslam）
+  --vgl-frequency Hz  vgl が地図を照合する頻度。既定 1、0 で初回成功後は手動要求を待つ
   --engine-dir 相対パス  closed-loop の VGL engine を明示する場合の results からの相対パス
   --min-lookahead m   closed-loop の Pure Pursuit 最短先読み距離を指定
   --rviz / --no-rviz  closed-loop の走行ライン・GT・推定軌跡・cuVSLAM の特徴点を RViz で表示するか選択（既定 OFF）
@@ -37,8 +39,8 @@ usage() {
   --duration 秒       video・bag・map は1周の走行時間（--speed と排他）
                       benchmark・diagnose は実時間の計測時間（--speed と併用可）
   --route lap         全周を走行（既定）。連続配信では同方向に周回
-  --wait-for-stereo   serve を一時停止状態で起動し、左右の画像と CameraInfo の購読を待って走行開始
-  --dds shm|udp   Gazebo コンテナ内に Fast DDS 共有メモリを追加（shm、既定）、または従来の UDP のみ（udp）
+  --wait-for-stereo   serve から tracker に共有メモリでセンサーを渡し、左右の購読後に走行開始。単独 serve は ROS ブリッジで配信
+  --dds udp|shm       DDS は UDPv4 loopback（既定）。shm は転送診断用。ライブ走行のセンサー用共有メモリは別経路
   --camera-height m   地面から左右光学中心までの高さを指定
   --resolution WxH    左右とも 424x240 / 640x480（既定）/ 848x480 / 1280x720。closed-loop は VGL 地図と同じ解像度
   --camera-hz Hz      左右の撮影周期を 30 / 60 / 90 Hz から選択。既定は closed-loop が30 Hz、他は90 Hz
@@ -65,7 +67,7 @@ fi
 case "$action" in prepare|run|video|bag|map|closed-loop|benchmark|diagnose|serve) ;; *) fail "不明な操作: $action";; esac
 dry_run=false
 circuit=odaiba
-dds=shm
+dds=udp
 speed=
 full_throttle_speed=
 laps=
@@ -74,6 +76,8 @@ resolution=640x480
 camera_hz=90
 imu=
 tracking=vo
+correction_source=cuvslam
+vgl_frequency=
 map_id=
 line=
 engine_dir=
@@ -96,6 +100,13 @@ while (( $# )); do
             [[ "$action" = closed-loop ]] || fail "--tracking は closed-loop で指定してください"
             case "${2:-}" in vo|vio) ;; *) fail "--tracking は vo または vio を指定してください";; esac
             tracking="$2"; shift 2 ;;
+        --map-correction-source)
+            [[ "$action" = closed-loop ]] || fail "$1 は closed-loop で指定してください"
+            case "${2:-}" in cuvslam|vgl) ;; *) fail "$1 は cuvslam または vgl を指定してください";; esac
+            correction_source=$2; shift 2 ;;
+        --vgl-frequency)
+            [[ "$action" = closed-loop && -n "${2:-}" ]] || fail "$1 は closed-loop で Hz を指定してください"
+            vgl_frequency=$2; shift 2 ;;
         --map|--line|--engine-dir|--min-lookahead|--full-throttle-speed)
             [[ "$action" = closed-loop && -n "${2:-}" ]] || fail "$1 は closed-loop で値を指定してください"
             case "$1" in
@@ -313,6 +324,8 @@ run_mode() {
             --profile "$profile" --container "$map_container")
         if [[ "$mode" = closed-loop ]]; then
             job+=(--map "$map_id" --line "$line" --speed "$speed" --tracking "$tracking" --imu "$imu")
+            job+=(--map-correction-source "$correction_source")
+            if [[ -n "$vgl_frequency" ]]; then job+=(--vgl-frequency "$vgl_frequency"); fi
             if [[ -n "$full_throttle_speed" ]]; then job+=(--full-throttle-speed "$full_throttle_speed"); fi
             if $rviz; then job+=(--rviz); fi
             if $web; then

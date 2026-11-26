@@ -16,10 +16,9 @@ from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo
-from std_srvs.srv import Trigger
 from tf2_msgs.msg import TFMessage
 
-from .state import InitialHintRequest, RigidPose, TrackingState
+from .state import RigidPose, TrackingState
 
 
 def rigid(position, rotation):
@@ -32,7 +31,8 @@ class LocalizationMonitor(Node):
         super().__init__('atd_localization_monitor', **kwargs)
         defaults = dict(map_id='', map_sha256='', hdmap_sha256='', map_frame='map', odom_frame='odom',
                         base_frame='base_link', max_age_s=1.0, left_info='', right_info='', left_frame='',
-                        right_frame='', image_width=0, image_height=0, simulation_freshness=False, allow_sparse_tf=False)
+                        right_frame='', image_width=0, image_height=0, simulation_freshness=False,
+                        allow_sparse_tf=False, map_correction_source='cuvslam')
         self.config = {key: self.declare_parameter(key, value, ParameterDescriptor(read_only=True)).value
                        for key, value in defaults.items()}
         c = self.config
@@ -48,11 +48,10 @@ class LocalizationMonitor(Node):
             raise ValueError('低頻度 TF の補正には simulation_freshness が必要です')
         self.arrival_time = (lambda: self.get_clock().now().nanoseconds * 1e-9) if c['simulation_freshness'] else time.monotonic
         self.session_id = str(uuid.uuid4())
-        self.state = TrackingState(c['max_age_s'], allow_sparse_tf=c['allow_sparse_tf'])
-        self.startup_hint = InitialHintRequest()
-        self.hint_client = self.create_client(Trigger, '/localization/request_hint')
+        self.state = TrackingState(c['max_age_s'], allow_sparse_tf=c['allow_sparse_tf'],
+                                   map_correction_source=c['map_correction_source'])
         self.publisher = self.create_publisher(LocalizationStatus, '/localization/status', 10)
-        self.hint_subscription = self.create_subscription(PoseWithCovarianceStamped, '/localization/pose_hint', self.on_hint, 10)
+        self.create_subscription(PoseWithCovarianceStamped, '/localization/pose_hint', self.on_hint, 10)
         self.create_subscription(DiagnosticArray, '/diagnostics', self.on_diagnostic, qos_profile_sensor_data)
         self.create_subscription(Odometry, '/visual_slam/tracking/odometry', self.on_odometry, qos_profile_sensor_data)
         self.create_subscription(TFMessage, '/tf', self.on_tf, qos_profile_sensor_data)
@@ -123,31 +122,20 @@ class LocalizationMonitor(Node):
                             msg.twist.twist.linear.x, msg.twist.twist.angular.z)
         self.publish()
 
-    def hint_ready(self, wall):
-        if not (self.state.initialized_stereo(wall) and self.hint_client.service_is_ready()
-                and self.hint_subscription.get_publisher_count() == 1):
-            return False
-        endpoints = self.get_subscriptions_info_by_topic('/localization/pose_hint')
-        names = [item.node_name for item in endpoints if item.node_namespace == '/'
-                 and item.topic_type == 'geometry_msgs/msg/PoseWithCovarianceStamped']
-        return names.count('visual_slam') == 1 and names.count(self.get_name()) == 1
-
     def watch(self):
         self.state.clock(self.get_clock().now().nanoseconds)
-        received = self.arrival_time()
-        self.startup_hint.tick(time.monotonic(), stop=(self.state.registered or self.state.lost
-                                          or self.state.conflict or self.state.camera_mismatch),
-                               ready=lambda: self.hint_ready(received),
-                               request=lambda: self.hint_client.call_async(Trigger.Request()))
         self.publish(heartbeat=True)
 
     def publish(self, *, heartbeat=False):
+        was_registered = self.state.registered
         status = self.state.next_status(self.arrival_time(), heartbeat=heartbeat)
+        if self.state.map_correction_source == 'vgl' and self.state.registered and not was_registered:
+            self.get_logger().info(
+                f"VGL の地図補正と VO を確認 map={self.config['map_id']} "
+                f"session={self.session_id} epoch={self.state.epoch} correction_stamp_ns={self.state.registered_since}")
         if status is None:
             return
         state, reason, sample = status
-        if self.startup_hint.error and state in ('waiting_hint', 'localizing'):
-            reason = self.startup_hint.error
         msg = LocalizationStatus()
         msg.header.frame_id = self.config['map_frame']
         msg.map_id = self.config['map_id']

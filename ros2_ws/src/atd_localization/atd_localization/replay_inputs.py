@@ -36,29 +36,34 @@ def independent_bag(root, bag_id, source_id, source_hash):
     return bag, digest
 
 
-def stereo_window(left, right, tolerance_ns=5_000_000):
-    """cuVSLAM の 5 ms 同期許容で一対一のステレオ入力区間を求める。"""
-    i = j = pairs = 0
-    first = previous = None
-    max_gap = 0
+def stereo_pairs(left, right, tolerance_ns=5_000_000):
+    i = j = 0
     while i < len(left) and j < len(right):
         delta = left[i] - right[j]
         if abs(delta) <= tolerance_ns:
-            stamp = max(left[i], right[j])
-            if previous is None:
-                first = stamp
-            else:
-                max_gap = max(max_gap, stamp - previous)
-            previous = stamp
-            pairs += 1
+            yield left[i], right[j]
             i += 1
             j += 1
         elif delta < 0:
             i += 1
         else:
             j += 1
+
+
+def stereo_window(left, right, tolerance_ns=5_000_000):
+    """Tracker の許容時間差と出力時刻で、対応するステレオ入力区間を求める。"""
+    pairs = max_gap = 0
+    first = previous = None
+    for left_ns, right_ns in stereo_pairs(left, right, tolerance_ns):
+        stamp = max(left_ns, right_ns)
+        if previous is None:
+            first = stamp
+        else:
+            max_gap = max(max_gap, stamp - previous)
+        previous = stamp
+        pairs += 1
     if pairs < 2 or first == previous:
-        raise ValueError('左右の画像が 5 ms 以内で対応するステレオ観測が不足しています')
+        raise ValueError(f'左右の画像が {tolerance_ns/1e6:g} ms 以内で対応するステレオ観測が不足しています')
     return dict(stereo_pairs=pairs, left_images=len(left), right_images=len(right),
                 first_stamp_ns=first, last_stamp_ns=previous, largest_pair_gap_s=max_gap / 1e9)
 
@@ -71,7 +76,7 @@ def camera_signature(message):
     return (message.distortion_model, *numbers)
 
 
-def inspect_inputs(bag, meta):
+def inspect_inputs(bag, meta, *, recorded_stamps=None):
     import rosbag2_py
     from rclpy.serialization import deserialize_message
     from sensor_msgs.msg import CameraInfo, Image
@@ -113,4 +118,6 @@ def inspect_inputs(bag, meta):
     duration = metadata.get('duration', {}).get('nanoseconds')
     if type(duration) is not int or duration <= 0:
         raise ValueError('bag の再生時間を確認できません')
+    if recorded_stamps is not None:
+        recorded_stamps.update(stamps)
     return topics, duration / 1e9, stereo_window(stamps['left'], stamps['right'])

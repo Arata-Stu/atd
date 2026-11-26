@@ -20,7 +20,6 @@ from .store import atomic_json, confined, read_json
 
 
 DOMAIN = 94
-REPLAY_DDS_PROFILE = Path(__file__).resolve().parents[5] / 'docker/gazebo_monza/fastdds.xml'
 DEFAULTS = dict(replay_rate=1.0, ready_timeout_s=120.0, drain_timeout_s=30.0,
                 settle_s=3.0, tail_tolerance_s=0.5)
 
@@ -205,10 +204,9 @@ def capture(store, task, request):
                             config_dir=str(work / 'vgl_runtime_config'), input_shape=profile['input_shape']))
         job_file = work / 'capture_job.json'
         atomic_json(job_file, job)
-        # Apply the same local SHM/loopback profile as atd replay after sourcing the ROS overlay.
         task.run(['env', f'ROS_DOMAIN_ID={DOMAIN}', 'ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT',
                   'RMW_IMPLEMENTATION=rmw_fastrtps_cpp',
-                  f'FASTDDS_DEFAULT_PROFILES_FILE={REPLAY_DDS_PROFILE.resolve(strict=True)}',
+                  'ATD_REPLAY_DDS=' + os.environ.get('ATD_REPLAY_DDS', 'udp'),
                   'ros2', 'run', 'atd_mapping', 'capture_snapshot', '--job', str(job_file)], ros=True)
         task.check()
         snapshot_path = confined(work, 'snapshot.json')

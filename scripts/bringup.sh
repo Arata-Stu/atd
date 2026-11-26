@@ -142,7 +142,7 @@ if [[ "$task_setup" == simulation ]]; then
         esac
     done
     task_command+=(ros run -- env "ROS_DOMAIN_ID=$task_domain"
-        FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
+        FASTDDS_DEFAULT_PROFILES_FILE=/etc/atd/fastdds.xml
         ros2 launch "$task_package" "$task_launch")
     if ! $task_clock_set; then task_command+=(use_sim_time:=true); fi
 elif [[ "$task_setup" == trial ]]; then

@@ -1,6 +1,7 @@
 """Notebook 上の独立した Gazebo サーバー、ROS ブリッジと計測を管理する。"""
 import argparse
 from contextlib import ExitStack
+from functools import partial
 import json
 import math
 import os
@@ -14,6 +15,7 @@ import time
 import world
 import lap_bag
 from monza_motion import interpolate, travel_fraction
+from sensor_ingress import check_error
 from sensor_profile import (ACCEL_FRAME, ACCEL_TOPIC, CAMERA_RATES, DEFAULT_CAMERA_HZ,
                             GYRO_FRAME, GYRO_TOPIC, IMU_MODES, IMU_TOPIC, REAR_AXLE_HEIGHT_M, RESOLUTIONS)
 
@@ -84,7 +86,7 @@ def unpause(circuit):
     return reply.returncode == 0 and "data: true" in reply.stdout
 
 
-def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=None, *, imu_hz=0):
+def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=None, *, imu_hz=0, ingress_ready=None):
     import rclpy
     from rclpy.parameter import Parameter
     from rclpy.qos import QoSCompatibility, qos_check_compatible
@@ -95,8 +97,13 @@ def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=Non
         "atd_gazebo_startup", parameter_overrides=[Parameter("use_sim_time", value=True)]
     ) as node:
         def bridge_ready():
-            if node.count_publishers("/clock") > 1:
+            clocks = node.count_publishers("/clock")
+            if clocks > 1:
                 raise RuntimeError("同じ ROS ドメインに /clock の発行元が複数あります")
+            if ingress_ready is not None:
+                # The mapping / closed-loop worker starts after Gazebo signals readiness.
+                # Its ROS sensor publishers appear once it connects to the native sender.
+                return ingress_ready.is_file() and clocks == 1
             return all(node.count_publishers(t["ros_topic_name"]) for t in topics)
 
         wait_for(bridge_ready, children, 60, "ROS の /clock と選択したセンサーの publisher", check_external)
@@ -266,6 +273,7 @@ def drive_laps(children, out, scene, report, check_external=None):
 
 def map_laps(children, out, circuit, scene, report):
     def check_mapper():
+        check_error(out)
         if (out / "mapping.cancel").exists():
             raise RuntimeError("地図作成を中断しました")
         failed = out / "mapping.failed.json"
@@ -275,7 +283,8 @@ def map_laps(children, out, circuit, scene, report):
 
     # Let the clock and stereo run at the initial pose until the mapper has
     # actually tracked it. Waiting for odometry with the world paused deadlocks.
-    start_stream(children, False, circuit, check_mapper, imu_hz=report["imu_hz"])
+    start_stream(children, False, circuit, check_mapper, imu_hz=report["imu_hz"],
+                 ingress_ready=out / "scene/sensor_ingress.ready")
     (out / "gazebo.ready").touch(exist_ok=False)
     print("スタート位置で cuVSLAM の初期追跡を待っています。", flush=True)
     wait_for((out / "mapping.ready").is_file, children, 240, "cuVSLAM の初期追跡", check_mapper)
@@ -324,6 +333,7 @@ def run(args, report):
     out = args.output
     scene_dir = out / "scene"
     closed_loop = mode == "closed-loop"
+    sensor_ingress = mode in ("closed-loop", "map") or (mode == "serve" and args.wait_for_stereo)
     lap_video = mode == "video"
     finite_serve = mode == "serve" and args.laps not in (None, 0)
     finite_run = mode in ("video", "map", "bag") or finite_serve
@@ -340,7 +350,7 @@ def run(args, report):
                         circuit=args.circuit, route=args.route,
                         wait_for_capture=(lap_video or finite_serve or mode in ("map", "bag")),
                         record_ground_truth=mode == "bag", resolution=args.resolution,
-                        camera_hz=args.camera_hz, imu_hz=imu_hz, command_driven=closed_loop,
+                        camera_hz=args.camera_hz, imu_hz=imu_hz, command_driven=closed_loop, sensor_ingress=sensor_ingress,
                         full_throttle_speed_mps=args.full_throttle_speed if closed_loop else None)
     trajectory = scene["trajectory"]
     total_seconds = trajectory["total_travel_seconds"]
@@ -370,7 +380,12 @@ def run(args, report):
               f"（1周 {image_bytes / trajectory['laps'] / 1e9:.2f} GB × {trajectory['laps']}周、"
               f"mono8 {width}×{height} × 左右2枚 × {args.camera_hz} Hz）", flush=True)
     config = out / "bridge.yaml"
-    config.write_text(json.dumps(bridge_topics(args.circuit, imu_hz), indent=2) + "\n")
+    topics = bridge_topics(args.circuit, imu_hz)
+    if sensor_ingress:
+        topics = [t for t in topics if t["ros_topic_name"] == "/clock"]
+    config.write_text(json.dumps(topics, indent=2) + "\n")
+    stream = partial(start_stream, ingress_ready=scene_dir / "sensor_ingress.ready") if sensor_ingress else start_stream
+    report["sensor_transport"] = "gazebo_memfd_intra_process" if sensor_ingress else "ros_gz_bridge"
     report.update(ros_domain_id=os.environ.get("ROS_DOMAIN_ID", "0"),
                   dds_profile=os.environ.get("FASTDDS_DEFAULT_PROFILES_FILE"), scene="scene/scene.json",
                   simulated_rear_axle_height_m=REAR_AXLE_HEIGHT_M)
@@ -401,7 +416,7 @@ def run(args, report):
                                   "--ros-args", "-p", clock_param])
         if closed_loop:
             from closed_loop_trial import run_trial
-            return run_trial(children, out, scene, report, start_stream, wait_for, check_children)
+            return run_trial(children, out, scene, report, stream, wait_for, check_children)
         if mode == "map":
             return map_laps(children, out, args.circuit, scene, report)
         if mode == "bag":
@@ -410,14 +425,17 @@ def run(args, report):
             lap_bag.audit_and_publish(pending, args.bag_output, timing, report, scene_dir / "rig_motion.jsonl")
             return 0
         if mode == "serve":
-            start_stream(children, args.wait_for_stereo, args.circuit, imu_hz=imu_hz)
+            check_sender = partial(check_error, out) if sensor_ingress else None
+            stream(children, args.wait_for_stereo, args.circuit, check_sender, imu_hz=imu_hz)
             if finite_serve:
-                drive_laps(children, out, scene, report)
+                drive_laps(children, out, scene, report, check_sender)
                 print(f"{args.laps}周のゴールを確認しました。配信を終了します。", flush=True)
                 return 0
             print("配信中。/clock は Gazebo 時刻で進みます。Ctrl+C で終了します。", flush=True)
             while True:
                 check_children(children)
+                if check_sender is not None:
+                    check_sender()
                 time.sleep(0.5)
         probe = None
         if diagnose:

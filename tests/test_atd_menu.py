@@ -239,8 +239,7 @@ exit 130
         shutil.copy2(PROJECT / 'scripts/replay.sh', self.scripts / 'replay.sh')
         bag = '/data/record/rosbags/my session/lap 01'
         options = [bag, '--rate', '0.5', '--tracking', 'vio']
-        command = ['env', 'ROS_DOMAIN_ID=75',
-                   'FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml',
+        command = ['env', 'ROS_DOMAIN_ID=75', 'ATD_REPLAY_DDS=udp',
                    'ros2', 'run', 'atd_bringup', 'replay_vslam', *options]
         result = self.invoke('replay', '--dry-run', *options, ROS_DOMAIN_ID='74')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -248,11 +247,32 @@ exit 130
         self.assertIn('atd_pc_dev', args)
         self.assertEqual(args[args.index('/usr/local/bin/atd-shell') + 1:], command)
 
+        validation_options = ['--validate-map', 'cu_map', '--bag', 'my session/lap 01',
+                              '--rate', '1', '--map-correction-source', 'vgl', '--diagnose-frame-gaps', '--domain', '96']
+        validation_command = ['env', command[2], 'ros2', 'run', 'atd_localization', 'validate_bag',
+                              '--map', *validation_options[1:]]
+        result = self.invoke('replay', '--dry-run', *validation_options)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = shlex.split(result.stdout.split('command: ', 1)[1])
+        self.assertEqual(args[args.index('/usr/local/bin/atd-shell') + 1:], validation_command)
+        result = self.invoke('replay', '--dry-run', *validation_options, ATD_REPLAY_DDS='shm')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('ATD_REPLAY_DDS=shm', shlex.split(result.stdout.split('command: ', 1)[1]))
+        result = self.invoke('replay', '--dry-run', *options, ATD_REPLAY_DDS='invalid')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        for bad_options in (['--validate-map'], ['--validate-map', '--bag', 'lap'],
+                            ['--validate-map', 'cu_map', '--validate-map', 'extra']):
+            result = self.invoke('replay', '--dry-run', *bad_options)
+            self.assertEqual(result.returncode, 2, result.stderr)
+
         # コンテナ内の起動時に ATD shell で overlay を読み直すところまで確認する。
         shell = self.root / 'docker/scripts/atd-shell.sh'
         shell.parent.mkdir(parents=True)
         shell.write_text('#!/bin/bash\nprintf "%s\\0" "$@" > "$MENU_TEST_CALLS"\nexit 17\n')
         shell.chmod(0o755)
+        result = self.invoke('replay', *validation_options, MENU_TEST_CONTAINER='1')
+        self.assertEqual(result.returncode, 17, result.stderr)
+        self.assert_call(*validation_command)
         for domain in ('0', '232'):
             command[1] = 'ROS_DOMAIN_ID=' + domain
             result = self.invoke('replay', *options, MENU_TEST_CONTAINER='1', ATD_REPLAY_ROS_DOMAIN_ID=domain)

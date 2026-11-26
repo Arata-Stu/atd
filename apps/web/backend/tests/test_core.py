@@ -313,7 +313,7 @@ def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch, odom
                 'cuvslam.cfg_planar=false', 'cuvslam.cfg_slam_max_map_size=0']
             assert '--base_link_name=camera_link' in argv
             assert '--use_cusfm=False' in argv and '--use_cuvslam_opencv_compat=True' in argv
-            assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
+            assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'SYSTEM_DEFAULT'
             output = Path(next(a.split('=', 1)[1] for a in argv if a.startswith('--base_output_folder=')))
             run = output / 'run1'
             (run / 'cuvslam_map').mkdir(parents=True)

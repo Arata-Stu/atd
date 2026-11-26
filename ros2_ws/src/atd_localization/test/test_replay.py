@@ -1,6 +1,7 @@
 """ROS/GPU を使わない別 bag 検証の入出力・時刻・失敗状態の回帰テスト。"""
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ import pytest
 import yaml
 
 from atd_localization import assets, replay
+from atd_mapping.replay_dds import select_replay_dds
 from atd_localization.replay_inputs import camera_signature, independent_bag, stereo_window
 from atd_localization.replay_report import TrackingReport
 
@@ -20,6 +22,36 @@ def bag(root, name, start):
     data = yaml.safe_dump(metadata).encode()
     (folder / 'metadata.yaml').write_bytes(data)
     return hashlib.sha256(data).hexdigest()
+
+
+def test_replay_transport_keeps_direct_invocations_and_distinguishes_udp_and_shm(tmp_path, monkeypatch):
+    project, config = tmp_path / 'repo', tmp_path / 'config'
+    config.mkdir()
+    udp = config / 'fastdds.xml'
+    shm = project / 'docker/gazebo_monza/fastdds.xml'
+    shm.parent.mkdir(parents=True)
+    for path in (udp, shm):
+        path.write_text('<dds/>')
+    monkeypatch.setenv('ATD_PROJECT_DIR', str(project))
+    monkeypatch.setenv('ATD_DDS_CONFIG_DIR', str(config))
+    inherited = '/custom/profile.xml'
+    monkeypatch.setenv('FASTDDS_DEFAULT_PROFILES_FILE', inherited)
+    monkeypatch.setenv('ROS_AUTOMATIC_DISCOVERY_RANGE', 'LOCALHOST')
+    monkeypatch.delenv('ATD_REPLAY_DDS', raising=False)
+    select_replay_dds()
+    assert os.environ['FASTDDS_DEFAULT_PROFILES_FILE'] == inherited
+    assert os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
+
+    monkeypatch.setenv('ATD_REPLAY_DDS', 'udp')
+    select_replay_dds()
+    assert os.environ['FASTDDS_DEFAULT_PROFILES_FILE'] == str(udp)
+    assert os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'SYSTEM_DEFAULT'
+    monkeypatch.setenv('ATD_REPLAY_DDS', 'shm')
+    select_replay_dds()
+    assert os.environ['FASTDDS_DEFAULT_PROFILES_FILE'] == str(shm)
+    monkeypatch.setenv('ATD_REPLAY_DDS', 'typo')
+    with pytest.raises(ValueError, match='ATD_REPLAY_DDS'):
+        select_replay_dds()
 
 
 def test_separate_recording_detects_duplicate_and_rewritten_metadata(tmp_path):
@@ -82,7 +114,13 @@ def test_coverage_only_counts_distinct_fresh_samples_in_same_episode():
 
 
 @pytest.mark.parametrize('status, code', [('tracking', 0), ('lost', 2), ('error', 1)])
-def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, status, code):
+@pytest.mark.parametrize('mode_args,source,frequency', [
+    ([], 'cuvslam', None),
+    (['--map-correction-source', 'vgl'], 'vgl', 1.),
+    (['--map-correction-source', 'vgl', '--vgl-frequency', '0'], 'vgl', 0.),
+])
+def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, status, code,
+                                                    mode_args, source, frequency):
     records = tmp_path / 'record'
     source_hash = bag(records, 'a/run', 1)
     bag(records, 'b/run', 2)
@@ -97,26 +135,39 @@ def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, stat
     monkeypatch.setattr(replay, 'inspect_inputs', lambda *args: (['/left', '/right', '/left_info', '/right_info', '/tf_static'], .5, window))
     def fake_ros(args, resolved, replay_bag, topics, duration, report, output):
         assert resolved == meta and replay_bag == records / 'b/run'
-        launch = replay.launch_command(args.results_root, args.map_id, args.engine_dir)
+        launch = replay.launch_command(args.results_root, args.map_id, args.engine_dir, replay_bag, args.rate, 'player',
+                                       map_correction_source=args.map_correction_source, vgl_frequency=args.vgl_frequency)
         assert launch[1:4] == ['launch','atd_localization','localization.launch.py'] and 'use_sim_time:=true' in launch
-        play = replay.play_command(replay_bag, topics, '/tmp/qos', args.rate)
-        assert '--clock' in play and play[play.index('--topics')+1:] == topics
+        assert {'replay_bag:=' + str(replay_bag), 'replay_rate:=1.0', 'replay_player_name:=player',
+                'map_correction_source:=' + source} <= set(launch)
+        if frequency is not None:
+            assert f'vgl_frequency:={frequency}' in launch
         assert not {'/tf','/localization/status','/vehicle/command','/clock'} & set(topics)
         if status == 'error':
             raise ValueError('launch failed')
         report.observe('run', 0, status, '', 10**9, [0., .2] if status == 'tracking' else None)
         if status == 'tracking':
             report.observe('run', 0, status, '', 15*10**8, [1., .2])
+        return dict(sensor_input_transport='ros2_intra_process', bag_input=dict(
+            before_replay=dict(left_intra_readers=2, right_intra_readers=2)))
     monkeypatch.setattr(replay, 'run_ros', fake_ros)
     run_id = 'a' * 32
     args = ['--map', 'course', '--bag', 'b/run', '--run-id', run_id,
-            '--results-root', str(results), '--record-root', str(records)]
+            '--results-root', str(results), '--record-root', str(records), *mode_args]
     assert replay.main(args) == code
     [path] = (results / 'runs/localization').glob('*/report.json')
     assert path.parent.name == run_id
     result = json.loads(path.read_text())
     assert (path.parent / 'hdmap.json').read_bytes() == hdmap.read_bytes()
     assert result['outcome'] == {'tracking':'tracked_to_end','lost':'no_tracking','error':'failed'}[status]
+    if status == 'error':
+        assert 'sensor_input_transport' not in result
+    else:
+        assert result['sensor_input_transport'] == 'ros2_intra_process'
+        assert result['bag_input']['before_replay']['left_intra_readers'] == 2
+    assert result['map_correction_source'] == source
+    assert result.get('vgl_frequency_hz') == frequency
+    assert result['tracking'] == 'vo'
     assert result['bag'] == 'b/run' and result['source_metadata_sha256'] == source_hash
     assert replay.main(args) == 1
     assert json.loads(path.read_text()) == result
@@ -179,3 +230,55 @@ def test_inspect_bag_reads_real_topic_contract_and_refuses_frame_mismatch(tmp_pa
     raw[0][1].transforms.pop()
     with pytest.raises(ValueError, match='Missing static TF'):
         inspect_inputs(tmp_path, description)
+
+
+def test_fixed_map_paused_player_waits_for_slam_vgl_and_monitor_on_remapped_topics(monkeypatch):
+    import sys
+    from unittest.mock import Mock
+
+    workflow = dict(left_image='/l', right_image='/r', left_info='/li', right_info='/ri', tf_static='/tf_static')
+    topic_types = dict.fromkeys(('/l', '/r'), 'sensor_msgs/msg/Image')
+    topic_types.update(dict.fromkeys(('/li', '/ri'), 'sensor_msgs/msg/CameraInfo'))
+    topic_types['/localization/pose_hint'] = 'geometry_msgs/msg/PoseWithCovarianceStamped'
+    topic_types.update({'/tf_static': 'tf2_msgs/msg/TFMessage', '/clock': 'rosgraph_msgs/msg/Clock'})
+    def endpoint(name, topic, qos=True):
+        return SimpleNamespace(node_name=name, node_namespace='/', topic_type=topic_types[topic], qos_profile=qos)
+    pubs = {t: [endpoint('player', t)] for t in topic_types}
+    for topic in ('/l', '/r', '/li', '/ri'):
+        pubs[topic] = [endpoint('atd_sensor_bag_input', topic)]
+    pubs['/localization/pose_hint'] = [endpoint('visual_global_localization', '/localization/pose_hint')]
+    pubs['/tf_static'].append(endpoint('visual_slam', '/tf_static'))
+    subs = {t: [endpoint(n, t) for n in ('visual_slam', 'visual_global_localization', 'atd_localization_monitor')]
+            for t in topic_types}
+    subs['/tf_static'] = [endpoint('transform_listener_impl_12', '/tf_static')]
+    node = Mock()
+    node.get_service_names_and_types.return_value = []
+    node.get_publishers_info_by_topic.side_effect = pubs.__getitem__
+    node.get_subscriptions_info_by_topic.side_effect = subs.__getitem__
+    monkeypatch.setitem(sys.modules, 'rclpy.qos', SimpleNamespace(QoSCompatibility=SimpleNamespace(ERROR=False),
+                        qos_check_compatible=lambda pub, sub: (pub == sub, '')))
+    assert not replay.validation_connections(node, '/player', workflow)
+    # The VO-only node intentionally has no subscription to the VGL hint.
+    subs['/localization/pose_hint'] = [endpoint('atd_localization_monitor', '/localization/pose_hint')]
+    assert not replay.validation_connections(node, '/player', workflow, map_correction_source='vgl')
+    assert any('/localization/pose_hint' in i and '/visual_slam' in i
+               for i in replay.validation_connections(node, '/player', workflow))
+    subs['/li'][-1].qos_profile = False
+    subs['/r'] = [endpoint('visual_slam', '/r')]
+    issues = replay.validation_connections(node, '/player', workflow)
+    assert any('/li' in i and 'atd_localization_monitor' in i and 'QoS' in i for i in issues)
+    assert any('/r' in i and 'visual_global_localization' in i for i in issues)
+    pubs['/l'].append(endpoint('separate_bag_player', '/l'))
+    with pytest.raises(RuntimeError, match='競合'):
+        replay.validation_connections(node, '/player', workflow)
+
+
+@pytest.mark.parametrize('options', [
+    ['--vgl-frequency', '1'],
+    ['--map-correction-source', 'vgl', '--vgl-frequency', '-1'],
+    ['--map-correction-source', 'vgl', '--vgl-frequency', 'nan'],
+])
+def test_rejects_invalid_vgl_frequency(options):
+    with pytest.raises(SystemExit) as exc:
+        replay.main(options)
+    assert exc.value.code == 2

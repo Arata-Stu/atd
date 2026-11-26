@@ -22,7 +22,8 @@ def setup(context):
         extra_arguments=[{'use_intra_process_comms': True}]),
         ComposableNode(package='isaac_ros_visual_global_localization',
         plugin='nvidia::isaac_ros::visual_global_localization::VisualGlobalLocalizationNode',
-        name='visual_global_localization', parameters=[parameters['vgl']], remappings=remaps['vgl'])]
+        name='visual_global_localization', parameters=[parameters['vgl']], remappings=remaps['vgl'],
+        extra_arguments=[{'use_intra_process_comms': True}])]
     return [ComposableNodeContainer(name='atd_mapping_container', namespace='',
         package='rclcpp_components', executable='component_container_mt', output='screen',
         composable_node_descriptions=nodes)]

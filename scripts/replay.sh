@@ -36,6 +36,7 @@ RViz では cuVSLAM の直近の推定姿勢を橙の矢印で表示します。
 --headless は RViz を開かずに Gazebo の正解軌跡との誤差を保存し、再生の末尾で終了します。
 --slam-max-map-size は SLAM 地図の姿勢数上限です。既定の 0 は無制限で、300 を指定すると従来の条件で比較できます。
 通常の再生には ROS domain 75（ATD_REPLAY_ROS_DOMAIN_ID で変更可能）、--validate-map の固定地図検証には 95（--domain で変更可能）を使います。
+bag 再生の DDS は loopback UDP。以前の Gazebo bag の計測条件を再現する場合は ATD_REPLAY_DDS=shm を指定します。
 ホストから使う場合は、先に atd dev で開発コンテナを起動してください。
 EOF
             exit 0 ;;
@@ -67,7 +68,14 @@ if [[ "$mode" != --validate-map ]]; then
     fi
     command+=("ROS_DOMAIN_ID=$domain")
 fi
-command+=(FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml ros2 run)
+if [[ -z "$mode" || "$mode" = --validate-map ]]; then
+    policy="${ATD_REPLAY_DDS:-udp}"
+    case "$policy" in
+        udp|shm) command+=("ATD_REPLAY_DDS=$policy") ;;
+        *) printf 'atd replay: ATD_REPLAY_DDS は udp または shm を指定してください。\n' >&2; exit 2 ;;
+    esac
+fi
+command+=(ros2 run)
 case "$mode" in
     --validate-map) command+=(atd_localization validate_bag) ;;
     --imu-gaps) command+=(atd_bringup evaluate_orb_gyro) ;;

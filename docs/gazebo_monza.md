@@ -52,13 +52,13 @@ Gazebo の bag を選ぶと、RViz に次の3つが表示される。
 
 新しい `atd gazebo bag` は通常シミュレーション時間で 20 Hz を目安に正解を記録し、bag に `atd_ground_truth/rig_motion.jsonl` を同梱する。既存の Gazebo bag でも、元の名前の bag と、同じ試行の `run.json` および `scene/rig_motion.jsonl` が Notebook の結果ディレクトリに残っていれば自動で照合する。お台場の保存先は `/data/results/runs/gazebo/odaiba/<run-id>/`。古い記録では正解のサンプル間隔が約 0.5 秒になることがあり、コーナーのサンプル間は直線補間される。正解が見つからない場合は端末にその旨を表示し、cuVSLAM の推定姿勢を表示する。
 
-`atd replay --rate 1` で等速になる。bag 名を指定する場合は `atd replay "親ディレクトリ/bag名" --rate 0.5` のように `/data/record/rosbags/` からの相対パスを渡す。コンテナ内の絶対パスも使える。再生用の domain は既定 75（`ATD_REPLAY_ROS_DOMAIN_ID` で変更可）。専用の Fast DDS 設定と bag の `/clock` を使う。
+`atd replay --rate 1` で等速になる。bag 名を指定する場合は `atd replay "親ディレクトリ/bag名" --rate 0.5` のように `/data/record/rosbags/` からの相対パスを渡す。コンテナ内の絶対パスも使える。再生用の domain は既定 75（`ATD_REPLAY_ROS_DOMAIN_ID` で変更可）。DDS は車載と同じループバック UDP を使い、時刻は bag の `/clock` に合わせる。
 
 `Failed to track: Timestamps are non-monotonic` が続いてRVizの表示が点滅する場合は、再生中に別端末の Notebook の Isaac ROS コンテナで次を実行する。通常、オドメトリの配信元は `/visual_slam` の1つ。再生前に同名のトラッカーを2つ検出した場合、`atd replay` は競合を報告する。
 
 ```bash
 export ROS_DOMAIN_ID=75
-export FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
+export FASTDDS_DEFAULT_PROFILES_FILE=/etc/atd/fastdds.xml
 ros2 topic info /visual_slam/tracking/odometry --verbose --no-daemon
 ```
 
@@ -105,7 +105,7 @@ Notebook の Isaac ROS コンテナでは、初回に `atd build --packages-up-t
 
 ```bash
 export ROS_DOMAIN_ID=74
-export FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
+export FASTDDS_DEFAULT_PROFILES_FILE=/etc/atd/fastdds.xml
 ```
 
 端末1は `ros2 launch atd_bringup bag_vslam.launch.py`。cuVSLAM を `component_container_mt` にロードする。ログに `Loaded node '/visual_slam'` が出たら準備完了。
@@ -152,20 +152,20 @@ atd bringup gazebo
 
 全周ではゴールを越えると同じ向きで次周に入り、`/clock` は単調に進む。左右画像・CameraInfo の時刻は Gazebo の撮影時刻。cuVSLAM とその component container は `use_sim_time=true` で動作し、`/visual_slam/tracking/odometry` と `odom → base_link` の TF を出力する。例えば実時間1秒で `/clock` が0.47秒進むと、姿勢と速度の時間軸も0.47秒進む。実時間の90 Hz達成は起動条件に含まれない。今回は画像による相対姿勢推定を対象とし、車両 I/O は Jetson 側の従来の profile が担当する。[ROS 2 の時計](https://design.ros2.org/articles/clock_and_time.html)
 
-両端末は既定で ROS domain 74 を使用する。変更時は両方で同じ `ATD_GAZEBO_ROS_DOMAIN_ID` を設定する。連続配信では Gazebo と Isaac に同じ SHM＋loopback の Fast DDS プロファイルを適用し、Isaac ROS CLI 標準構成に合わせて host network と IPC を共有する。動画・計測は従来どおり専用コンテナの IPC で完結する。[Isaac ROS CLI の起動設定](https://github.com/NVIDIA-ISAAC-ROS/isaac-ros-cli/blob/main/scripts/run_dev/run_dev.py)・[Fast DDS の Docker 通信](https://fast-dds.docs.eprosima.com/en/3.x/docker/shm_docker.html)
+両端末は既定で ROS domain 74 を使用する。変更時は両方で同じ `ATD_GAZEBO_ROS_DOMAIN_ID` を設定する。`serve --wait-for-stereo`、`map`、`closed-loop` では、Gazebo のセンサーを共有メモリで Isaac 側に渡す。`gazebo_sensor_ingress` は tracker と同じ component container に入り、ステレオ画像・CameraInfo・有効な IMU を ROS 2 の intra-process 通信で渡す。ROS のトピック名は実車 D455 と共通で、別プロセスの画像購読を追加するとその購読者へも配信する。`/clock`、TF、診断、制御の DDS はループバック UDP を使う。Gazebo 内ではセンサーの native topic を購読する。画素の共有メモリへの書き込みと、受信側の ROS Image バッファへの読み込みがある。
 
 **別端末の Notebook ATD 開発コンテナ**で、シミュレーション時計の有効化・進行と VO の出力を確認できる。
 
 ```bash
 export ROS_DOMAIN_ID="${ATD_GAZEBO_ROS_DOMAIN_ID:-74}"
-export FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml
+export FASTDDS_DEFAULT_PROFILES_FILE=/etc/atd/fastdds.xml
 ros2 param get /visual_slam use_sim_time
 ros2 topic echo /clock --once
 ros2 topic echo /visual_slam/status --once
 ros2 topic echo /visual_slam/tracking/odometry --field header.stamp --qos-reliability best_effort --once
 ```
 
-終了は両端末で Ctrl+C。Gazebo を起動し直すと `/clock` はゼロから始まるので、VO も新しいセッションで起動する。`atd gazebo serve` 単独なら購読を待たずに配信する。
+終了は両端末で Ctrl+C。Gazebo を起動し直すと `/clock` はゼロから始まるので、VO も新しいセッションで起動する。`atd gazebo serve` 単独なら ROS ブリッジから画像を配信するため、tracker を起動せずに RViz 等で購読できる。
 
 ### 取付高・時間を変える
 
@@ -187,7 +187,7 @@ atd gazebo diagnose --dds udp
 atd gazebo diagnose --dds shm
 ```
 
-両方とも同じシーン・計測時間を使う。`udp` は UDPv4 loopback、`shm` は Fast DDS の共有メモリも使える設定で、動画・計測・連続配信の既定値。動画・計測では Gazebo コンテナ専用の `/dev/shm` 上限を128 MiBにする。`serve` では Isaac ROS と IPC を共有し、別コンテナの cuVSLAM にも共有メモリで画像を渡せる。[Fast DDS の SHM transport](https://fast-dds.docs.eprosima.com/en/3.x/fastdds/transport/shared_memory/shared_memory.html)
+両方とも同じシーン・計測時間と ROS ブリッジを使う。`udp` が通常の UDPv4 loopback、`shm` は比較用に Fast DDS の共有メモリ transport を加える指定。ライブ走行で Gazebo と tracker の間に使うセンサー専用の共有メモリは、DDS の設定から独立している。[Fast DDS の SHM transport](https://fast-dds.docs.eprosima.com/en/3.x/fastdds/transport/shared_memory/shared_memory.html)
 
 | 診断に表示される結果 | 確認する箇所 |
 |---|---|

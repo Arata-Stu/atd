@@ -9,6 +9,8 @@ import signal
 import subprocess
 import time
 
+from .replay_dds import select_replay_dds
+
 
 def stop(process):
     """root worker の5秒grace以内で、launchの子プロセス群も片付ける。"""
@@ -133,6 +135,7 @@ def run(job_file):
     from .bag_inputs import inspect_bag
     from .capture_collector import CaptureCollector
     from .capture_config import resolve_capture, inspect_engines
+    select_replay_dds()
     job = json.loads(job_file.read_text())
     config = Path(get_package_share_directory('atd_mapping')) / 'config'
     resolved = resolve_capture(config, job, inspect_engines)

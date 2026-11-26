@@ -18,6 +18,7 @@ import uuid
 
 from atd_mapping.capture_snapshot import publisher_signature, stop
 from atd_mapping.frames import stamp_ns
+from atd_mapping.replay_dds import select_replay_dds
 
 from .replay_dds import replay_dds_profile
 from .replay_inputs import independent_bag, inspect_inputs
@@ -109,7 +110,7 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None):
     from atd_interfaces.msg import LocalizationStatus
     from rclpy.signals import SignalHandlerOptions
 
-    os.environ.update(ROS_DOMAIN_ID=str(args.domain), ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST', ROS_STATIC_PEERS='')
+    os.environ.update(ROS_DOMAIN_ID=str(args.domain), ROS_STATIC_PEERS='')
     def interrupt(*_):
         raise KeyboardInterrupt
     old_handler = signal.signal(signal.SIGTERM, interrupt)
@@ -290,6 +291,8 @@ def main(argv=None):
             ids = (p.parent.relative_to(args.record_root).as_posix() for p in args.record_root.rglob('metadata.yaml'))
             args.bag = choose('別走行の bag', (i for i in ids if i != meta['source_bag']))
         bag, digest = independent_bag(args.record_root, args.bag, meta['source_bag'], meta['source_metadata_sha256'])
+        select_replay_dds()
+        os.environ.setdefault('ROS_AUTOMATIC_DISCOVERY_RANGE', 'LOCALHOST')
         run_id = args.run_id or datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:12]
         category = 'cuvslam_frame_gaps' if args.diagnose_frame_gaps else 'localization'
         destination = args.results_root / 'runs' / category / run_id

@@ -73,13 +73,13 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
                                      choices=['true', 'false'] if key in ('joy_drive', 'orb_gyro_bridge') else None)
                for key, value in defaults.items()]
     if camera:
-        actions += [
-            include('atd_sensors', 'd455.launch.py', {
-                'config': arguments['camera_config'], 'serial': arguments['camera_serial'],
-                **{key: arguments[key] for key in CAMERA_ARGUMENTS}}),
-            include('atd_vehicle_description', 'vehicle.launch.py', {
-                'config': arguments['vehicle_config'], 'profile': arguments['vehicle_profile']}),
-        ]
+        camera_args = {'config': arguments['camera_config'], 'serial': arguments['camera_serial'],
+                       **{key: arguments[key] for key in CAMERA_ARGUMENTS}}
+        if localization:
+            camera_args['target_container'] = '/atd_localization_container'
+        actions.append(include('atd_sensors', 'd455.launch.py', camera_args))
+        actions.append(include('atd_vehicle_description', 'vehicle.launch.py', {
+            'config': arguments['vehicle_config'], 'profile': arguments['vehicle_profile']}))
     if manual:
         # input.launch.py already owns the only web_bridge instance.
         inputs = {key: arguments[key] for key in INPUT_ARGUMENTS}
@@ -92,8 +92,10 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
                             parameters=[{'port': ParameterValue(arguments['joy_drive_port'], value_type=str),
                                          'serial': ParameterValue(arguments['pico_serial'], value_type=str)}]))
     if localization:
-        actions.append(include('atd_localization', 'localization.launch.py',
-                               {key: arguments[key] for key in ('map_id', 'results_root', 'engine_dir')}))
+        localization_args = {key: arguments[key] for key in ('map_id', 'results_root', 'engine_dir')}
+        if camera:
+            localization_args['compose_orb'] = 'true'
+        actions.append(include('atd_localization', 'localization.launch.py', localization_args))
         actions.append(Node(package='atd_bringup', executable='orb_gyro_bridge', output='screen',
                             condition=IfCondition(arguments['orb_gyro_bridge']),
                             parameters=[{key: ParameterValue(arguments[arg], value_type=str) for key, arg in

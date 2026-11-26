@@ -40,6 +40,8 @@ def loaded_launch():
         'launch.launch_description_sources': module('launch.launch_description_sources',
                                                     PythonLaunchDescriptionSource=Action),
         'launch.substitutions': module('launch.substitutions', LaunchConfiguration=Configuration),
+        'launch_ros.actions': module('launch_ros.actions', LoadComposableNodes=Action),
+        'launch_ros.descriptions': module('launch_ros.descriptions', ComposableNode=Action),
     }
     path = Path(__file__).resolve().parents[1] / 'launch/d455.launch.py'
     with patch.dict(sys.modules, modules):
@@ -51,7 +53,8 @@ def loaded_launch():
 
 class CameraLaunchTests(unittest.TestCase):
     def context(self):
-        return {'config': '/tmp/requested.yaml', 'serial': '', **{key: '' for key in OVERRIDE_ARGUMENTS}}
+        return {'config': '/tmp/requested.yaml', 'serial': '', 'target_container': '',
+                **{key: '' for key in OVERRIDE_ARGUMENTS}}
 
     def test_exact_sdk_validation_precedes_official_driver_with_requested_parameters(self):
         with loaded_launch() as launch, patch.object(launch, 'load', return_value=deepcopy(DEFAULTS)), \
@@ -75,6 +78,27 @@ class CameraLaunchTests(unittest.TestCase):
         self.assertEqual(parameters['camera_name'], 'camera')
         self.assertEqual(parameters['publish_tf'], 'true')
         self.assertTrue({'config_file', 'json_file_path', 'rosbag_filename'}.isdisjoint(parameters))
+
+    def test_component_uses_upstream_typed_defaults_and_only_validated_overrides(self):
+        defaults = [{'name': key, 'default': value} for key, value in {
+            'depth_module.exposure': '8500', 'rosbag_filename': "''", 'enable_color': 'false',
+            'serial_no': "''", 'reconnect_timeout': '6.', 'depth_module.infra_profile': '0,0,0'}.items()]
+        with loaded_launch() as launch, patch.object(launch, 'load', return_value=deepcopy(DEFAULTS)), \
+                patch.object(launch.probe, 'validate', side_effect=lambda value: {**value, 'serial': '001234'}), \
+                patch.object(launch, 'run_path', return_value={'configurable_parameters': defaults}):
+            context = dict(self.context(), target_container='/atd_localization_container', rosbag_filename='other.bag')
+            group, = launch.start_camera(context)
+        self.assertTrue(group.scoped)
+        self.assertFalse(group.forwarding)
+        loader, = group.actions
+        self.assertEqual(loader.target_container, context['target_container'])
+        camera, = loader.composable_node_descriptions
+        self.assertEqual((camera.namespace, camera.name, camera.plugin), ('camera', 'camera', 'realsense2_camera::RealSenseNodeFactory'))
+        self.assertEqual(camera.extra_arguments, [{'use_intra_process_comms': True}])
+        params, = camera.parameters
+        self.assertIs(params['enable_color'], True)
+        self.assertEqual((params['depth_module.exposure'], params['reconnect_timeout'], params['rosbag_filename']), (8500, 6., ''))
+        self.assertEqual((params['serial_no'], params['depth_module.infra_profile']), ('_001234', '640,480,90'))
 
     def test_all_off_requires_no_camera_sdk_and_starts_no_driver(self):
         with loaded_launch() as launch, patch.object(launch, 'load', return_value=deepcopy(DEFAULTS)), \

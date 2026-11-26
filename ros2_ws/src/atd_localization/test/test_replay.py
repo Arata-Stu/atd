@@ -1,6 +1,7 @@
 """ROS/GPU を使わない別 bag 検証の入出力・時刻・失敗状態の回帰テスト。"""
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ import pytest
 import yaml
 
 from atd_localization import assets, replay
+from atd_mapping.replay_dds import select_replay_dds
 from atd_localization.replay_inputs import camera_signature, independent_bag, stereo_window
 from atd_localization.replay_report import TrackingReport
 
@@ -20,6 +22,36 @@ def bag(root, name, start):
     data = yaml.safe_dump(metadata).encode()
     (folder / 'metadata.yaml').write_bytes(data)
     return hashlib.sha256(data).hexdigest()
+
+
+def test_replay_transport_keeps_direct_invocations_and_distinguishes_udp_and_shm(tmp_path, monkeypatch):
+    project, config = tmp_path / 'repo', tmp_path / 'config'
+    config.mkdir()
+    udp = config / 'fastdds.xml'
+    shm = project / 'docker/gazebo_monza/fastdds.xml'
+    shm.parent.mkdir(parents=True)
+    for path in (udp, shm):
+        path.write_text('<dds/>')
+    monkeypatch.setenv('ATD_PROJECT_DIR', str(project))
+    monkeypatch.setenv('ATD_DDS_CONFIG_DIR', str(config))
+    inherited = '/custom/profile.xml'
+    monkeypatch.setenv('FASTDDS_DEFAULT_PROFILES_FILE', inherited)
+    monkeypatch.setenv('ROS_AUTOMATIC_DISCOVERY_RANGE', 'LOCALHOST')
+    monkeypatch.delenv('ATD_REPLAY_DDS', raising=False)
+    select_replay_dds()
+    assert os.environ['FASTDDS_DEFAULT_PROFILES_FILE'] == inherited
+    assert os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
+
+    monkeypatch.setenv('ATD_REPLAY_DDS', 'udp')
+    select_replay_dds()
+    assert os.environ['FASTDDS_DEFAULT_PROFILES_FILE'] == str(udp)
+    assert os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'SYSTEM_DEFAULT'
+    monkeypatch.setenv('ATD_REPLAY_DDS', 'shm')
+    select_replay_dds()
+    assert os.environ['FASTDDS_DEFAULT_PROFILES_FILE'] == str(shm)
+    monkeypatch.setenv('ATD_REPLAY_DDS', 'typo')
+    with pytest.raises(ValueError, match='ATD_REPLAY_DDS'):
+        select_replay_dds()
 
 
 def test_separate_recording_detects_duplicate_and_rewritten_metadata(tmp_path):

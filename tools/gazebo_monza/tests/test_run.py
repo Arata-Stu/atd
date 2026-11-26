@@ -173,6 +173,20 @@ class RunContractTests(unittest.TestCase):
             for tf in frames:
                 self.assertEqual((tf[0], *tf[2:]), ("camera_link", 0, 0, 0, -pi/2, 0, -pi/2))
 
+    def test_composed_mapping_starts_clock_before_isaac_advertises_sensors(self):
+        ros = MagicMock()
+        node = ros.create_node.return_value.__enter__.return_value
+        node.count_publishers.side_effect = lambda topic: int(topic == "/clock")
+        node.get_clock.return_value.now.side_effect = [SimpleNamespace(nanoseconds=s) for s in (10, 20)]
+        modules = {"rclpy": ros, "rclpy.parameter": MagicMock(), "rclpy.signals": MagicMock(), "rclpy.qos": MagicMock()}
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(sys.modules, modules), \
+                patch.object(run, "unpause", return_value=True), patch.object(run.time, "sleep"):
+            ready = Path(tmp) / "sensor_ingress.ready"
+            ready.touch()
+            run.start_stream({}, False, imu_hz=400, ingress_ready=ready)
+        self.assertEqual({call.args[0] for call in node.count_publishers.call_args_list}, {"/clock"})
+        node.create_subscription.assert_not_called()
+
     def test_serve_waits_for_compatible_stereo_subscribers_and_advancing_ros_clock(self):
         ros = MagicMock()
         node = ros.create_node.return_value.__enter__.return_value

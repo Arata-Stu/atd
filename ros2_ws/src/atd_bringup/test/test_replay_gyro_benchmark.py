@@ -110,12 +110,14 @@ def test_recorded_dds_content_and_rmw_are_compared_across_runs(tmp_path, monkeyp
     _, orb = fixture_runs(tmp_path)
     profile = tmp_path / 'fastdds.xml'
     monkeypatch.setenv('FASTDDS_DEFAULT_PROFILES_FILE', str(profile))
+    monkeypatch.setenv('ROS_AUTOMATIC_DISCOVERY_RANGE', 'SYSTEM_DEFAULT')
     cu_meta = tmp_path / 'runs/localization/cu/report.json'
     orb_meta = orb / 'summary.json'
     for path, xml in ((cu_meta, b'udp'), (orb_meta, b'shm')):
         profile.write_bytes(xml)
         recorded = replay_dds_profile()
         assert recorded['path'] == str(profile)
+        assert recorded['discovery_range'] == 'SYSTEM_DEFAULT'
         assert recorded['sha256'] == hashlib.sha256(xml).hexdigest()
         path.write_text(json.dumps({**json.loads(path.read_text()), 'dds_profile': recorded}))
     assert replay_benchmark.main(['cu', 'orb', '--results-root', str(tmp_path)]) == 0
@@ -129,9 +131,15 @@ def test_recorded_dds_content_and_rmw_are_compared_across_runs(tmp_path, monkeyp
     for path in (cu_meta, orb_meta):
         meta = json.loads(path.read_text())
         meta['dds_profile'] = dict(rmw_implementation='rmw_fastrtps_cpp', path=str(path.parent / 'copy.xml'),
-                                   sha256=recorded['sha256'])
+                                   sha256=recorded['sha256'], discovery_range='SYSTEM_DEFAULT')
         path.write_text(json.dumps(meta))
     assert compare_gyro_run(tmp_path, 'cu', 'orb')['dds_profiles']['comparison'] == 'match'
+    meta['dds_profile']['discovery_range'] = 'LOCALHOST'
+    orb_meta.write_text(json.dumps(meta))
+    assert compare_gyro_run(tmp_path, 'cu', 'orb')['dds_profiles']['comparison'] == 'different'
+    del meta['dds_profile']['discovery_range']
+    orb_meta.write_text(json.dumps(meta))
+    assert compare_gyro_run(tmp_path, 'cu', 'orb')['dds_profiles']['comparison'] == 'unknown'
     meta['dds_profile']['rmw_implementation'] = 'rmw_cyclonedds_cpp'
     orb_meta.write_text(json.dumps(meta))
     assert compare_gyro_run(tmp_path, 'cu', 'orb')['dds_profiles']['comparison'] == 'different'

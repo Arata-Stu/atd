@@ -13,7 +13,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('run_dir', description='Gazebo と共有する新しい試行ディレクトリ'),
         DeclareLaunchArgument('map_dir', description='この試行の cuVSLAM 地図出力先'),
-        stereo_container(True, mapping=True, slam_max_map_size=slam_max_map_size),
+        stereo_container(True, live_sensors=True, mapping=True, slam_max_map_size=slam_max_map_size),
         Node(package='atd_bringup', executable='gazebo_lap_map', output='screen',
              arguments=['--run-dir', LaunchConfiguration('run_dir'), '--map-dir', LaunchConfiguration('map_dir'),
                         '--slam-max-map-size', str(slam_max_map_size)],

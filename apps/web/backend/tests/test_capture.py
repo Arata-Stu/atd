@@ -1,5 +1,6 @@
 """保存地図点群取得の準備検査・作業コピー・公開境界。ROS/GPU は fake のみ。"""
 import json
+import os
 from pathlib import Path
 import shutil
 from unittest.mock import Mock
@@ -247,8 +248,8 @@ class Work:
         assert env['ROS_DOMAIN_ID'] == '94'
         assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'SYSTEM_DEFAULT'
         assert env['RMW_IMPLEMENTATION'] == 'rmw_fastrtps_cpp'
-        profile = Path(env['FASTDDS_DEFAULT_PROFILES_FILE'])
-        assert profile.is_file() and profile == Path(__file__).resolve().parents[4] / 'docker/gazebo_monza/fastdds.xml'
+        assert env['ATD_REPLAY_DDS'] == os.environ.get('ATD_REPLAY_DDS', 'udp')
+        assert 'FASTDDS_DEFAULT_PROFILES_FILE' not in env
         assert '.capture-' in job['map_dir']
         assert (Path(job['map_dir']) / 'map.mdb').read_bytes() == b'original map'
         # collector は作業コピーを変更しても元地図を変更しない。
@@ -256,7 +257,12 @@ class Work:
         atomic_json(Path(job['output']) / 'snapshot.json', snapshot())
 
 
-def test_capture_commits_only_verified_snapshot_and_auto_cloud(prepared):
+@pytest.mark.parametrize('dds', [None, 'shm'])
+def test_capture_commits_only_verified_snapshot_and_auto_cloud(prepared, monkeypatch, dds):
+    if dds is None:
+        monkeypatch.delenv('ATD_REPLAY_DDS', raising=False)
+    else:
+        monkeypatch.setenv('ATD_REPLAY_DDS', dds)
     result = capture.capture(prepared, Work(), {'id': 'course', 'revision': 1})
     assert result == dict(map='course', revision=2, pointcloud_ready=True, point_count=2)
     doc = prepared.load_map('course')

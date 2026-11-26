@@ -26,6 +26,7 @@ p = argparse.ArgumentParser()
 for option in ('run-id','map','bag','rate','domain','results-root','record-root','engine-dir'):
     p.add_argument('--' + option)
 args = p.parse_args()
+assert os.environ['ATD_REPLAY_DDS'] == 'udp'
 root = Path(args.results_root)
 run = root / 'runs/localization' / args.run_id
 run.mkdir(parents=True)
@@ -53,6 +54,7 @@ sys.exit(0 if report['outcome'] == 'tracked_to_end' else 2)
 
 @pytest.fixture
 def api(tmp_path, monkeypatch):
+    monkeypatch.delenv('ATD_REPLAY_DDS', raising=False)
     record, results = tmp_path / 'record', tmp_path / 'results'
     for name, data in [('day1/lap', b'mapping'), ('copy/lap', b'mapping'), ('day2/lap', b'validation')]:
         bag = record / 'rosbags' / name

@@ -90,7 +90,7 @@ def map_build(store, task, payload, *, validate_source=None):
             '--override', 'cuvslam.cfg_planar=false',
             '--override', f'cuvslam.cfg_slam_max_map_size={OFFLINE_SLAM_MAX_MAP_SIZE}',
             '--steps_to_run', 'edex', 'compute_poses']
-        task.run(command, env=dict(os.environ, ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST', ROS_DOMAIN_ID=str(MAP_DOMAIN)))
+        task.run(command, env=dict(os.environ, ROS_AUTOMATIC_DISCOVERY_RANGE='SYSTEM_DEFAULT', ROS_DOMAIN_ID=str(MAP_DOMAIN)))
         candidates = sorted({p.resolve() for p in nvidia.rglob('cuvslam_map') if p.is_dir()})
         if len(candidates) != 1 or not candidates[0].is_relative_to(nvidia):
             raise ValueError('公式出力内の cuvslam_map 実体を一意に確認できません')
@@ -141,9 +141,9 @@ def _orb_map_build(store, task, payload):
     bag = confined(store.record_root, payload['bag'])
     command = [str(replay), '--backend', 'orbslam3', '--save-map', key, '--tracking', 'vo', '--headless',
                '--rate', str(payload['rate']), '--', str(bag)]
-    env = dict(os.environ, ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST', ROS_DOMAIN_ID=str(MAP_DOMAIN),
+    env = dict(os.environ, ROS_AUTOMATIC_DISCOVERY_RANGE='SYSTEM_DEFAULT', ROS_DOMAIN_ID=str(MAP_DOMAIN),
                ATD_REPLAY_RECORD_ROOT=str(store.record_root), ATD_REPLAY_RESULTS_ROOT=str(store.result_root),
-               FASTDDS_DEFAULT_PROFILES_FILE=str(Path(__file__).resolve().parents[5] / 'docker/gazebo_monza/fastdds.xml'))
+               ATD_REPLAY_DDS=os.environ.get('ATD_REPLAY_DDS', 'udp'))
     try:
         # Signal the replay supervisor directly so it can stop both ROS processes and discard its staging directory.
         task.run(command, env=env, ros=True)

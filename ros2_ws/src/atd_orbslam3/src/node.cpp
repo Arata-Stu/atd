@@ -171,6 +171,7 @@ public:
       const auto topic = "/camera/camera/infra" + std::to_string(side + 1);
       images_[side] = create_subscription<Image>(topic + "/image_rect_raw", sensor,
         [this, side](Image::ConstSharedPtr image) {
+          ++received_images_[side];
           if (finished_ || ns(image->header) <= last_stamp_) { return; }
           auto & queue = image_queue_[side];
           if (!queue.empty() && ns(queue.back()->header) >= ns(image->header)) { return; }
@@ -235,6 +236,13 @@ public:
 
   ~OrbslamNode() override
   {
+    if (tracked_pairs_ > 0) {
+      RCLCPP_INFO(get_logger(),
+        "ORB 計測: 左右画像の受信 %zu / %zu、TrackStereo %zu 対、平均 %.2f ms / 最大 %.2f ms、"
+        "撮影周期 (%.2f ms) を超えた呼び出し %zu 回",
+        received_images_[0], received_images_[1], tracked_pairs_, tracking_total_ms_ / tracked_pairs_,
+        tracking_max_ms_, 1000.0 / fps_, over_camera_period_);
+    }
     if (core_ && !shutdown_) {
       try { core_->Shutdown(); }
       catch (const std::exception & e) { RCLCPP_WARN(get_logger(), "%s", e.what()); }
@@ -352,7 +360,13 @@ private:
     }
     const auto input_left = view(left, *camera_);
     const auto input_right = view(right, *camera_);
+    const auto begin = std::chrono::steady_clock::now();
     const auto tcw = core_->TrackStereo(input_left, input_right, stamp * 1e-9, measurements);
+    const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - begin;
+    ++tracked_pairs_;
+    tracking_total_ms_ += elapsed.count();
+    tracking_max_ms_ = std::max(tracking_max_ms_, elapsed.count());
+    if (elapsed.count() > 1000.0 / fps_) { ++over_camera_period_; }
     last_stamp_ = stamp;
     const bool ok = core_->GetTrackingState() == ORB_SLAM3::Tracking::OK &&
                     (!inertial_ || core_->GetTimeFromIMUInit() > 0.) &&
@@ -524,6 +538,9 @@ private:
   }
 
   WorkDir work_;
+  std::array<std::size_t, 2> received_images_{};
+  std::size_t tracked_pairs_{}, over_camera_period_{};
+  double tracking_total_ms_{}, tracking_max_ms_{};
   Confirmation confirm_;
   tf2::BufferCore tf_;
   std::optional<Calibration> camera_;

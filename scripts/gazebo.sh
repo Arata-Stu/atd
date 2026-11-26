@@ -18,7 +18,7 @@ usage() {
   closed-loop  保存地図で自己位置を推定し、操舵・スロットルを Gazebo に戻して自動走行（既定2周）
   benchmark   録画を止めた状態で ROS 2 の受信を計測（既定 60 実時間秒）
   diagnose    同じ計測区間に Gazebo 側でも画像とシミュレーション時刻を観測（既定 20 実時間秒）
-  serve       /clock・ステレオ画像・CameraInfo・固定 TF を配信（既定 Ctrl+C まで）
+  serve       センサーを配信（既定 Ctrl+C まで）。bringup gazebo と走行する場合は --wait-for-stereo を指定
   --course ID         コースを選択（既定 odaiba、--circuit ID も使用可）
   --speed m/s         RC スケールの走行速度（シミュレーション時間）。省略時はコース既定
                       closed-loop では保存した走行ラインの目標速度にかける上限（0.2 m/s 以上、既定 1.5）
@@ -37,8 +37,8 @@ usage() {
   --duration 秒       video・bag・map は1周の走行時間（--speed と排他）
                       benchmark・diagnose は実時間の計測時間（--speed と併用可）
   --route lap         全周を走行（既定）。連続配信では同方向に周回
-  --wait-for-stereo   serve を一時停止状態で起動し、左右の画像と CameraInfo の購読を待って走行開始
-  --dds shm|udp   Gazebo コンテナ内に Fast DDS 共有メモリを追加（shm、既定）、または従来の UDP のみ（udp）
+  --wait-for-stereo   serve から tracker に共有メモリでセンサーを渡し、左右の購読後に走行開始。単独 serve は ROS ブリッジで配信
+  --dds udp|shm       DDS は UDPv4 loopback（既定）。shm は転送診断用。ライブ走行のセンサー用共有メモリは別経路
   --camera-height m   地面から左右光学中心までの高さを指定
   --resolution WxH    左右とも 424x240 / 640x480（既定）/ 848x480 / 1280x720。closed-loop は VGL 地図と同じ解像度
   --camera-hz Hz      左右の撮影周期を 30 / 60 / 90 Hz から選択。既定は closed-loop が30 Hz、他は90 Hz
@@ -65,7 +65,7 @@ fi
 case "$action" in prepare|run|video|bag|map|closed-loop|benchmark|diagnose|serve) ;; *) fail "不明な操作: $action";; esac
 dry_run=false
 circuit=odaiba
-dds=shm
+dds=udp
 speed=
 full_throttle_speed=
 laps=

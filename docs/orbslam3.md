@@ -112,7 +112,7 @@ ROS 2 では `/orbslam3/continuous_odometry` に姿勢、対応する `/orbslam3
    atd gazebo bag --course odaiba --speed 3 --laps 2 --resolution 640x480 --camera-hz 90 --imu 400
    ```
 
-4. Linux Notebook ホストまたは ORB 対応コンテナで、テスト bag を等速で2回、順に再生する。1回目で画像で確定した ORB 姿勢とジャイロ補完後の姿勢の両方が残る。2回目は保存済み NVIDIA 地図に対する cuVSLAM のステレオ定位。両方のコマンドが同じ Fast DDS 設定（共有メモリとループバック UDP）を使う。
+4. Linux Notebook ホストまたは ORB 対応コンテナで、テスト bag を等速で2回、順に再生する。1回目で画像で確定した ORB 姿勢とジャイロ補完後の姿勢の両方が残る。2回目は保存済み NVIDIA 地図に対する cuVSLAM のステレオ定位。既定の DDS は両方ともループバック UDP。以前の計測と同じ共有メモリ＋UDP の XML を使うときは、同じ端末で両方の実行前に `export ATD_REPLAY_DDS=shm` を指定し、終了後に `unset ATD_REPLAY_DDS` で戻す。bag player は独立したプロセスで動く。
 
    ```bash
    read -rp '評価用の bag 名: ' TEST_BAG
@@ -130,7 +130,7 @@ ROS 2 では `/orbslam3/continuous_odometry` に姿勢、対応する `/orbslam3
 
 結果は `runs/vslam_benchmark/<RUN>/report.json`。`output_time_fraction` は、隣り合う出力の間隔が 0.25 秒以下だった時間の合計を共通の評価区間の長さで割った値。3方式で同じ定義を使う。位置・方位は両バックエンドの最初の共通観測で Gazebo 正解に合わせる。ジャイロ補完には ORB と同じ座標変換を使う。`paired_accuracy` で画像を追跡できた共通時刻の精度を、`orbslam3_gyro.predicted_accuracy` で補完中の出力だけの対 GT 誤差を確認する。再取得の段差とその直前・直後の値は ORB run の `reacquisitions.csv` に残る。
 
-`dds_profiles` には各 run の RMW 実装、Fast DDS 設定ファイルのパス、内容の SHA-256 が入る。RMW と設定内容が揃えば `comparison` は `match`、記録値が異なれば `different` となり、端末にも警告を表示する。必要な情報が残っていない過去の run は `unknown` として比較できる。
+`dds_profiles` には各 run の RMW 実装、Fast DDS 設定ファイルのパスと SHA-256、ROS の探索範囲が入る。RMW、設定内容、ROS の探索範囲が揃えば `comparison` は `match`、記録値が異なれば `different` となり、端末にも警告を表示する。必要な情報が残っていない過去の run は `unknown` として比較できる。
 
 cuVSLAM の処理フレームが飛んだときは、同じ地図・bag・倍率で画像到達と追跡処理を記録する。追加の画像購読を伴う診断は、通常のベンチマークと別に `runs/cuvslam_frame_gaps/<run>/` に保存する。
 
@@ -140,7 +140,16 @@ atd replay --validate-map odaiba_s1_cu --bag "$TEST_BAG" --rate 1 --diagnose-fra
 
 `frame_trace.json` の `largest_processed_gap` は cuVSLAM の処理完了ステータスを受信した画像時刻の最大間隔。区間内で bag に記録されたペア数、独立した DDS 購読者に届いたペア数、区間両端のコールバック時間・VO 計算時間、その前後の地図照合は `frame_trace.csv` と突き合わせられる。独立購読者と cuVSLAM はそれぞれ自身の受信キューを持つ。
 
-お台場 3 m/s・1周の同一 bag を等速で検証した際、直接起動した `validate_bag` の既定設定（ループバック UDP）では追跡時間率 0.2%・有効姿勢7件だった。ORB 再生と同じ共有メモリ＋UDP 設定で cuVSLAM を再実行すると 98.7%・2,594件で、0.25秒を超えた姿勢間隔は0回。地図は両方とも `odaiba_s1_cu` で、収録済みステレオペアの最大間隔は11.11 ms。この比較の cuVSLAM run は順に `0bc147f187b4463e8fb19c4524f9eb1a` と `20261126T120637Z-4c46210bee6c`。
+お台場 3 m/s・1周の同一 bag を等速で検証した際、直接起動した `validate_bag` に通常のループバック UDP の XML を指定した run では追跡時間率 0.2%・有効姿勢7件だった。ORB 再生と同じ共有メモリ＋UDP の XML を指定して cuVSLAM を再実行すると 98.7%・2,594件で、0.25秒を超えた姿勢間隔は0回。地図は両方とも `odaiba_s1_cu` で、収録済みステレオペアの最大間隔は11.11 ms。この比較の cuVSLAM run は順に `0bc147f187b4463e8fb19c4524f9eb1a` と `20261126T120637Z-4c46210bee6c`。このときの検証入口は ROS の探索範囲を `LOCALHOST` に上書きしていた。既存ログから DDS が各画像を実際にどの transport に渡したかは分からない。
+
+同じテスト bag での結果を下表に示す。等速の共通観測736組で、先頭の共通姿勢を正解に合わせた平面位置 RMSE は cuVSLAM 0.075 m、ORB 0.136 m、方位誤差の中央値は順に 0.22°、0.32°。出力カバー率は cuVSLAM 98.7%、ORB 60.2%、ORB のジャイロ補完込みで 80.8% だった。
+
+| ORB 固定地図 `odaiba_s1_orb` | bag のステレオ対 | 処理完了通知 | 画像で確定した地図姿勢 | 処理通知あたりの確定姿勢 |
+|---|---:|---:|---:|---:|
+| 等速 `20261126T114921Z-4a248f46b067` | 2,629 | 1,837 (69.9%) | 736 | 40.1% |
+| 半速 `20261126T121747Z-4bc122a1a7bc` | 2,629 | 2,614 (99.4%) | 1,109 | 42.4% |
+
+半速は画像の撮影時刻と走行速度を維持したまま、計算・受信に使える実時間を増やす。半速でも参照キーフレームとの対応不足と再定位が繰り返された。処理通知の件数だけから、DDS、受信キュー、ORB 本体の各段階の所要時間は特定できない。新しい ORB ノードは終了時の `ORB 計測` に左右の画像コールバック件数、`TrackStereo` が処理した対数、平均・最大の実時間、撮影周期（90 Hz なら 11.11 ms）を超えた回数を出す。この計測は再生倍率に関係なくカメラ本来の周期と比較する。
 
 ### 画像観測のみの2方式を比較する
 

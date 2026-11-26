@@ -24,6 +24,8 @@
 
 実車の記録 manager は待機しており、Joy・プロポの割当操作で記録を開始・停止する。プロポの基本走行は Pico 内で完結する。Notebook のシミュレーションはホストで `atd gazebo serve --wait-for-stereo`、別端末で `atd bringup gazebo` を実行する。[シミュレーションの起動と時刻の確認](gazebo_monza.md#gazebo-の時刻で-cuvslam-を起動する)
 
+Jetson の `localization` と `autonomous` は D455 と選択した地図の推定器を `/atd_localization_container` にロードする。NVIDIA 地図では cuVSLAM と cuVGL、ORB 地図では ORB-SLAM3 が同じプロセスで raw 画像を購読する。`atd-shell ros2 component list` でコンテナ配下に `/camera/camera` と推定器があることを確認できる。この構成の RealSense driver は raw 画像を直接配信するため、圧縮画像用の image_transport topic は生成しない。別プロセスの rosbag が raw 画像を購読すると、その配信には loopback UDP が使われる。定位監視は別プロセスで CameraInfo を受け取り、任意の ORB ジャイロ補完ノードも有効時は IMU を購読する。
+
 ## DualSense で手動走行する
 
 1. Jetson に Rev6 Pico を USB 接続し、Jetson ホストで `./scripts/bluetooth.sh` を実行して DualSense に接続する。初回は駆動輪を浮かせ、プロポの CH3 をプロポ側、スロットルを中立にする。[DualSense のペアリング手順](setup/jetson.md#dualsense)

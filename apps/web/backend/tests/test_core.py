@@ -321,6 +321,8 @@ def test_orb_build_preflight_pins_bag_and_uses_mapping_job_resources(client, mon
 @pytest.mark.parametrize('outcome', ['complete', 'cancel', 'missing'])
 def test_orb_map_job_executes_replay_and_requires_publication(tmp_path, monkeypatch, outcome):
     from atd_api.offline import map_build
+    monkeypatch.delenv('ATD_REPLAY_DDS', raising=False)
+    monkeypatch.setenv('FASTDDS_DEFAULT_PROFILES_FILE', '/etc/atd/fastdds.xml')
     store = Store(tmp_path / 'bags', tmp_path / 'results')
     bag = store.record_root / 'days' / 'lap'
     bag.mkdir(parents=True)
@@ -331,7 +333,8 @@ def test_orb_map_job_executes_replay_and_requires_publication(tmp_path, monkeypa
         def run(self, argv, *, env, ros):
             assert argv == ['/install/lib/atd_bringup/replay_vslam', '--backend', 'orbslam3', '--save-map', 'built',
                             '--tracking', 'vo', '--headless', '--rate', '0.25', '--', str(bag)]
-            assert ros and env['ROS_DOMAIN_ID'] == '93' and env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
+            assert ros and env['ROS_DOMAIN_ID'] == '93' and env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'SYSTEM_DEFAULT'
+            assert env['ATD_REPLAY_DDS'] == 'udp' and env['FASTDDS_DEFAULT_PROFILES_FILE'] == '/etc/atd/fastdds.xml'
             assert Path(env['ATD_REPLAY_RECORD_ROOT']) == store.record_root
             assert Path(env['ATD_REPLAY_RESULTS_ROOT']) == store.result_root
             if outcome == 'cancel':
@@ -377,7 +380,7 @@ def test_official_mapping_staging_and_artifact_check(tmp_path, monkeypatch, odom
                 'cuvslam.cfg_planar=false', 'cuvslam.cfg_slam_max_map_size=0']
             assert '--base_link_name=camera_link' in argv
             assert '--use_cusfm=False' in argv and '--use_cuvslam_opencv_compat=True' in argv
-            assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
+            assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'SYSTEM_DEFAULT'
             output = Path(next(a.split('=', 1)[1] for a in argv if a.startswith('--base_output_folder=')))
             run = output / 'run1'
             (run / 'cuvslam_map').mkdir(parents=True)

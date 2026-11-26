@@ -222,6 +222,8 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - Isaac ROS 5 は `rosidl::Buffer` と CUDA buffer backend を利用する。従来の NITROS API をそのまま前提にしない。
 - 会話中に確認した `rmw_cyclonedds_cpp` の公式リポジトリでは、非 CPU バッファの CPU fallback 対応 PR が未マージであった。このため Fast DDS を初期標準の候補として提案した。
 - その後の実装指示に基づき、初期構成として Fast DDS の loopback UDP 設定を実装した。実機通信の確認は未実施である。
+- 実車の走行時は、D455 のステレオ画像・CameraInfo・有効な IMU を自己位置推定と同じ component container 内で受け渡す。プロセス内は rclcpp の intra-process、プロセス間の DDS はループバック UDPv4 を標準とする。
+- Gazebo のライブ走行は、シミュレーターとの境界にセンサー専用の共有メモリを使い、受信 component から tracker までを実車と同じ構成にする。時刻・TF・制御・診断は通常の ROS インターフェースを使う。外部購読者による画像表示と bag 記録は、その購読者への転送を伴う。
 - CUDA buffer backend は条件を満たす同一ホスト内の通信で GPU メモリを共有する。DDS の UDP 設定と CUDA バッファの共有は別の層として扱う。
 
 参照: [NITROS からの移行](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/rosidl_buffer/nitros_migration.html)、[CUDA buffer backend](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/rosidl_buffer/cuda_buffer_backend.html)、[Cyclone DDS の対応 PR #603](https://github.com/ros2/rmw_cyclonedds/pull/603)

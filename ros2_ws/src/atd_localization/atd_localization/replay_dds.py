@@ -19,4 +19,5 @@ def replay_dds_profile():
                 digest = hashlib.sha256(profile.read_bytes()).hexdigest()
         except OSError:
             pass  # 読めない設定はパスだけを残し、評価自体は実行する。
-    return dict(rmw_implementation=rmw, path=path, sha256=digest)
+    return dict(rmw_implementation=rmw, path=path, sha256=digest,
+                discovery_range=os.environ.get('ROS_AUTOMATIC_DISCOVERY_RANGE'))

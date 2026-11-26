@@ -91,10 +91,10 @@ def _dds_profiles(cu, orb):
         profile = run.get('dds_profile')
         if not isinstance(profile, dict):
             profile = {'path': profile}  # 旧 run はパスだけ、または未記録。
-        return {key: profile.get(key) for key in ('rmw_implementation', 'path', 'sha256')}
+        return {key: profile.get(key) for key in ('rmw_implementation', 'path', 'sha256', 'discovery_range')}
 
     a, b = recorded(cu), recorded(orb)
-    keys = ('rmw_implementation', 'sha256')
+    keys = ('rmw_implementation', 'sha256', 'discovery_range')
     known = [key for key in keys if a[key] and b[key]]
     differences = [key for key in known if a[key] != b[key]]
     comparison = 'unknown'

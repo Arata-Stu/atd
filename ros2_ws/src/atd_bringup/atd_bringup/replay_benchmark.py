@@ -258,7 +258,7 @@ def main(argv=None):
         if dds['warning']:
             print(dds['warning'], file=sys.stderr)
         elif dds['comparison'] == 'unknown':
-            print('DDS 設定の照合に必要な RMW またはプロファイル hash が未記録です。')
+            print('DDS 設定の照合に必要な RMW、プロファイル hash、discovery range のいずれかが未記録です。')
     for backend, result in report['backends'].items():
         coverage = (f"出力カバー率 {result['output_time_fraction']:.1%}" if 'output_time_fraction' in result
                     else f"観測カバー率 {result['observed_time_fraction']:.1%}")

@@ -241,8 +241,7 @@ exit 130
         shutil.copy2(PROJECT / 'scripts/replay.sh', self.scripts / 'replay.sh')
         bag = '/data/record/rosbags/my session/lap 01'
         options = [bag, '--rate', '0.5', '--tracking', 'vio']
-        command = ['env', 'ROS_DOMAIN_ID=75',
-                   'FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml',
+        command = ['env', 'ROS_DOMAIN_ID=75', 'ATD_REPLAY_DDS=udp',
                    'ros2', 'run', 'atd_bringup', 'replay_vslam', *options]
         result = self.invoke('replay', '--dry-run', *options, ROS_DOMAIN_ID='74')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -268,6 +267,11 @@ exit 130
         self.assertEqual(result.returncode, 0, result.stderr)
         args = shlex.split(result.stdout.split('command: ', 1)[1])
         self.assertEqual(args[args.index('/usr/local/bin/atd-shell') + 1:], validation_command)
+        result = self.invoke('replay', '--dry-run', *validation_options, ATD_REPLAY_DDS='shm')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('ATD_REPLAY_DDS=shm', shlex.split(result.stdout.split('command: ', 1)[1]))
+        result = self.invoke('replay', '--dry-run', *options, ATD_REPLAY_DDS='invalid')
+        self.assertEqual(result.returncode, 2, result.stderr)
         for bad_options in (['--validate-map'], ['--validate-map', '--bag', 'lap'],
                             ['--validate-map', 'cu_map', '--compare']):
             result = self.invoke('replay', '--dry-run', *bad_options)

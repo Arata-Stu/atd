@@ -1,6 +1,7 @@
 """Notebook の保存地図と別 bag を選択し、既存の ROS 検証 CLI をジョブで実行する。"""
 from functools import lru_cache
 import hashlib
+import os
 import re
 from pathlib import Path
 import time
@@ -167,7 +168,8 @@ def execute(store, task, request):
                '--domain', str(DOMAIN), '--results-root', str(store.result_root), '--record-root', str(store.record_root)]
     if request['engine_dir'] is not None:
         command.extend(['--engine-dir', request['engine_dir']])
-    code = task.run(command, ros=True, allowed_exit_codes=(0, 2))
+    env = dict(os.environ, ATD_REPLAY_DDS=os.environ.get('ATD_REPLAY_DDS', 'udp'))
+    code = task.run(command, env=env, ros=True, allowed_exit_codes=(0, 2))
     path = confined(store.result_root, Path('runs/localization') / identifier(task.key) / 'report.json')
     report = read_json(path)
     expected = dict(map_id=key, bag=bag, map_sha256=request['map_sha256'], hdmap_sha256=request['hdmap_sha256'],

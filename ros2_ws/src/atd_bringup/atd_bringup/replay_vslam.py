@@ -16,6 +16,7 @@ import time
 
 import yaml
 from atd_mapping.capture_snapshot import stop
+from atd_mapping.replay_dds import select_replay_dds
 
 from .replay_gt_course import load_course
 from .replay_gt_geometry import Trace
@@ -219,6 +220,7 @@ def run(bag, rate, *, slam_max_map_size=0, tracking='vo', headless=False, orb_op
                 if headless and not orb_options:
                     raise ValueError('--headless の比較には、この bag に対応する Gazebo 正解軌跡が必要です')
                 print('対応する Gazebo 正解軌跡がありません。推定結果を観測します。', flush=True)
+        select_replay_dds()
         rclpy.init(args=[], signal_handler_options=SignalHandlerOptions.NO)
         stack.callback(rclpy.try_shutdown)
         node = rclpy.create_node('atd_bag_replay')

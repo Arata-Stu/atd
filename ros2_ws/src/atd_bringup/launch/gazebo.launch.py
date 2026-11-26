@@ -12,5 +12,5 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true', choices=['true'],
                               description='Gazebo の /clock を使用します。'),
-        stereo_container(sim_time),
+        stereo_container(sim_time, live_sensors=True),
     ])

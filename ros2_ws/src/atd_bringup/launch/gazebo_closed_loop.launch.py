@@ -15,10 +15,11 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, OpaqueFunction, Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import LoadComposableNodes, Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 from atd_bringup.gazebo_control import TUNABLE_PARAMETERS, default_min_lookahead, simulation_table, validate_speed_cap
+from atd_bringup.gazebo_stereo import sensor_ingress
 from atd_control.bicycle import resolve_full_throttle_speed
 from atd_control.core import LookaheadConfig
 from atd_control.speed import PIDConfig
@@ -97,6 +98,8 @@ def setup(context):
                    **{'speed_' + k: v for k, v in asdict(pid).items()})
     actions = [
         include('atd_localization', 'localization.launch.py', localization),
+        LoadComposableNodes(target_container='/atd_localization_container',
+                            composable_node_descriptions=[sensor_ingress(True)]),
         include('atd_planning', 'planning.launch.py', dict(common, line=line, reference_line_topic='/atd/gazebo/reference_line',
                 horizon_m=str(max(DEFAULT_HORIZON_M, lateral.max_lookahead_m)))),
         Node(package='atd_bringup', executable='gazebo_control', output='screen', parameters=[control],

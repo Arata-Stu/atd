@@ -48,14 +48,15 @@ class EntryTests(unittest.TestCase):
             'ros2', 'launch', 'atd_web_bridge', 'bridge.launch.py', 'config:=/path with spaces/config.yaml'])
 
     def test_simulation_uses_pc_container_domain_and_explicit_clock(self):
-        for domain, extra in (('74', []), ('91', ['use_sim_time:=true'])):
+        for domain, extra, profile in (('74', [], '/workspaces/atd/docker/gazebo_monza/fastdds.xml'),
+                                       ('91', ['use_sim_time:=true', '--dds', 'udp'], '/etc/atd/fastdds.xml')):
             with self.subTest(domain=domain):
                 env = {} if domain == '74' else {'ATD_GAZEBO_ROS_DOMAIN_ID': domain}
                 result = self.invoke('bringup.sh', '--dry-run', 'gazebo', *extra, **env)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.args(), ['--host', 'pc', '--dry-run', 'ros', 'run', '--',
                     'env', 'ROS_DOMAIN_ID=' + domain,
-                    'FASTDDS_DEFAULT_PROFILES_FILE=/etc/atd/fastdds.xml',
+                    'FASTDDS_DEFAULT_PROFILES_FILE=' + profile,
                     'ros2', 'launch', 'atd_bringup', 'gazebo.launch.py', 'use_sim_time:=true'])
 
     def test_rejects_mixed_vehicle_simulation_or_bad_domain(self):
@@ -63,6 +64,8 @@ class EntryTests(unittest.TestCase):
                 (('gazebo',), {'ATD_TEST_HOST': 'jetson'}),
                 (('--dry-run', 'gazebo', 'use_sim_time:=false'), {}),
                 (('--dry-run', 'gazebo', 'joy_drive:=true'), {}),
+                (('--dry-run', 'gazebo', '--dds', 'wrong'), {}),
+                (('--dry-run', 'input', '--dds', 'shm'), {}),
                 (('--dry-run', 'gazebo'), {'ATD_GAZEBO_ROS_DOMAIN_ID': '233'}),
                 (('--dry-run', 'localization', 'map_id:=M', 'use_sim_time:=true'), {})):
             with self.subTest(args=args, env=env):

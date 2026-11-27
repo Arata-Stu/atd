@@ -4,10 +4,8 @@ from pathlib import Path
 
 
 def select_replay_dds():
-    """CLI と Web が要求した再生ポリシーを、最初の ROS participant より前に適用する。"""
-    mode = os.environ.get('ATD_REPLAY_DDS')
-    if mode is None:
-        return  # ROS executable の直接起動では呼び出し元の DDS 設定を引き継ぐ。
+    """再生用の既定値または明示指定を、最初の ROS participant より前に適用する。"""
+    mode = os.environ.get('ATD_REPLAY_DDS', 'shm')
     if mode == 'shm':
         path = Path(os.environ.get('ATD_PROJECT_DIR', '/workspaces/atd')) / 'docker/gazebo_monza/fastdds.xml'
         label = '共有メモリ・UDPv4 loopback'

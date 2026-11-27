@@ -86,7 +86,7 @@ def unpause(circuit):
     return reply.returncode == 0 and "data: true" in reply.stdout
 
 
-def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=None, *, imu_hz=0, ingress_ready=None):
+def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=None, *, imu_hz=0, ingress_ready=None, clock_only=False):
     import rclpy
     from rclpy.parameter import Parameter
     from rclpy.qos import QoSCompatibility, qos_check_compatible
@@ -100,6 +100,8 @@ def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=Non
             clocks = node.count_publishers("/clock")
             if clocks > 1:
                 raise RuntimeError("同じ ROS ドメインに /clock の発行元が複数あります")
+            if clock_only:
+                return clocks == 1
             if ingress_ready is not None:
                 # The mapping / closed-loop worker starts after Gazebo signals readiness.
                 # Its ROS sensor publishers appear once it connects to the native sender.
@@ -333,7 +335,8 @@ def run(args, report):
     out = args.output
     scene_dir = out / "scene"
     closed_loop = mode == "closed-loop"
-    sensor_ingress = mode in ("closed-loop", "map") or (mode == "serve" and args.wait_for_stereo)
+    ftg = closed_loop and getattr(args, "controller", "map") == "ftg-3d"
+    sensor_ingress = (closed_loop and not ftg) or mode == "map" or (mode == "serve" and args.wait_for_stereo)
     lap_video = mode == "video"
     finite_serve = mode == "serve" and args.laps not in (None, 0)
     finite_run = mode in ("video", "map", "bag") or finite_serve
@@ -345,13 +348,14 @@ def run(args, report):
         lap_bag.check_recorder()
         lap_bag.check_destination(args.bag_output)
     scene = world.build(scene_dir, height=args.camera_height, pitch_deg=args.camera_pitch_deg,
-                        travel_seconds=args.duration if finite_run else None, speed_mps=args.speed,
+                        travel_seconds=args.duration if finite_run else None, speed_mps=None if ftg else args.speed,
                         laps=1 if args.laps is None else args.laps, repeat=not (finite_run or closed_loop),
                         circuit=args.circuit, route=args.route,
                         wait_for_capture=(lap_video or finite_serve or mode in ("map", "bag")),
                         record_ground_truth=mode == "bag", resolution=args.resolution,
                         camera_hz=args.camera_hz, imu_hz=imu_hz, command_driven=closed_loop, sensor_ingress=sensor_ingress,
-                        full_throttle_speed_mps=args.full_throttle_speed if closed_loop else None)
+                        full_throttle_speed_mps=args.full_throttle_speed if closed_loop else None,
+                        ftg_speed=args.speed if ftg else None)
     trajectory = scene["trajectory"]
     total_seconds = trajectory["total_travel_seconds"]
     duration = total_seconds if finite_run else args.duration
@@ -362,6 +366,9 @@ def run(args, report):
     if closed_loop:
         full_speed = scene["actuation"]["full_throttle_speed_mps"]
         report["full_throttle_speed_mps"] = full_speed
+        report["controller"] = "ftg-3d" if ftg else "map"
+        if ftg:
+            report["speed_limit_mps"] = args.speed
         goal = f"{trajectory['laps']}周" if trajectory["laps"] else "無制限周回（Ctrl+C で結果を保存）"
         print(f"{args.circuit} / {args.route}  操舵・スロットル指令で {goal}を評価"
               f"  車両モデルの全開時 {full_speed:g} m/s", flush=True)
@@ -372,7 +379,8 @@ def run(args, report):
     if not closed_loop:
         print(f"{args.circuit} / {args.route}  RC速度 {trajectory['speed_mps']:.3g} m/s  {schedule}", flush=True)
     inertial = f"加速度 200 Hz・ジャイロ／統合 {imu_hz} Hz" if imu_hz else "OFF"
-    print(f"ステレオ {width}×{height} @ {args.camera_hz} Hz  IMU {inertial}", flush=True)
+    sensor_label = "Depth" if ftg else "ステレオ"
+    print(f"{sensor_label} {width}×{height} @ {args.camera_hz} Hz  IMU {inertial}", flush=True)
     if mode == "bag":
         report["lap_length_m"] = trajectory["end_s_m"]
         image_bytes = 2 * width * height * args.camera_hz * duration
@@ -381,11 +389,14 @@ def run(args, report):
               f"mono8 {width}×{height} × 左右2枚 × {args.camera_hz} Hz）", flush=True)
     config = out / "bridge.yaml"
     topics = bridge_topics(args.circuit, imu_hz)
-    if sensor_ingress:
+    if sensor_ingress or ftg:
         topics = [t for t in topics if t["ros_topic_name"] == "/clock"]
     config.write_text(json.dumps(topics, indent=2) + "\n")
     stream = partial(start_stream, ingress_ready=scene_dir / "sensor_ingress.ready") if sensor_ingress else start_stream
-    report["sensor_transport"] = "gazebo_memfd_intra_process" if sensor_ingress else "ros_gz_bridge"
+    report["sensor_transport"] = ("gazebo_native_depth" if ftg else
+                                  "gazebo_memfd_intra_process" if sensor_ingress else "ros_gz_bridge")
+    if ftg:
+        stream = partial(start_stream, clock_only=True)
     report.update(ros_domain_id=os.environ.get("ROS_DOMAIN_ID", "0"),
                   dds_profile=os.environ.get("FASTDDS_DEFAULT_PROFILES_FILE"), scene="scene/scene.json",
                   simulated_rear_axle_height_m=REAR_AXLE_HEIGHT_M)
@@ -408,7 +419,8 @@ def run(args, report):
         start("bridge", ["ros2", "run", "ros_gz_bridge", "parameter_bridge", "--ros-args",
                          "-p", f"config_file:={config}", "-p", clock_param,
                          "-p", "override_timestamps_with_wall_time:=false"])
-        for parent, child, x, y, z, roll, pitch, yaw in transforms(scene["camera"], imu_hz):
+        sensor_frames = [] if ftg else transforms(scene["camera"], imu_hz)
+        for parent, child, x, y, z, roll, pitch, yaw in sensor_frames:
             start("tf_" + child, ["ros2", "run", "tf2_ros", "static_transform_publisher",
                                   "--frame-id", parent, "--child-frame-id", child,
                                   "--x", str(x), "--y", str(y), "--z", str(z),
@@ -526,6 +538,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mode", choices=("benchmark", "video", "diagnose", "serve", "map", "bag", "closed-loop"), required=True)
+    parser.add_argument("--controller", choices=("map", "ftg-3d"), default="map")
     parser.add_argument("--bag-output", type=Path, help="bag の確定保存先（rosbags/直下の新規ディレクトリ）")
     parser.add_argument("--circuit", "--course", choices=world.circuits.circuit_ids(), default="odaiba")
     parser.add_argument("--route", choices=("lap",), default="lap")
@@ -540,8 +553,19 @@ def main():
     parser.add_argument("--camera-hz", type=int, choices=CAMERA_RATES, default=DEFAULT_CAMERA_HZ)
     parser.add_argument("--imu", choices=IMU_MODES, default="off", help="ジャイロ・統合IMUのHz。加速度は200 Hz")
     args = parser.parse_args()
+    if args.controller == "ftg-3d" and args.mode != "closed-loop":
+        parser.error("--controller ftg-3d は closed-loop で指定してください")
     if args.mode == "closed-loop":
-        if args.duration is not None or args.speed is not None:
+        if args.controller == "ftg-3d":
+            import closed_loop_motion  # Adds the mounted atd_control package to sys.path.
+            from atd_control.bicycle import resolve_full_throttle_speed
+
+            args.speed = .50 if args.speed is None else args.speed
+            try:
+                args.full_throttle_speed = resolve_full_throttle_speed(args.speed, args.full_throttle_speed)
+            except ValueError as exc:
+                parser.error(str(exc))
+        if args.duration is not None or (args.controller == "map" and args.speed is not None):
             parser.error("closed-loop の速度は制御指令から決まります。周回数は --laps で指定してください")
         if args.laps is None:
             args.laps = 2

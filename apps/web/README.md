@@ -42,6 +42,10 @@ Notebook ホストから準備する場合は、コンテナを起動してか�
 
 初回は上記の ROS build で Notebook の workspace に `atd_control`（`atd_planning`・`atd_localization`・`atd_mapping` を含む）、`atd_vehicle_calibration`、手動走行 bag の読取に使う `atd_web_bridge` を準備する。`atd-web check` は ROS と workspace の setup を読み込んで package の導入状態を確認する。環境や package が未準備なら `FAIL` と表示する。
 
+## 保存済み bag のステレオ欠落診断
+
+「コントローラ → 記録した走行」で Notebook に保存した bag を選び、「ステレオ欠落診断」で録画時の IR fps を指定する。左右の D455 IR 画像の `header.stamp` から推定欠落数、ギャップの位置、時刻の重複・逆行、左右ペアの不一致を表示する。推定は画像の時刻差に基づく。更新後は Notebook のコンテナで `atd-build --packages-up-to atd_web_bridge` と `atd-web prepare` を実行する。
+
 ## 履歴・地図・解析結果の整理
 
 | 画面 | 操作 |

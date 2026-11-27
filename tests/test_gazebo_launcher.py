@@ -17,6 +17,19 @@ SPEC.loader.exec_module(storage)
 
 
 class GazeboHostTests(unittest.TestCase):
+    def test_depth_ftg_closed_loop_needs_no_map_or_isaac_worker(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh"), "closed-loop", "--controller", "ftg-3d",
+                   "--laps", "1", "--dds", "udp", "--dry-run"]
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.check_output(command, env={**os.environ, "ATD_RESULT_DIR": temporary}, text=True)
+        lines = [shlex.split(line) for line in result.splitlines() if line.startswith("docker ")]
+        container, = lines
+        for option, value in (("--controller", "ftg-3d"), ("--resolution", "424x240"),
+                              ("--camera-hz", "30"), ("--speed", "0.5"), ("--laps", "1")):
+            self.assertEqual(container[container.index(option) + 1], value)
+        self.assertNotIn("--map", container)
+        self.assertNotIn("Isaac", result)
+
     def test_bag_uses_configured_record_mount_and_runs_one_simulator(self):
         command = ["bash", str(ROOT / "scripts/gazebo.sh"), "bag", "--dry-run"]
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,8 +135,8 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
     def test_map_connects_two_containers_to_one_lap_and_results_mount(self):
         command = ["bash", str(ROOT / "scripts/gazebo.sh"), "map", "--dry-run"]
         with tempfile.TemporaryDirectory() as tmp:
-            for dds in ("shm", "udp"):
-                out = subprocess.check_output([*command, "--circuit", "odaiba", "--dds", dds],
+            for option, dds in (([], "shm"), (["--dds", "shm"], "shm"), (["--dds", "udp"], "udp")):
+                out = subprocess.check_output([*command, "--circuit", "odaiba", *option],
                                               text=True, env={**os.environ, "ATD_RESULT_DIR": tmp,
                                                               "ATD_GAZEBO_ROS_DOMAIN_ID": "74"})
                 self.assertIn("--mode map --output /output --circuit odaiba --route lap", out)
@@ -133,6 +146,8 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
                 self.assertEqual(len(processes), 2)
                 self.assertTrue(all("ROS_DOMAIN_ID=74" in line for line in processes))
                 self.assertEqual("--ipc=host" in out, dds == "shm")
+                profile = ("gazebo_monza" if dds == "shm" else "middleware_profiles") + "/fastdds.xml"
+                self.assertTrue(all(profile in line for line in processes))
                 self.assertNotIn("--mode video", out)
             self.assertEqual(list(Path(tmp).iterdir()), [])
         self.assertNotEqual(subprocess.run([*command, "--route", "chicane"], capture_output=True).returncode, 0)

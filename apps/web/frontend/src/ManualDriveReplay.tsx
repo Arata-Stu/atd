@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, bytes } from './api';
+import { StereoBagDiagnostics } from './StereoBagDiagnostics';
 import { DriveTimeline } from './DriveTimeline';
 import { DeleteAnalysisButton } from './DeleteAnalysisButton';
 import { ACTIVE, STATUS } from './job_status';
@@ -34,6 +35,7 @@ export function ManualDriveReplay({jobs, onLog}: JobProps) {
     </div>
     {error && <p className="drive-note" role="alert">{error}</p>}
     {bags?.length === 0 && <p className="drive-note">「データ転送」で Jetson から走行 bag を受信してください。</p>}
+    {bag && <StereoBagDiagnostics key={bag} bag={bag} jobs={jobs} onLog={onLog}/>}
     {bag && <ReplayBag key={bag} bag={bag} jobs={jobs} onLog={onLog}/>}
   </section>;
 }

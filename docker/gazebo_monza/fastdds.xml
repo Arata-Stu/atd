@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Notebook の Gazebo 用。コンテナ内の画像に SHM を使い、外部の
-     ATD ビューアとは同じホストの IPv4 ループバックで通信する。 -->
+<!-- Notebook の Gazebo 用。対応する同一ホストの参加者間で SHM を使う。
+     探索と UDP 購読者向けの通信は IPv4 ループバックに限定する。 -->
 <dds xmlns="http://www.eprosima.com">
   <profiles>
     <transport_descriptors>

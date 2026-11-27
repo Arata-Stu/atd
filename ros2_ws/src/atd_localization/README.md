@@ -29,7 +29,7 @@ RViz は `map` を固定フレームにし、HDMap に登録された境界・�
 
 地図補正方式が `cuvslam` のときは、Gazebo の closed-loop と同じ2種類の特徴点群が重なる。灰色の **SLAM landmarks (live)** は走行中のランドマーク、紫色の **Map used for localization** は cuVSLAM が保存地図の照合時に配信するランドマーク。RViz はどちらも `PointCloud2` として直接購読する。`vgl` 方式では cuVSLAM は局所 VO を担当するため、この2種類の SLAM 点群は配信されず、HDMap と推定軌跡を表示する。
 
-TUI と直接指定は同じ通信設定を使う。bag 配信元・cuVSLAM・cuVGL は同一の component container 内でステレオ画像を渡す。別プロセスとの DDS 通信は既定で loopback UDPv4 を使う。別プロセス間の Fast DDS 共有メモリも有効にして比較する場合は、起動時に `ATD_REPLAY_DDS=shm atd replay` と指定する。実行時の DDS プロファイルと左右画像のプロセス内購読数は検証結果に記録される。
+TUI と直接指定は同じ通信設定を使う。bag 配信元・cuVSLAM・cuVGL は同一の component container 内でステレオ画像を渡す。別プロセスへの配信は Fast DDS SHM が既定で、探索は UDPv4 loopback を使う。UDP で比較する場合は `ATD_REPLAY_DDS=udp atd replay` と指定する。実行時の DDS プロファイルと左右画像のプロセス内購読数は検証結果に記録される。
 
 ROS のコマンドからも Notebook Docker 内で実行できる。選択を省く場合は `--map course_a --bag session_b/lap_2` のように ID と記録ルートからの相対パスを指定する。
 

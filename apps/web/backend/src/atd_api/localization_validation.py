@@ -186,7 +186,7 @@ def execute(store, task, request):
         command.extend(['--map-correction-source', correction])
         if frequency is not None:
             command.extend(['--vgl-frequency', str(frequency)])
-    env = dict(os.environ, ATD_REPLAY_DDS=os.environ.get('ATD_REPLAY_DDS', 'udp'))
+    env = dict(os.environ, ATD_REPLAY_DDS=os.environ.get('ATD_REPLAY_DDS', 'shm'))
     code = task.run(command, env=env, ros=True, allowed_exit_codes=(0, 2))
     path = confined(store.result_root, Path('runs/localization') / identifier(task.key) / 'report.json')
     report = read_json(path)

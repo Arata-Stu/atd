@@ -398,6 +398,8 @@ def create_app(record_root=None, result_root=None, static_dir=None):
     app.include_router(speed_tables_router, prefix='/api')
     from .manual_drive_replay import router as manual_drive_replay_router
     app.include_router(manual_drive_replay_router, prefix='/api')
+    from .stereo_bag_diagnostics import router as stereo_diagnostics_router
+    app.include_router(stereo_diagnostics_router, prefix='/api')
     from .replay_results import router as replay_results_router
     app.include_router(replay_results_router, prefix='/api')
     from .analysis_results import router as analysis_results_router

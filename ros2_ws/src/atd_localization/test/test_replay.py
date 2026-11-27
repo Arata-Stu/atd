@@ -24,7 +24,7 @@ def bag(root, name, start):
     return hashlib.sha256(data).hexdigest()
 
 
-def test_replay_transport_keeps_direct_invocations_and_distinguishes_udp_and_shm(tmp_path, monkeypatch):
+def test_replay_transport_defaults_to_shm_and_allows_udp_override(tmp_path, monkeypatch):
     project, config = tmp_path / 'repo', tmp_path / 'config'
     config.mkdir()
     udp = config / 'fastdds.xml'
@@ -34,13 +34,12 @@ def test_replay_transport_keeps_direct_invocations_and_distinguishes_udp_and_shm
         path.write_text('<dds/>')
     monkeypatch.setenv('ATD_PROJECT_DIR', str(project))
     monkeypatch.setenv('ATD_DDS_CONFIG_DIR', str(config))
-    inherited = '/custom/profile.xml'
-    monkeypatch.setenv('FASTDDS_DEFAULT_PROFILES_FILE', inherited)
+    monkeypatch.setenv('FASTDDS_DEFAULT_PROFILES_FILE', str(udp))
     monkeypatch.setenv('ROS_AUTOMATIC_DISCOVERY_RANGE', 'LOCALHOST')
     monkeypatch.delenv('ATD_REPLAY_DDS', raising=False)
     select_replay_dds()
-    assert os.environ['FASTDDS_DEFAULT_PROFILES_FILE'] == inherited
-    assert os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'LOCALHOST'
+    assert os.environ['FASTDDS_DEFAULT_PROFILES_FILE'] == str(shm)
+    assert os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'SYSTEM_DEFAULT'
 
     monkeypatch.setenv('ATD_REPLAY_DDS', 'udp')
     select_replay_dds()
@@ -123,6 +122,11 @@ def test_coverage_only_counts_distinct_fresh_samples_in_same_episode():
 ])
 def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, status, code,
                                                     mode_args, source, frequency):
+    project = Path(__file__).resolve().parents[4]
+    monkeypatch.setenv('ATD_PROJECT_DIR', str(project))
+    monkeypatch.delenv('ATD_REPLAY_DDS', raising=False)
+    monkeypatch.delenv('FASTDDS_DEFAULT_PROFILES_FILE', raising=False)
+    monkeypatch.delenv('ROS_AUTOMATIC_DISCOVERY_RANGE', raising=False)
     records = tmp_path / 'record'
     source_hash = bag(records, 'a/run', 1)
     bag(records, 'b/run', 2)
@@ -189,6 +193,9 @@ def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, stat
     assert result['map_correction_source'] == source
     assert result.get('vgl_frequency_hz') == frequency
     assert result['tracking'] == 'vo'
+    profile = project / 'docker/gazebo_monza/fastdds.xml'
+    assert result['dds_profile']['path'] == str(profile)
+    assert result['dds_profile']['sha256'] == hashlib.sha256(profile.read_bytes()).hexdigest()
     assert result['bag'] == 'b/run' and result['source_metadata_sha256'] == source_hash
     assert replay.main(args) == 1
     assert json.loads(path.read_text()) == result

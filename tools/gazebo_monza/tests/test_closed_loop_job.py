@@ -97,9 +97,16 @@ class ClosedLoopJobTests(unittest.TestCase):
             self.assertIn('gazebo_closed_loop.launch.py', stack)
             self.assertIn('run_dir:=' + stack[stack.index('--output') + 1], stack)
             self.assertNotIn('autonomous.launch.py', stack)
-            profile = 'FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/middleware_profiles/fastdds.xml'
+            profile = 'FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/gazebo_monza/fastdds.xml'
             self.assertIn(profile, gazebo)
             self.assertIn(profile, stack)
+            self.assertIn('--ipc=host', gazebo)
+            udp = subprocess.check_output([*cmd, '--dds', 'udp'], env=env, text=True)
+            endpoints = [shlex.split(s) for s in udp.splitlines() if s.startswith('docker ')]
+            for endpoint in endpoints:
+                self.assertIn('FASTDDS_DEFAULT_PROFILES_FILE=/workspaces/atd/docker/middleware_profiles/fastdds.xml',
+                              endpoint)
+                self.assertNotIn('--ipc=host', endpoint)
             for speed, override, expected in [('10', [], '10.0'), ('5', ['--full-throttle-speed', '10'], '10.0')]:
                 with self.subTest(speed=speed, override=override):
                     preview = subprocess.check_output([*cmd, '--speed', speed, *override], env=env, text=True)

@@ -41,6 +41,9 @@ def execute(store, task, action, payload):
     if action == 'manual_drive_replay':
         from .manual_drive_replay import execute as read_manual_drive
         return read_manual_drive(store, task, payload)
+    if action == 'stereo_bag_diagnostics':
+        from .stereo_bag_diagnostics import execute as diagnose_stereo
+        return diagnose_stereo(store, task, payload)
     if action == 'manual_drive_vo':
         from .manual_drive_replay import execute_vo
         return execute_vo(store, task, payload)

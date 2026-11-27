@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-使い方: scripts/bringup.sh [--dry-run] [--configure] [input|bridge|d455|joy-drive|manual|localization|autonomous|esc-trial|gazebo] [name:=value ...]
+使い方: scripts/bringup.sh [--dry-run] [--configure] [--dds shm|udp] [input|bridge|d455|joy-drive|manual|localization|autonomous|esc-trial|gazebo] [name:=value ...]
 
 引数なし: fzf で起動構成を選択（未導入時は番号選択）
   input      Jetson の Joy・Pico入力、入力記録待機、観測・設定bridge
@@ -59,6 +59,7 @@ manualの既定はmapping（左右IR必須）、joy-drive/inputはinputs（カ�
 起動済み Docker を使用します。先に scripts/dev.sh で起動してください。
 実車構成は Jetson、gazebo 構成は Linux x86_64 の Notebook で実行します。
 gazebo には atd_pc_dev と、同じ Notebook 上の「atd gazebo serve」が必要です。
+Fast DDS SHM が既定です。UDP を使う場合は serve と bringup gazebo の両方に --dds udp を指定します。
 シミュレーション専用 ROS domain の既定値は 74。ATD_GAZEBO_ROS_DOMAIN_ID で両側に同じ値を指定できます。
 終了は Ctrl-C。
 EOF
@@ -70,6 +71,7 @@ task_profile=''
 task_dry_run=false
 task_list=false
 task_configure=false
+task_gazebo_dds=
 task_launch_arguments=()
 while (($#)); do
     case "$1" in
@@ -77,6 +79,9 @@ while (($#)); do
         --dry-run) task_dry_run=true; shift ;;
         --list) task_list=true; shift ;;
         --configure) task_configure=true; shift ;;
+        --dds)
+            case "${2:-}" in shm|udp) task_gazebo_dds="$2" ;; *) fail '--dds は shm または udp を指定してください' ;; esac
+            shift 2 ;;
         --) shift; task_launch_arguments+=("$@"); break ;;
         --*) fail "不明な引数: $1（--help を参照）" ;;
         *:=*) task_launch_arguments+=("$1"); shift ;;
@@ -101,6 +106,7 @@ if [[ -z "$task_profile" ]]; then
 fi
 task_target="$(atd_bringup_lookup "$task_profile")" || fail "未登録の起動構成: ${task_profile}（--list を参照）"
 IFS=$'\t' read -r task_host task_package task_launch task_setup <<< "$task_target"
+[[ -z "$task_gazebo_dds" || "$task_setup" == simulation ]] || fail '--dds は gazebo 構成で指定してください'
 if ! $task_dry_run && [[ "$task_current_host" != "$task_host" ]]; then
     fail "${task_profile} は ${task_host} 上で起動してください"
 fi
@@ -141,8 +147,10 @@ if [[ "$task_setup" == simulation ]]; then
             *:=*) fail "gazebo 構成で未対応の launch 引数: $task_arg" ;;
         esac
     done
+    task_dds_file=/workspaces/atd/docker/gazebo_monza/fastdds.xml
+    if [[ "$task_gazebo_dds" == udp ]]; then task_dds_file=/etc/atd/fastdds.xml; fi
     task_command+=(ros run -- env "ROS_DOMAIN_ID=$task_domain"
-        FASTDDS_DEFAULT_PROFILES_FILE=/etc/atd/fastdds.xml
+        "FASTDDS_DEFAULT_PROFILES_FILE=$task_dds_file"
         ros2 launch "$task_package" "$task_launch")
     if ! $task_clock_set; then task_command+=(use_sim_time:=true); fi
 elif [[ "$task_setup" == trial ]]; then

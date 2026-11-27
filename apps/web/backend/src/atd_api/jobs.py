@@ -20,7 +20,8 @@ ACTIVE = {'starting', 'running', 'queued'}
 FINISHED = {'succeeded', 'completed', 'failed', 'cancelled', 'canceled', 'interrupted'}
 LOG_PAGE_BYTES = 256 * 1024
 ACTIONS = {'generate', 'map_build', 'map_duplicate', 'vgl', 'capture', 'pull', 'push', 'calibration', 'localization_validation',
-           'planning_replay', 'speed_replay', 'manual_drive_replay', 'manual_drive_vo', 'simulation_benchmark'}
+           'planning_replay', 'speed_replay', 'manual_drive_replay', 'manual_drive_vo', 'simulation_benchmark',
+           'stereo_bag_diagnostics'}
 
 
 ROS_SETUP = ('set -e; source /opt/ros/lyrical/setup.bash; '

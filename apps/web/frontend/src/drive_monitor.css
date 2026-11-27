@@ -75,3 +75,10 @@
   .drive-time-controls output { flex-basis: 100%; text-align: right; }
   .drive-window-controls form { margin-left: 0; }
 }
+
+.stereo-diagnostics { padding: 12px 0; }
+.stereo-diagnostics h4, .stereo-diagnostics h5 { margin: 0 0 8px; }
+.stereo-diagnostics .drive-bag-choice input { width: 6rem; }
+.stereo-diagnostics-streams { display: flex; flex-wrap: wrap; gap: 16px 32px; }
+.stereo-diagnostics-streams p { margin: 4px 0; }
+.stereo-diagnostics th, .stereo-diagnostics td { padding: 4px 8px; text-align: left; }

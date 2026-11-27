@@ -7,7 +7,8 @@ import sys
 
 # The Gazebo image mounts the checkout, independently of the Isaac ROS overlay.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros2_ws/src/atd_control"))
-from atd_control.bicycle import Bicycle, FULL_SPEED_MPS, SPEED_TAU_S, STEERING_LIMIT, STEERING_TAU_S
+from atd_control.bicycle import (Bicycle, DECEL_MPS2, FULL_SPEED_MPS, SPEED_TAU_S, STEERING_LIMIT,
+                                 STEERING_TAU_S, WHEELBASE_M)
 from rig_imu import ImuPublisher
 from sensor_profile import REAR_AXLE_HEIGHT_M
 
@@ -107,9 +108,19 @@ class ClosedLoopMotion:
         self.executor = SingleThreadedExecutor(context=self.context)
         self.executor.add_node(self.node)
         self.actuator_topic = drive["topic"]
-        self.node.create_subscription(JointState, self.actuator_topic, self.on_command, 1)
-        self.node.create_subscription(String, "/atd/gazebo/control_state", self.on_control_state,
-                                      QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.depth_controller = None
+        if "depth" in scene:
+            from depth_ftg import COMMAND_AGE_NS, DepthController, GapPlanner
+
+            self.depth_age_ns = COMMAND_AGE_NS
+
+            planner = GapPlanner(WHEELBASE_M, STEERING_LIMIT, scene["depth"]["speed_limit_mps"],
+                                 SPEED_TAU_S, DECEL_MPS2)
+            self.depth_controller = DepthController(scene["course"], scene["camera"], planner)
+        else:
+            self.node.create_subscription(JointState, self.actuator_topic, self.on_command, 1)
+            self.node.create_subscription(String, "/atd/gazebo/control_state", self.on_control_state,
+                                          QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.ground_truth = self.node.create_publisher(PoseStamped, "/atd/gazebo/ground_truth_pose",
                                                        qos_profile_sensor_data)
         self.model_speed = self.node.create_publisher(TwistStamped, "/atd/gazebo/model_speed", qos_profile_sensor_data)
@@ -119,7 +130,7 @@ class ClosedLoopMotion:
         self.hold_message = String()
         self.gt_pose = PoseStamped()
         self.gt_pose.header.frame_id = "gazebo_world"
-        self.control_state = None
+        self.control_state = {"state": "waiting_depth"} if self.depth_controller else None
         self.active_file = scene_file.with_name("closed_loop.active")
         self.prestart_pause_file = scene_file.with_name("closed_loop.paused")
         self.trace = scene_file.with_name("rig_motion.jsonl")
@@ -137,8 +148,11 @@ class ClosedLoopMotion:
                 self.plant.stop("multiple_actuator_publishers", before_start=True)
             return
         stamp = msg.header.stamp
+        self.apply_command(stamp.sec * 10**9 + stamp.nanosec, msg.name, msg.position)
+
+    def apply_command(self, stamp_ns, names, values):
         initially_active = self.plant.first_active_ns is not None
-        self.plant.receive(self.now_ns, stamp.sec * 10**9 + stamp.nanosec, msg.name, msg.position)
+        self.plant.receive(self.now_ns, stamp_ns, names, values)
         if self.plant.first_active_ns is not None and not initially_active:
             self.active_file.write_text(json.dumps({"sim_time_s": self.plant.first_active_ns / 1e9}) + "\n")
 
@@ -168,8 +182,16 @@ class ClosedLoopMotion:
             self.executor.spin_once(timeout_sec=0.)
             self.executor.spin_once(timeout_sec=0.)
             self.next_spin_ns = self.now_ns + 5_000_000
-        self.plant.advance(self.now_ns, max(0, self.now_ns - previous_ns) * 1e-9)
         v = self.plant.vehicle
+        if self.depth_controller is not None:
+            decision = self.depth_controller.update(self.now_ns, v.speed, v.steering)
+            if decision is not None:
+                stamp, steering, speed, self.control_state = decision
+                self.apply_command(stamp, JOINTS, (steering, speed / v.full_throttle_speed_mps, 1.))
+            if self.plant.command_stamp_ns is not None and self.now_ns - self.plant.command_stamp_ns > self.depth_age_ns:
+                self.plant.stop("depth_timeout", wait_for_command=True)
+                self.control_state = {"state": "stale_depth"}
+        self.plant.advance(self.now_ns, max(0, self.now_ns - previous_ns) * 1e-9)
         self.model.set_world_pose_cmd(ecm, self.pose_type(v.x, v.y, 0, 0, 0, v.yaw))
 
     def post_update(self, info, ecm):

@@ -206,7 +206,7 @@ def capture(store, task, request):
         atomic_json(job_file, job)
         task.run(['env', f'ROS_DOMAIN_ID={DOMAIN}', 'ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT',
                   'RMW_IMPLEMENTATION=rmw_fastrtps_cpp',
-                  'ATD_REPLAY_DDS=' + os.environ.get('ATD_REPLAY_DDS', 'udp'),
+                  'ATD_REPLAY_DDS=' + os.environ.get('ATD_REPLAY_DDS', 'shm'),
                   'ros2', 'run', 'atd_mapping', 'capture_snapshot', '--job', str(job_file)], ros=True)
         task.check()
         snapshot_path = confined(work, 'snapshot.json')

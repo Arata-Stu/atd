@@ -69,7 +69,7 @@ backend が行う元資産と VGL の対応・provenance検査に加え、ROS側
 | /diagnostics | diagnostic_msgs/msg/DiagnosticArray | cuVSLAM localize/VO状態 |
 | /atd_mapping/pose_hint | geometry_msgs/msg/PoseWithCovarianceStamped | VGL hintの受信確認 |
 
-Collectorはtopicを発行しない。`/visual_slam/localize_in_map`（isaac_ros_visual_slam_interfaces/srv/LocalizeInMap）の可用性を確認するが、VGLのhint経路を使用し、このCLIから原点でservice要求しない。C++ components の画像入力は workflow の4topic（sensor_msgs/Image, CameraInfo）、VGL request_hintは `/atd_mapping/request_hint`、VGL診断は `/atd_mapping/vgl_diagnostics` に分離する。DDS transportは既存loopback設定、topic QoSはROS側で指定し、bag `/tf_static` のtransient_localは [replay_qos.yaml](config/replay_qos.yaml) で指定する。
+Collectorはtopicを発行しない。`/visual_slam/localize_in_map`（isaac_ros_visual_slam_interfaces/srv/LocalizeInMap）の可用性を確認するが、VGLのhint経路を使用し、このCLIから原点でservice要求しない。C++ components の画像入力は workflow の4topic（sensor_msgs/Image, CameraInfo）、VGL request_hintは `/atd_mapping/request_hint`、VGL診断は `/atd_mapping/vgl_diagnostics` に分離する。DDS は Fast DDS SHM が既定で、探索には UDPv4 loopback を使う。UDP で比較する場合は `ATD_REPLAY_DDS=udp` を指定する。topic QoSはROS側で指定し、bag `/tf_static` のtransient_localは [replay_qos.yaml](config/replay_qos.yaml) で指定する。
 
 ## 検証
 

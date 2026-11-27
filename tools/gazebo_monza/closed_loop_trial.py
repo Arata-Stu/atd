@@ -101,7 +101,9 @@ def run_trial(children, out, scene, report, start_stream, wait_for, check_childr
         wait_for(lambda: trace.is_file() and trace.stat().st_size > 0, children, 45,
                  "指令走行プラグインの初期静止姿勢", check_stop)
         (out / "gazebo.ready").touch(exist_ok=False)
-        print("計時線で停止中。保存地図での追跡と最初の有効な制御指令を待っています。", flush=True)
+        depth = "depth" in scene
+        waiting_for = "最初のDepthフレーム" if depth else "保存地図での追跡と最初の有効な制御指令"
+        print(f"計時線で停止中。{waiting_for}を待っています。", flush=True)
         with trace.open() as stream:
             last_sample_wall = time.monotonic()
             while result is None:
@@ -110,6 +112,8 @@ def run_trial(children, out, scene, report, start_stream, wait_for, check_childr
                 for row in read_samples(stream):
                     last_sample_wall = time.monotonic()
                     result = trial.sample(row)
+                    if depth and row["first_active_ns"] is None and row["sim_time_s"] >= 10.:
+                        result = evaluator.report("sensor_timeout", row["sim_time_s"], "制御可能なDepthフレームが届きません")
                     if result is not None:
                         break
                 if result is None:

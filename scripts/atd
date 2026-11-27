@@ -83,6 +83,7 @@ usage() {
     atd gazebo
     atd gazebo bag --course odaiba --speed 3 --laps 2
     atd gazebo closed-loop --line raceline --speed 10 --rviz
+    atd gazebo closed-loop --controller ftg-3d --laps 1
     atd gazebo closed-loop --tracking vio --line centerline --laps 0 --web
     atd gazebo video --route lap
     atd gazebo serve
@@ -139,7 +140,7 @@ gazebo_from_menu() {
         video '左右の車載動画を保存' serve 'ステレオ画像と /clock を配信' \
         run '動画を保存し、別の試行で受信速度を測定' benchmark 'ステレオの配信レートを測定' \
         diagnose 'Gazebo と ROS の画像受信を比較' prepare '専用イメージを準備・容量を測定' \
-        back '前のメニューへ')" || return 0
+        ftg-3d 'Depthで地図なしの閉ループ走行' back '前のメニューへ')" || return 0
     case "$action" in
         back) return 0 ;;
         prepare) "$@" prepare; return ;;
@@ -156,7 +157,10 @@ gazebo_from_menu() {
     circuit="$(choose "$title / コース" "${options[@]}" back '前のメニューへ')" || return 0
     [[ "$circuit" != back ]] || return 0
     local -a args=("$action" --route lap --circuit "$circuit")
-    if [[ "$action" = closed-loop ]]; then
+    if [[ "$action" = ftg-3d ]]; then
+        args=(closed-loop --controller ftg-3d --route lap --circuit "$circuit")
+        printf '速度上限 [m/s]（Enter で 0.5、q で戻る）> ' >&2
+    elif [[ "$action" = closed-loop ]]; then
         printf '走行ラインの目標速度上限 [m/s]（例 10、Enter で 1.5、q で戻る）> ' >&2
     else
         printf '走行速度 [RC m/s]（Enter でコース既定、q で戻る）> ' >&2
@@ -167,13 +171,17 @@ gazebo_from_menu() {
     if [[ "$action" != benchmark && "$action" != diagnose ]]; then
         local default_laps='1周'
         if [[ "$action" = serve ]]; then default_laps='連続配信'; fi
-        if [[ "$action" = closed-loop ]]; then default_laps='2周'; fi
+        if [[ "$action" = closed-loop || "$action" = ftg-3d ]]; then default_laps='2周'; fi
         local unlimited=''
-        if [[ "$action" = closed-loop || "$action" = serve ]]; then unlimited='、0 で無制限'; fi
+        if [[ "$action" = closed-loop || "$action" = ftg-3d || "$action" = serve ]]; then unlimited='、0 で無制限'; fi
         printf '周回数（Enter で%s%s、q で戻る）> ' "$default_laps" "$unlimited" >&2
         IFS= read -r laps || return 0
         [[ "$laps" != q ]] || return 0
         if [[ -n "$laps" ]]; then args+=(--laps "$laps"); fi
+    fi
+    if [[ "$action" = ftg-3d ]]; then
+        "$@" "${args[@]}"
+        return
     fi
     if [[ "$action" = closed-loop ]]; then
         camera_hz="$(choose "$title / カメラの撮影レート" 30 'Hz（既定）' 60 'Hz' 90 'Hz')" || return 0

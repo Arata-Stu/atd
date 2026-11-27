@@ -248,7 +248,7 @@ class Work:
         assert env['ROS_DOMAIN_ID'] == '94'
         assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'SYSTEM_DEFAULT'
         assert env['RMW_IMPLEMENTATION'] == 'rmw_fastrtps_cpp'
-        assert env['ATD_REPLAY_DDS'] == os.environ.get('ATD_REPLAY_DDS', 'udp')
+        assert env['ATD_REPLAY_DDS'] == os.environ.get('ATD_REPLAY_DDS', 'shm')
         assert 'FASTDDS_DEFAULT_PROFILES_FILE' not in env
         assert '.capture-' in job['map_dir']
         assert (Path(job['map_dir']) / 'map.mdb').read_bytes() == b'original map'
@@ -257,7 +257,7 @@ class Work:
         atomic_json(Path(job['output']) / 'snapshot.json', snapshot())
 
 
-@pytest.mark.parametrize('dds', [None, 'shm'])
+@pytest.mark.parametrize('dds', [None, 'udp'])
 def test_capture_commits_only_verified_snapshot_and_auto_cloud(prepared, monkeypatch, dds):
     if dds is None:
         monkeypatch.delenv('ATD_REPLAY_DDS', raising=False)

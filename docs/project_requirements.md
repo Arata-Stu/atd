@@ -43,7 +43,7 @@
 - プロポと Bluetooth DualSense は、車両へのスロットル要求を共通の正規化値 [−1, +1] とし、中立 0 を 1500 µs、両端を 1000／2000 µs の PWM パルス幅に対応させる。現行 Rev6 の HOST 指令は前進側 +1 が 1000 µs、制動・後退側 −1 が 2000 µs である。実車での ESC の応答は校正・確認する。
 - 速度比較ではプロポ CH2 と計算スロットルを S.BUS raw、DualSense の `/teleop/command`（`source=joy`）を正規化スロットルで保持し、Pico が選択した操作経路と照合する。Notebook では元の単位に加え、Rev6 既定の正規化値または PWM 相当値に換算して重ねられる。
 - PC から遠隔で走行制御を与えない。走行制御に PC との通信を必須としない。
-- 実車の走行系は Jetson 内で、Gazebo・bag replay・解析は Notebook 内で完結させる。各ホストの ROS 2 / DDS の直接探索・通信はローカルに限定し、プロセス間の DDS には Fast DDS の UDPv4 ループバックを使う。
+- 実車の走行系は Jetson 内で、Gazebo・bag replay・解析は Notebook 内で完結させる。各ホストの ROS 2 / DDS の直接探索・通信はローカルに限定し、Jetson はプロセス間 DDS に UDPv4 ループバックを使う。Notebook の Gazebo–Isaac ROS 連携と bag replay は Fast DDS SHM を既定とし、探索は UDPv4 ループバックを使う。
 - ノート PC から自己位置等の情報を観測するため、Foxglove Bridge 等を利用する予定である。bridge を介して明示的に提供する情報の外部通信は許容する。
 - PC での可視化に、PC を車載 DDS の参加者にする構成は前提としない。走行処理は PC との接続なしでも Jetson 内で完結させる。
 - Docker の外部通信を一律に遮断する要件ではない。必要なら `--network host` を維持する。
@@ -225,8 +225,8 @@ bringup 実行中の可視化は今回の要件に含むが、アプリからの
 - 会話中に確認した `rmw_cyclonedds_cpp` の公式リポジトリでは、非 CPU バッファの CPU fallback 対応 PR が未マージであった。このため Fast DDS を初期標準の候補として提案した。
 - その後の実装指示に基づき、初期構成として Fast DDS の loopback UDP 設定を実装した。実機通信の確認は未実施である。
 - 実車の走行時は、D455 のステレオ画像・CameraInfo・有効な IMU を自己位置推定と同じ component container 内で受け渡す。プロセス内は rclcpp の intra-process、プロセス間の DDS はループバック UDPv4 を標準とする。
-- Notebook の固定地図ベンチマークでも、bag のセンサー配信元を各方式の追跡ノードと同じプロセスに配置する。プロセス内のセンサー入力と、別プロセスの時刻・TF・監視に使う DDS の設定を個別に記録する。
-- Gazebo のライブ走行は、シミュレーターとの境界にセンサー専用の共有メモリを使い、受信 component から tracker までを実車と同じ構成にする。時刻・TF・制御・診断は通常の ROS インターフェースを使う。外部購読者による画像表示と bag 記録は、その購読者への転送を伴う。
+- Notebook の固定地図ベンチマークでも、bag のセンサー配信元を各方式の追跡ノードと同じプロセスに配置する。プロセス内のセンサー入力と、別プロセスの時刻・TF・監視に使う DDS の設定を個別に記録する。Notebook の replay と保存地図の検証・点群取得では Fast DDS SHM を既定とし、`ATD_REPLAY_DDS=udp` で比較できる。
+- Gazebo のライブ走行は、シミュレーターとの境界にセンサー専用の共有メモリを使い、受信 component から tracker までを実車と同じ構成にする。時刻・TF・制御・診断は ROS トピックを使い、Notebook の Gazebo と Isaac ROS を接続する `serve`・`map`・`closed-loop` では Fast DDS SHM を既定とする。探索は UDPv4 loopback を使い、`--dds udp` でトピック通信を UDPv4 loopback に切り替えられる。外部購読者による画像表示と bag 記録は、その購読者への転送を伴う。
 - CUDA buffer backend は条件を満たす同一ホスト内の通信で GPU メモリを共有する。DDS の UDP 設定と CUDA バッファの共有は別の層として扱う。
 
 参照: [NITROS からの移行](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/rosidl_buffer/nitros_migration.html)、[CUDA buffer backend](https://nvidia-isaac-ros.github.io/v/release-5.0/concepts/rosidl_buffer/cuda_buffer_backend.html)、[Cyclone DDS の対応 PR #603](https://github.com/ros2/rmw_cyclonedds/pull/603)

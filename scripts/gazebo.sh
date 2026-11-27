@@ -21,10 +21,11 @@ usage() {
   serve       センサーを配信（既定 Ctrl+C まで）。bringup gazebo と走行する場合は --wait-for-stereo を指定
   --course ID         コースを選択（既定 odaiba、--circuit ID も使用可）
   --speed m/s         RC スケールの走行速度（シミュレーション時間）。省略時はコース既定
-                      closed-loop では保存した走行ラインの目標速度にかける上限（0.2 m/s 以上、既定 1.5）
+                      closed-loop の速度上限（0.2 m/s 以上、既定 map: 1.5 / ftg-3d: 0.5）
   --full-throttle-speed m/s
                       closed-loop の全開時のモデル速度。省略時は 3.2 m/s と --speed の大きい方を使用
                       同じ車両モデルで比較する場合は、各試行の --speed 以上の共通値を指定
+  --controller map|ftg-3d  closed-loop の制御方式。ftg-3d は地図なしで Depth を使用
   --map ID            closed-loop の保存地図 ID（省略すると指定ライン・解像度に合う地図から選択）
   --line 種類         closed-loop の raceline / centerline / custom（省略で保存済みラインから選択）
   --tracking vo|vio   closed-loop の追跡方式。vo は左右画像（既定）、vio は左右画像＋統合 IMU
@@ -40,9 +41,10 @@ usage() {
                       benchmark・diagnose は実時間の計測時間（--speed と併用可）
   --route lap         全周を走行（既定）。連続配信では同方向に周回
   --wait-for-stereo   serve から tracker に共有メモリでセンサーを渡し、左右の購読後に走行開始。単独 serve は ROS ブリッジで配信
-  --dds udp|shm       DDS は UDPv4 loopback（既定）。shm は転送診断用。ライブ走行のセンサー用共有メモリは別経路
+  --dds shm|udp       serve・map・closed-loop は Fast DDS SHM が既定。他の操作は UDPv4 loopback が既定
   --camera-height m   地面から左右光学中心までの高さを指定
-  --resolution WxH    左右とも 424x240 / 640x480（既定）/ 848x480 / 1280x720。closed-loop は VGL 地図と同じ解像度
+  --resolution WxH    424x240 / 640x480 / 848x480 / 1280x720。既定はステレオ 640x480・ftg-3d 424x240
+                      保存地図を使う closed-loop は地図の解像度に合わせる
   --camera-hz Hz      左右の撮影周期を 30 / 60 / 90 Hz から選択。既定は closed-loop が30 Hz、他は90 Hz
   --imu off|200|400   加速度 200 Hz、ジャイロと統合 IMU は指定 Hz で配信（closed-loop は並列 EKF 用に既定 400、他は off）
   --camera-pitch-deg 度   カメラの下向き角度を指定（既定 0）
@@ -67,7 +69,10 @@ fi
 case "$action" in prepare|run|video|bag|map|closed-loop|benchmark|diagnose|serve) ;; *) fail "不明な操作: $action";; esac
 dry_run=false
 circuit=odaiba
-dds=udp
+case "$action" in
+    serve|map|closed-loop) dds=shm ;;
+    *) dds=udp ;;
+esac
 speed=
 full_throttle_speed=
 laps=
@@ -76,6 +81,8 @@ resolution=640x480
 camera_hz=90
 imu=
 tracking=vo
+controller=map
+map_only_option=
 correction_source=cuvslam
 vgl_frequency=
 map_id=
@@ -96,19 +103,27 @@ while (( $# )); do
         --speed)
             [[ "$action" != prepare && -n "${2:-}" ]] || fail "走行時に --speed と速度（m/s）を指定してください"
             speed="$2"; shift 2 ;;
+        --controller)
+            [[ "$action" = closed-loop ]] || fail "--controller は closed-loop で指定してください"
+            case "${2:-}" in map|ftg-3d) ;; *) fail "--controller は map または ftg-3d を指定してください";; esac
+            controller="$2"; shift 2 ;;
         --tracking)
+            map_only_option="$1"
             [[ "$action" = closed-loop ]] || fail "--tracking は closed-loop で指定してください"
             case "${2:-}" in vo|vio) ;; *) fail "--tracking は vo または vio を指定してください";; esac
             tracking="$2"; shift 2 ;;
         --map-correction-source)
+            map_only_option="$1"
             [[ "$action" = closed-loop ]] || fail "$1 は closed-loop で指定してください"
             case "${2:-}" in cuvslam|vgl) ;; *) fail "$1 は cuvslam または vgl を指定してください";; esac
             correction_source=$2; shift 2 ;;
         --vgl-frequency)
+            map_only_option="$1"
             [[ "$action" = closed-loop && -n "${2:-}" ]] || fail "$1 は closed-loop で Hz を指定してください"
             vgl_frequency=$2; shift 2 ;;
         --map|--line|--engine-dir|--min-lookahead|--full-throttle-speed)
             [[ "$action" = closed-loop && -n "${2:-}" ]] || fail "$1 は closed-loop で値を指定してください"
+            if [[ "$1" != --full-throttle-speed ]]; then map_only_option="$1"; fi
             case "$1" in
                 --map) map_id="$2" ;;
                 --line) line="$2" ;;
@@ -118,10 +133,12 @@ while (( $# )); do
             esac
             shift 2 ;;
         --rviz|--no-rviz)
+            map_only_option="$1"
             [[ "$action" = closed-loop ]] || fail "$1 は closed-loop で指定してください"
             if [[ "$1" = --rviz ]]; then rviz=true; else rviz=false; fi
             shift ;;
         --web)
+            map_only_option="$1"
             [[ "$action" = closed-loop ]] || fail "$1 は closed-loop で指定してください"
             web=true; shift ;;
         --laps)
@@ -161,7 +178,13 @@ while (( $# )); do
         *) fail "不明な引数: $1";;
     esac
 done
-if [[ "$tracking" = vio ]]; then
+if [[ "$controller" = ftg-3d ]]; then
+    [[ -z "$map_only_option" ]] || fail "$map_only_option は --controller map で指定してください"
+    resolution="${resolution:-424x240}"
+    imu="${imu:-off}"
+    laps="${laps:-2}"
+    speed="${speed:-0.5}"
+elif [[ "$tracking" = vio ]]; then
     [[ "$imu" != off ]] || fail "--tracking vio には統合 IMU が必要です。--imu 200 または 400 を指定してください"
     imu="${imu:-400}"
 elif [[ "$action" = closed-loop ]]; then
@@ -192,7 +215,7 @@ fi
 runs="${ATD_RESULT_DIR:-${ATD_PC_RESULT_DIR:-$project/data/results}}/runs"
 results="$runs/gazebo/$circuit"
 [[ "$results" = /* ]] || fail "results に絶対パスを指定してください"
-if [[ "$action" = closed-loop ]]; then
+if [[ "$action" = closed-loop && "$controller" = map ]]; then
     selection_args=(--results "${runs%/runs}")
     [[ -z "$map_id" ]] || selection_args+=(--map "$map_id")
     [[ -z "$line" ]] || selection_args+=(--line "$line")
@@ -272,7 +295,9 @@ run_mode() {
     if [[ "$mode" = bag ]]; then
         out="$(new_bag_output)"
     else
-        out="$(new_output "$mode-$dds")"
+        local label="$mode-$dds"
+        if [[ "$controller" = ftg-3d ]]; then label="$mode-ftg-3d-$dds"; fi
+        out="$(new_output "$label")"
     fi
     local -a command=(docker run --rm --init --pull=never --gpus all --network host
         --user "$(id -u):$(id -g)")
@@ -310,7 +335,11 @@ run_mode() {
     command+=("$image" python3 /workspaces/atd/tools/gazebo_monza/run.py --mode "$mode" --output /output --circuit "$circuit")
     if (( ${#sim_args[@]} )); then command+=("${sim_args[@]}"); fi
     command+=(--resolution "$resolution" --camera-hz "$camera_hz")
-    if [[ "$mode" != closed-loop ]]; then command+=(--imu "$imu"); fi
+    if [[ "$mode" != closed-loop || "$controller" = ftg-3d ]]; then command+=(--imu "$imu"); fi
+    if [[ "$controller" = ftg-3d ]]; then
+        command+=(--controller ftg-3d --speed "$speed")
+        if [[ -n "$full_throttle_speed" ]]; then command+=(--full-throttle-speed "$full_throttle_speed"); fi
+    fi
     if [[ -n "$laps" && "$mode" != benchmark ]]; then command+=(--laps "$laps"); fi
     if [[ "$mode" = bag ]]; then
         bag_name="${out##*/}"
@@ -318,7 +347,7 @@ run_mode() {
         printf 'rosbag 保存先 %s/rosbags/%s\n' "$record" "$bag_name"
     fi
     printf '%s  DDS=%s  ROS_DOMAIN_ID=%s  保存先 %s\n' "$mode" "$dds" "$domain" "$out"
-    if [[ "$mode" = map || "$mode" = closed-loop ]]; then
+    if [[ "$mode" = map || ( "$mode" = closed-loop && "$controller" = map ) ]]; then
         local helper=map_job.py
         [[ "$mode" != closed-loop ]] || helper=closed_loop_job.py
         local -a job=(python3 "$project/tools/gazebo_monza/$helper" host
@@ -345,7 +374,7 @@ run_mode() {
     fi
     if $dry_run; then show_command "${command[@]}"; return; fi
     # Forward terminal and noninteractive stop signals directly via docker run.
-    if [[ "$mode" = serve ]]; then exec "${command[@]}"; fi
+    if [[ "$mode" = serve || "$controller" = ftg-3d ]]; then exec "${command[@]}"; fi
     status=0
     "${command[@]}" || status=$?
     size="$(du -sk -- "$out" | cut -f1)"

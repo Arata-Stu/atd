@@ -88,6 +88,8 @@ atd build --packages-up-to atd_bringup
 atd gazebo closed-loop --course odaiba --map odaiba_1p5 --line centerline --speed 1.5 --laps 2
 ```
 
+Gazebo と Isaac ROS のコンテナ間は Fast DDS SHM が既定。探索は UDPv4 loopback を使い、`--dds udp` で比較できる。ステレオ画素は専用の共有メモリ経路で渡す。
+
 追跡方式は `--tracking vo`（既定、左右画像）と `--tracking vio`（左右画像＋Gazebo の統合 IMU）から選ぶ。同じ地図・ラインで VIO を試す例を以下に示す。既存の保存地図をそのまま選べる。対話操作では `atd gazebo` → `closed-loop` →「追跡方式」で選択する。
 
 ```bash

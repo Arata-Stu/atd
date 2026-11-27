@@ -25,7 +25,7 @@ p = argparse.ArgumentParser()
 for option in ('run-id','map','bag','rate','domain','results-root','record-root','engine-dir','map-correction-source','vgl-frequency'):
     p.add_argument('--' + option)
 args = p.parse_args()
-assert os.environ['ATD_REPLAY_DDS'] == 'udp'
+assert os.environ['ATD_REPLAY_DDS'] == 'shm'
 root = Path(args.results_root)
 run = root / 'runs/localization' / args.run_id
 run.mkdir(parents=True)

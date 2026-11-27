@@ -134,10 +134,34 @@ def cameras(link, height, pitch, circuit, far, width, image_height, camera_hz):
         field(clip, "far", far)
 
 
+def depth_camera(link, camera, circuit):
+    from depth_ftg import FAR_M, NEAR_M, OPTICAL_FRAME, topic
+
+    sensor = ET.SubElement(link, "sensor", type="depth_camera", name="depth")
+    field(sensor, "pose", vector(FORWARD_M, 0, camera["height_above_floor_m"], 0,
+                                 radians(camera["pitch_down_deg"]), 0))
+    field(sensor, "always_on", "true")
+    field(sensor, "update_rate", camera["rate_hz"])
+    field(sensor, "topic", topic(circuit))
+    field(sensor, "gz_frame_id", OPTICAL_FRAME)
+    optics = ET.SubElement(sensor, "camera")
+    field(optics, "horizontal_fov", HFOV)
+    image = ET.SubElement(optics, "image")
+    field(image, "width", camera["width"])
+    field(image, "height", camera["height"])
+    clip = ET.SubElement(optics, "clip")
+    field(clip, "near", NEAR_M)
+    field(clip, "far", FAR_M)
+    depth = ET.SubElement(optics, "depth_camera")
+    depth_clip = ET.SubElement(depth, "clip")
+    field(depth_clip, "near", NEAR_M)
+    field(depth_clip, "far", FAR_M)
+
+
 def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
           circuit="odaiba", route=None, wait_for_capture=False, speed_mps=None, laps=1, record_ground_truth=False,
           resolution="640x480", imu_hz=0, camera_hz=DEFAULT_CAMERA_HZ, command_driven=False,
-          full_throttle_speed_mps=None, sensor_ingress=False):
+          full_throttle_speed_mps=None, sensor_ingress=False, ftg_speed=None):
     if resolution not in RESOLUTIONS:
         raise ValueError("unsupported stereo resolution: " + str(resolution))
     if type(camera_hz) is not int or camera_hz not in CAMERA_RATES:
@@ -206,6 +230,13 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
                          "Both optical IMU frames are at the stereo midpoint. No sensor noise or bias. "
                          "Combined acceleration is linearly interpolated between 200 Hz samples."},
     }
+    if ftg_speed is not None:
+        from depth_ftg import BODY_HEIGHT_M, OPTICAL_FRAME, topic
+
+        if not command_driven or not isfinite(ftg_speed) or not .2 <= ftg_speed <= full_throttle_speed_mps:
+            raise ValueError("3D FTG には車両モデルの範囲内で 0.2 m/s 以上の速度上限が必要です")
+        scene["depth"] = dict(topic=topic(circuit), optical_frame=OPTICAL_FRAME, encoding="R_FLOAT32",
+                              body_height_m=BODY_HEIGHT_M, speed_limit_mps=ftg_speed)
     if command_driven:
         from closed_loop_eval import FOOTPRINT
         scene["course_evaluation"] = {"frame": "gazebo_world", **source, "footprint": FOOTPRINT.copy()}
@@ -253,7 +284,10 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
     _, x, y, yaw = points[0]
     field(rig, "pose", vector(x, y, 0, 0, 0, yaw))
     field(link, "gravity", "false")
-    cameras(link, height, radians(pitch_deg), circuit, far, width, image_height, camera_hz)
+    if ftg_speed is None:
+        cameras(link, height, radians(pitch_deg), circuit, far, width, image_height, camera_hz)
+    else:
+        depth_camera(link, scene["camera"], circuit)
     motion = ET.SubElement(rig, "plugin", filename="gz-sim-python-system-loader-system",
                            name="gz::sim::systems::PythonSystemLoader")
     field(motion, "module_name", "closed_loop_motion" if command_driven else "monza_motion")

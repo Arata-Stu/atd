@@ -31,6 +31,12 @@ def test_saved_map_and_observed_segments_are_rendered_in_the_preset(tmp_path):
         assert display['Enabled'] and display['Class'] == 'rviz_default_plugins/MarkerArray'
         assert display['Topic']['Durability Policy'] == 'Transient Local' and qos.durability.name == 'TRANSIENT_LOCAL'
         assert display['Topic']['Reliability Policy'] == 'Reliable' and qos.reliability.name == 'RELIABLE'
+    for name in ('landmarks_cloud', 'localizer_map_cloud'):
+        cloud = topics.pop('/visual_slam/vis/' + name)
+        assert cloud['Enabled'] and cloud['Class'] == 'rviz_default_plugins/PointCloud2'
+        assert cloud['Topic']['Depth'] == 1 and cloud['Decay Time'] == 0
+        assert cloud['Topic']['Reliability Policy'] == 'Best Effort'
+        assert cloud['Topic']['Durability Policy'] == 'Volatile'
     assert not topics
     boundary, reference = hdmap.publish.call_args.args[0].markers
     assert boundary.ns == 'left' and boundary.points[0] == boundary.points[-1]

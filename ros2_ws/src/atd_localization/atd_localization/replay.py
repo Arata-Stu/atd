@@ -51,7 +51,7 @@ def choose(label, choices):
 
 
 def launch_command(results, map_id, engine, bag, rate, player_name, *, map_correction_source='cuvslam',
-                   vgl_frequency=None, trace_publications=False):
+                   vgl_frequency=None, trace_publications=False, rviz=False):
     args = ['ros2', 'launch', 'atd_localization', 'localization.launch.py',
             'map_id:=' + map_id, 'results_root:=' + str(results), 'use_sim_time:=true',
             'replay_bag:=' + str(bag), 'replay_rate:=' + str(rate), 'replay_player_name:=' + player_name,
@@ -62,10 +62,12 @@ def launch_command(results, map_id, engine, bag, rate, player_name, *, map_corre
         args.append('engine_dir:=' + engine)
     if trace_publications:
         args.append('trace_publications:=true')
+    if rviz and map_correction_source == 'cuvslam':
+        args.append('visualize_landmarks:=true')
     return args
 
 
-def validation_connections(node, player_name, workflow, *, map_correction_source='cuvslam'):
+def validation_connections(node, player_name, workflow, *, map_correction_source='cuvslam', rviz=False):
     """停止中の bag と実際に追跡・再定位を行う購読先の型・QoS を確認する。"""
     cameras = ['/visual_slam', '/visual_global_localization']
     clocks = [*cameras, '/atd_localization_monitor']
@@ -77,6 +79,10 @@ def validation_connections(node, player_name, workflow, *, map_correction_source
     hint_consumers = ['/atd_localization_monitor']
     if map_correction_source == 'cuvslam':
         hint_consumers.append('/visual_slam')
+        if rviz:
+            # The initial saved-map match can finish before a late RViz subscriber joins.
+            links += [('/visual_slam/vis/' + cloud, 'sensor_msgs/msg/PointCloud2', '/visual_slam', ['/rviz2'])
+                      for cloud in ('landmarks_cloud', 'localizer_map_cloud')]
     links.append(('/localization/pose_hint', 'geometry_msgs/msg/PoseWithCovarianceStamped',
                   '/visual_global_localization', hint_consumers))
     # tf2 can create its own listener node; validate the actual typed reader in this isolated domain.
@@ -122,7 +128,8 @@ def start_rviz(domain):
     config = Path(get_package_share_directory('atd_localization')) / 'config/fixed_map_replay.rviz'
     if not config.is_file():
         raise ValueError(f'RViz 設定がありません: {config}。atd-build --packages-up-to atd_localization を実行してください')
-    return subprocess.Popen(['rviz2', '-d', str(config), '--ros-args', '-p', 'use_sim_time:=true'],
+    return subprocess.Popen(['rviz2', '-d', str(config), '--ros-args', '-p', 'use_sim_time:=true',
+                             '-r', '__node:=rviz2'],
                             env=dict(os.environ, ROS_DOMAIN_ID=str(domain), ROS_STATIC_PEERS=''),
                             stdin=subprocess.DEVNULL, start_new_session=True)
 
@@ -196,7 +203,8 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None, rv
         paused_player = f'atd_validation_{os.getpid()}'
         command = launch_command(args.results_root, args.map_id, args.engine_dir, bag, args.rate, paused_player,
                                  map_correction_source=args.map_correction_source,
-                                 vgl_frequency=args.vgl_frequency, trace_publications=trace is not None)
+                                 vgl_frequency=args.vgl_frequency, trace_publications=trace is not None,
+                                 rviz=rviz is not None)
         launch = subprocess.Popen(command, start_new_session=True)
         stack.callback(stop, launch)
         deadline = time.monotonic() + args.ready_timeout
@@ -219,7 +227,7 @@ def run_ros(args, meta, bag, topics, duration, report, output, *, trace=None, rv
 
         def missing():
             issues = validation_connections(node, '/' + paused_player, meta['workflow'],
-                                            map_correction_source=args.map_correction_source)
+                                            map_correction_source=args.map_correction_source, rviz=rviz is not None)
             if trace is not None:
                 issues.extend(trace_connections(node))
             if view is not None and not view.ready():

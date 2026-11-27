@@ -119,6 +119,7 @@ def test_coverage_only_counts_distinct_fresh_samples_in_same_episode():
     (['--map-correction-source', 'vgl'], 'vgl', 1.),
     (['--map-correction-source', 'vgl', '--vgl-frequency', '0'], 'vgl', 0.),
     (['--rviz'], 'cuvslam', None),
+    (['--map-correction-source', 'vgl', '--rviz'], 'vgl', 1.),
 ])
 def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, status, code,
                                                     mode_args, source, frequency):
@@ -144,7 +145,9 @@ def test_cli_runs_common_launch_and_persists_outcome(tmp_path, monkeypatch, stat
         assert rviz is (viewer if args.rviz else None)
         assert resolved == meta and replay_bag == records / 'b/run'
         launch = replay.launch_command(args.results_root, args.map_id, args.engine_dir, replay_bag, args.rate, 'player',
-                                       map_correction_source=args.map_correction_source, vgl_frequency=args.vgl_frequency)
+                                       map_correction_source=args.map_correction_source, vgl_frequency=args.vgl_frequency,
+                                       rviz=rviz is not None)
+        assert ('visualize_landmarks:=true' in launch) == (args.rviz and source == 'cuvslam')
         assert launch[1:4] == ['launch','atd_localization','localization.launch.py'] and 'use_sim_time:=true' in launch
         assert {'replay_bag:=' + str(replay_bag), 'replay_rate:=1.0', 'replay_player_name:=player',
                 'map_correction_source:=' + source} <= set(launch)
@@ -276,9 +279,17 @@ def test_fixed_map_paused_player_waits_for_slam_vgl_and_monitor_on_remapped_topi
     monkeypatch.setitem(sys.modules, 'rclpy.qos', SimpleNamespace(QoSCompatibility=SimpleNamespace(ERROR=False),
                         qos_check_compatible=lambda pub, sub: (pub == sub, '')))
     assert not replay.validation_connections(node, '/player', workflow)
+    for cloud in ('/visual_slam/vis/landmarks_cloud', '/visual_slam/vis/localizer_map_cloud'):
+        topic_types[cloud] = 'sensor_msgs/msg/PointCloud2'
+        pubs[cloud] = [endpoint('visual_slam', cloud)]
+        subs[cloud] = [endpoint('rviz2', cloud)]
+    assert not replay.validation_connections(node, '/player', workflow, rviz=True)
+    subs['/visual_slam/vis/localizer_map_cloud'] = []
+    assert any('localizer_map_cloud' in issue and '/rviz2' in issue for issue in
+               replay.validation_connections(node, '/player', workflow, rviz=True))
     # The VO-only node intentionally has no subscription to the VGL hint.
     subs['/localization/pose_hint'] = [endpoint('atd_localization_monitor', '/localization/pose_hint')]
-    assert not replay.validation_connections(node, '/player', workflow, map_correction_source='vgl')
+    assert not replay.validation_connections(node, '/player', workflow, map_correction_source='vgl', rviz=True)
     assert any('/localization/pose_hint' in i and '/visual_slam' in i
                for i in replay.validation_connections(node, '/player', workflow))
     subs['/li'][-1].qos_profile = False

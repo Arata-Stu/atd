@@ -27,6 +27,8 @@ atd replay --validate-map odaiba_s1_cu --rate 1 --rviz
 
 RViz は `map` を固定フレームにし、HDMap に登録された境界・走行ラインと、地図上の推定姿勢（橙の矢印）・走行軌跡を重ねる。追跡を失った区間では線を切り、復帰後の最初の姿勢から描画を再開する。再生の末尾で結果を保存し、ウィンドウを閉じるまで最終軌跡を確認できる。再生中にウィンドウを閉じるとその検証を中止する。直接コマンドで `--rviz` を省略すると画面なしで実行する。
 
+地図補正方式が `cuvslam` のときは、Gazebo の closed-loop と同じ2種類の特徴点群が重なる。灰色の **SLAM landmarks (live)** は走行中のランドマーク、紫色の **Map used for localization** は cuVSLAM が保存地図の照合時に配信するランドマーク。RViz はどちらも `PointCloud2` として直接購読する。`vgl` 方式では cuVSLAM は局所 VO を担当するため、この2種類の SLAM 点群は配信されず、HDMap と推定軌跡を表示する。
+
 TUI と直接指定は同じ通信設定を使う。bag 配信元・cuVSLAM・cuVGL は同一の component container 内でステレオ画像を渡す。別プロセスとの DDS 通信は既定で loopback UDPv4 を使う。別プロセス間の Fast DDS 共有メモリも有効にして比較する場合は、起動時に `ATD_REPLAY_DDS=shm atd replay` と指定する。実行時の DDS プロファイルと左右画像のプロセス内購読数は検証結果に記録される。
 
 ROS のコマンドからも Notebook Docker 内で実行できる。選択を省く場合は `--map course_a --bag session_b/lap_2` のように ID と記録ルートからの相対パスを指定する。

@@ -59,7 +59,8 @@
 - 実機・Gazebo・bag replay に共通して、センサー取得から処理結果までのメモリコピーを最小限にする。画像・深度・IMU の ROS 側の配信元と処理ノードは同一プロセスに配置し、composable node、component container、型付きの ROS 2 intra-process 通信を使う。Gazebo と ROS のプロセス境界ではセンサー用共有メモリを使う。
 - GPU 処理が連続する区間は、対応する CUDA バッファを次段まで引き継ぐ。画像の形式変換、シリアライズ、CPU・GPU 間転送、可視化・記録用の追加購読でコピーがどこに生じるかを確認する。性能比較では実際のセンサー入力経路と受信件数を記録する。
 - 本番の cuVSLAM は Jetson Orin Nano の GPU を使う。
-- 保存地図での定位は、cuVGL の初回候補で cuVSLAM が地図に照合して `map → odom` を発行する方式を既定とする。比較用に、cuVSLAM が局所オドメトリを、cuVGL が地図照合と `map → odom` を担当する方式も選択できる。[自己位置検証](../ros2_ws/src/atd_localization/README.md#地図補正を-cuvgl-に任せる)
+- 実車・固定地図 replay・Gazebo 閉ループの標準構成では、cuVGL が初期位置候補を出し、cuVSLAM が保存地図に照合する。初期照合に失敗した場合は cuVSLAM が次の候補を要求する。照合後は cuVSLAM がステレオ VO と内部 SLAM で追跡し、`odom → base_link` と `map → odom` の両方を発行する。cuVGL が地図補正 TF を発行する方式は比較用とする。[自己位置検証](../ros2_ws/src/atd_localization/README.md#地図補正を-cuvgl-に任せる)
+- cuVSLAM の追跡入力は原則として左右画像とし、IMU は融合しない。将来の IMU 活用では、cuVSLAM の外で VO と IMU を融合する拡張カルマンフィルタ（EKF）などを候補とする。
 - Python node を作成する場合も、CMake と `ament_cmake_auto` を基本とする。
 - Python の直接起動用スクリプトは実行権限に注意し、`colcon build` 後に実行できる形で配置・確認する。
 

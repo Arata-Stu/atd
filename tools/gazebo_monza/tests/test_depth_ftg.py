@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from closed_loop_motion import CommandPlant, JOINTS, STEERING_LIMIT, WHEELBASE_M
 from depth_ftg import COMMAND_AGE_NS, DepthController, DepthProjection, GapPlanner
+from ftg_visualization import depth_heatmap
 import world
 
 
@@ -21,6 +22,12 @@ class DepthFTGTests(unittest.TestCase):
         self.planner = GapPlanner(WHEELBASE_M, STEERING_LIMIT, .50, .50, 1.8)
         self.camera = DepthProjection(424, 240, world.HFOV, world.FORWARD_M, .12, 0.)
         self.clear = array("f", [math.inf]) * (424 * 240)
+
+    def test_depth_heatmap_uses_fixed_scale_and_marks_invalid_pixels(self):
+        depth = array("f", [.1, 1.35, 2.5, math.inf, math.nan, -math.inf, 0.])
+        rgb = depth_heatmap(depth.tobytes())
+        self.assertEqual(rgb, bytes([255, 0, 0, 255, 128, 128, 255, 255, 255, 255, 255, 255]
+                                    + [70, 74, 80] * 3))
 
     def test_floor_passes_low_block_stops_and_high_crossbar_passes(self):
         def projection(image):

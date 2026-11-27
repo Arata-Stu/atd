@@ -23,14 +23,13 @@ Visualization Manager:
         Reliability Policy: Reliable
         Durability Policy: Volatile
     - Class: rviz_default_plugins/Image
-      Name: Gazebo Depth
+      Name: Depth (near red / far white)
       Enabled: true
       Topic:
-        Value: /atd/gazebo/ftg/depth
+        Value: /atd/gazebo/ftg/depth_heatmap
         Depth: 1
         Reliability Policy: Best Effort
         Durability Policy: Volatile
-      Normalize Range: true
   Tools:
     - Class: rviz_default_plugins/Interact
     - Class: rviz_default_plugins/MoveCamera

@@ -8,6 +8,27 @@ from depth_ftg import BODY_HEIGHT_M, COMMAND_AGE_NS, OPTICAL_FRAME
 from sensor_profile import REAR_AXLE_HEIGHT_M
 
 
+DEPTH_RED_M = .2
+DEPTH_WHITE_M = 2.5
+DEPTH_COLORS = tuple(bytes((255, level, level)) for level in range(256))
+INVALID_DEPTH_COLOR = bytes((70, 74, 80))
+
+
+def depth_heatmap(data):
+    """Convert native float32 metres to RGB using a fixed colour range."""
+    colors = []
+    scale = 255 / (DEPTH_WHITE_M - DEPTH_RED_M)
+    for depth in memoryview(data).cast("f"):
+        if not depth > 0:
+            colors.append(INVALID_DEPTH_COLOR)
+        elif depth >= DEPTH_WHITE_M:
+            colors.append(DEPTH_COLORS[-1])
+        else:
+            level = max(0, round((depth - DEPTH_RED_M) * scale))
+            colors.append(DEPTH_COLORS[level])
+    return b"".join(colors)
+
+
 class FTGVisualization:
     def __init__(self, node, projection, planner):
         from geometry_msgs.msg import Point, TransformStamped
@@ -21,10 +42,11 @@ class FTGVisualization:
         self.projection, self.planner = projection, planner
         self.markers = node.create_publisher(MarkerArray, "/atd/gazebo/ftg/markers", 1)
         self.depth = node.create_publisher(Image, "/atd/gazebo/ftg/depth", qos_profile_sensor_data)
+        self.heatmap = node.create_publisher(Image, "/atd/gazebo/ftg/depth_heatmap", qos_profile_sensor_data)
         self.tf = TransformBroadcaster(node)
         self.trail = deque(maxlen=2000)
         self.snapshot = None
-        self.image_stamp = None
+        self.image_stamp = self.heatmap_stamp = None
 
     def observe(self, stamp, data, obstacles, angle, target, report):
         self.snapshot = stamp, data, obstacles, angle, target, report
@@ -40,7 +62,10 @@ class FTGVisualization:
         transform.transform.rotation.z = math.sin(pose.yaw() / 2)
         transform.transform.rotation.w = math.cos(pose.yaw() / 2)
         self.tf.sendTransform(transform)
-        if not self.markers.get_subscription_count() and not self.depth.get_subscription_count():
+        show_markers = self.markers.get_subscription_count()
+        show_depth = self.depth.get_subscription_count()
+        show_heatmap = self.heatmap.get_subscription_count()
+        if not (show_markers or show_depth or show_heatmap):
             return
 
         snapshot = self.snapshot
@@ -48,16 +73,15 @@ class FTGVisualization:
             "invalid_or_stale_depth", "stale_depth"
         ):
             snapshot = None
-        if snapshot and snapshot[0] != self.image_stamp and self.depth.get_subscription_count():
+        if snapshot:
             image_stamp, data = snapshot[:2]
-            image = self.image_type(width=self.projection.width, height=self.projection.height,
-                                    encoding="32FC1", step=self.projection.width * 4,
-                                    is_bigendian=int(sys.byteorder == "big"), data=array("B", data))
-            image.header.frame_id = OPTICAL_FRAME
-            image.header.stamp.sec, image.header.stamp.nanosec = divmod(image_stamp, 10**9)
-            self.depth.publish(image)
-            self.image_stamp = image_stamp
-        if not self.markers.get_subscription_count():
+            if show_depth and image_stamp != self.image_stamp:
+                self.publish_image(self.depth, image_stamp, data, "32FC1", 4, int(sys.byteorder == "big"))
+                self.image_stamp = image_stamp
+            if show_heatmap and image_stamp != self.heatmap_stamp:
+                self.publish_image(self.heatmap, image_stamp, depth_heatmap(data), "rgb8", 3, 0)
+                self.heatmap_stamp = image_stamp
+        if not show_markers:
             return
 
         marker = self.marker_type
@@ -111,3 +135,11 @@ class FTGVisualization:
         if "clearance_m" in state:
             status.text += f"  clear {state['clearance_m']:.2f} m"
         self.markers.publish(self.array_type(markers=[body, obstacles, arc, trail, status]))
+
+    def publish_image(self, publisher, stamp, data, encoding, bytes_per_pixel, bigendian):
+        image = self.image_type(width=self.projection.width, height=self.projection.height,
+                                encoding=encoding, step=self.projection.width * bytes_per_pixel,
+                                is_bigendian=bigendian, data=array("B", data))
+        image.header.frame_id = OPTICAL_FRAME
+        image.header.stamp.sec, image.header.stamp.nanosec = divmod(stamp, 10**9)
+        publisher.publish(image)

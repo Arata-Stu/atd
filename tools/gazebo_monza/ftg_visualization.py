@@ -8,24 +8,47 @@ from depth_ftg import BODY_HEIGHT_M, COMMAND_AGE_NS, OPTICAL_FRAME
 from sensor_profile import REAR_AXLE_HEIGHT_M
 
 
-DEPTH_RED_M = .2
-DEPTH_WHITE_M = 2.5
-DEPTH_COLORS = tuple(bytes((255, level, level)) for level in range(256))
+DEPTH_NEAR_M = .2
+DEPTH_FAR_M = 2.5
+# Turbo RGB samples, converted to uint8 in the same way as the Depth Pro 2 CLI.
+# Reference: https://matplotlib.org/stable/users/explain/colors/colormaps.html
+TURBO_RGB = bytes.fromhex(
+    "30123b31154232184a341b51351e5836215f37236538266c3929723a2c793b2f7f3c32853c358b3d37913e3a963f3d9c"
+    "4040a14043a64145ab4148b0424bb5434eba4350be4353c24456c74458cb455bce455ed24560d64563d94666dd4668e0"
+    "466be3466de64670e84673eb4675ed4678f0467af2467df4467ff64682f84584f94587fb4589fc448cfd438efd4291fe"
+    "4193fe4096fe3f98fe3e9bfe3c9dfd3ba0fc39a2fc38a5fb36a8f934aaf833acf631aff52fb1f32db4f12bb6ef2ab9ed"
+    "28bbeb26bde925c0e623c2e421c4e120c6df1ec9dc1dcbda1ccdd71bcfd41ad1d219d3cf18d5cc18d7ca17d9c717dac4"
+    "17dcc217debf18e0bd18e1ba19e3b81ae4b61be5b41de7b11ee8af20e9ac22eba924eca627eda329eea02cef9d2ff09a"
+    "32f19735f39438f4913bf48d3ff58a42f68746f7834af8804df97c51f97955fa7659fb725dfb6f61fc6c65fc6869fd65"
+    "6dfd6271fd5f74fe5c78fe597cfe5680fe5384fe5087fe4d8bfe4b8efe4892fe4695fe4498fe429bfd409efd3ea1fc3d"
+    "a4fc3ba6fb3aa9fb39acfa37aef937b1f836b3f835b6f735b9f534bbf434bef334c0f233c3f133c5ef33c8ee33caed33"
+    "cdeb34cfea34d1e834d4e735d6e535d8e335dae236dde036dfde36e1dc37e3da37e5d838e7d738e8d538ead339ecd139"
+    "edcf39efcd39f0cb3af2c83af3c63af4c43af6c23af7c039f8be39f9bc39f9ba38fab737fbb537fbb336fcb035fcae34"
+    "fdab33fda932fda631fda330fea12ffe9e2efe9b2dfe982cfd952bfd9229fd8f28fd8c27fc8926fc8624fb8323fb8022"
+    "fa7d20fa7a1ff9771ef8741cf7711bf76e1af66b18f56817f46516f36315f26014f15d13ef5a11ee5810ed550fec520e"
+    "ea500de94d0de84b0ce6490be5460ae3440ae24209e04008de3e08dd3c07db3a07d93806d73606d63405d43205d23005"
+    "d02f04ce2d04cb2b03c92903c72803c52602c32402c02302be2102bb1f01b91e01b61c01b41b01b11901ae1801ac1601"
+    "a91501a61401a31201a011019d10019a0e01970d01940c01910b018e0a018b09018708018407018106027d05027a0402"
+)
+DEPTH_COLORS = tuple(TURBO_RGB[offset:offset + 3] for offset in range(0, len(TURBO_RGB), 3))
 INVALID_DEPTH_COLOR = bytes((70, 74, 80))
 
 
 def depth_heatmap(data):
-    """Convert native float32 metres to RGB using a fixed colour range."""
+    """Map inverse depth in a fixed range to the Turbo palette."""
     colors = []
-    scale = 255 / (DEPTH_WHITE_M - DEPTH_RED_M)
+    far_inverse = 1 / DEPTH_FAR_M
+    scale = 255 / (1 / DEPTH_NEAR_M - far_inverse)
     for depth in memoryview(data).cast("f"):
         if not depth > 0:
             colors.append(INVALID_DEPTH_COLOR)
-        elif depth >= DEPTH_WHITE_M:
+        elif depth >= DEPTH_FAR_M:
+            colors.append(DEPTH_COLORS[0])
+        elif depth <= DEPTH_NEAR_M:
             colors.append(DEPTH_COLORS[-1])
         else:
-            level = max(0, round((depth - DEPTH_RED_M) * scale))
-            colors.append(DEPTH_COLORS[level])
+            index = int((1 / depth - far_inverse) * scale)
+            colors.append(DEPTH_COLORS[index])
     return b"".join(colors)
 
 

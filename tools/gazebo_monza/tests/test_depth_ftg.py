@@ -24,9 +24,9 @@ class DepthFTGTests(unittest.TestCase):
         self.clear = array("f", [math.inf]) * (424 * 240)
 
     def test_depth_heatmap_uses_fixed_scale_and_marks_invalid_pixels(self):
-        depth = array("f", [.1, 1.35, 2.5, math.inf, math.nan, -math.inf, 0.])
+        depth = array("f", [.1, 1 / 2.7, 2.5, math.inf, math.nan, -math.inf, 0.])
         rgb = depth_heatmap(depth.tobytes())
-        self.assertEqual(rgb, bytes([255, 0, 0, 255, 128, 128, 255, 255, 255, 255, 255, 255]
+        self.assertEqual(rgb, bytes([122, 4, 2, 161, 252, 61, 48, 18, 59, 48, 18, 59]
                                     + [70, 74, 80] * 3))
 
     def test_floor_passes_low_block_stops_and_high_crossbar_passes(self):

@@ -9,7 +9,7 @@
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>atd_mapping</exec_depend>
-  <exec_depend>atd_interfaces</exec_depend>
+  <depend>atd_interfaces</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rclpy</exec_depend>
@@ -26,15 +26,18 @@
   <exec_depend>isaac_ros_cuvslam</exec_depend>
   <exec_depend>isaac_ros_visual_global_localization</exec_depend>
   <exec_depend>diagnostic_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
+  <depend>geometry_msgs</depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>rviz_default_plugins</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
+  <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_srvs</depend>
   <depend>std_msgs</depend>
   <depend>rosbag2_interfaces</depend>
+  <build_depend>eigen</build_depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2</depend>
   <depend>tf2_msgs</depend>
   <exec_depend>rosbag2_py</exec_depend>
   <exec_depend>ros2bag</exec_depend>

@@ -94,7 +94,7 @@ atd gazebo closed-loop --course odaiba --map odaiba_1p5 --line centerline --spee
 atd gazebo closed-loop --course odaiba --map odaiba_1p5 --line centerline --speed 1.5 --laps 2 --tracking vio
 ```
 
-VIO 選択時は加速度 200 Hz、ジャイロと統合 IMU 400 Hz が既定。200 Hz の統合 IMU で試すには `--tracking vio --imu 200` を指定する。cuVSLAM は走行中の `/camera/camera/imu` を購読し、VGL は初期位置の照合に左右画像を使う。VO で IMU も配信して条件をそろえるには `--tracking vo --imu 400` を使う。試行の設定は `closed_loop.host.json` の `tracking` と `imu_hz`、ROS 側の起動設定は `closed_loop.ros.log` の `ATD localization` 行で確認できる。
+VIO 選択時は加速度 200 Hz、ジャイロと統合 IMU 400 Hz が既定。200 Hz の統合 IMU で試すには `--tracking vio --imu 200` を指定する。cuVSLAM は走行中の `/camera/camera/imu` を購読し、VGL は初期位置の照合に左右画像を使う。閉ループの VO でも既定で IMU を 400 Hz 配信し、独立 EKF がジャイロを使用する。`--tracking vo --imu off` で IMU と EKF の両方を外せる。試行の設定は `closed_loop.host.json` の `tracking` と `imu_hz`、ROS 側の起動設定は `closed_loop.ros.log` の `ATD localization` 行で確認できる。
 
 Raceline の速度上限を 10 m/s で試す場合は、Web UI「地図とライン」で「速度上限」を 10 にして Raceline を再生成し、Notebook ホストから次を実行する。
 
@@ -161,6 +161,27 @@ Web UI 更新時は Notebook の Isaac ROS コンテナで `atd-web prepare` を
 1. **車両を一時停止** を押す。指令が模擬車両に届いた時点の位置と向きで車速をゼロに固定する。「車両は一時停止中（0 m/s）」は模擬車両からの応答で確認した状態。
 2. **走行設定** で値を変更して適用する。設定を適用した後やブラウザを閉じた後も車両は停止を維持し、カメラ・自己位置推定・シミュレーション時計・ログ記録は続く。発進後の一時停止時間はその周のラップタイムに含まれる。
 3. **走行を再開** を押す。再開後に選択中のラインの計画と同じ観測時刻の停止姿勢・速度を確認すると、同じ試行で停車位置から発進する。ブラウザの「表示を一時停止」はグラフや地図の表示に使う。
+
+### 地図補正と車速＋ジャイロ EKF を比較する
+
+Notebook コンテナで `atd-build --packages-up-to atd_bringup` と `atd-web build` を実行し、
+Notebook ホストで次のように保存地図を選んで走行する。
+
+```bash
+atd gazebo closed-loop --course odaiba --line centerline --speed 1.5 --laps 2
+```
+
+車体モデルの加減速後の前後速度 [m/s] を `/atd/gazebo/model_speed` にシミュレーション時刻付きで配信する（既定 20 Hz）。
+前後のサンプルの平均を同区間の速度観測とし、D455 相当のジャイロと実車共通の平面 EKF で積算する。
+VO 選択時は cuVSLAM の追跡に左右画像だけを使い、VIO 選択時は cuVSLAM と EKF が同じ模擬ジャイロを使う。
+地図補正・GT の位置や向き・操舵指令を EKF の観測に加える処理はない。速度にはモデルの値を使うため、空転やパルス量子化はこの評価に含まれない。
+
+走行後に Web の「走行評価 → Gazebo 閉ループ」を開く。地図には VSLAM、EKF、GT を重ねる。
+EKF は最初の共通観測で VSLAM に位置と向きを合わせ、同じ EKF 区間では再照合後もその変換を使う。
+「最大横補正」で最も大きく横に補正された時刻の前後を拡大できる。地図補正の前後量・左右量・方位変化は画像時刻に表示する。
+操舵角の「元画像の操舵指令」はその画像から生成した走行指令、「車体で採用中」と「実舵角」は車体のサンプル時刻で比較する。
+同期元の記録は `closed_loop.ekf.jsonl`、`closed_loop.vo.jsonl`、`closed_loop.commands.jsonl` と既存の自己位置・GT ログ。
+EKF を記録していない旧試行も既存の表示で開ける。
 
 ### 走行後に接触直前を確認する
 

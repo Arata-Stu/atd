@@ -232,3 +232,26 @@ def test_no_extrapolation_wrap_yaw_and_protect_contact_samples():
     shown = [s['t'] for s in series.result()]
     assert 0 == shown[0] and shown[-1] == 19999 and len(shown) < 8300
     assert set(range(8990, 9011)).issubset(shown)
+
+
+def test_parallel_ekf_and_issued_steering_at_image_time(archive):
+    api, folder, _ = archive
+    identity = json.loads((folder/'closed_loop.reference.json').read_text())
+    save(folder/'closed_loop.reference.json', dict(identity, map_sha256='a'*64))
+    t, d = 1_025_000_000, 50_000_000
+    loc = [pose(t, 10, 20, math.pi/2), pose(t+d, 9.8, 20.05, math.pi/2)]
+    log(folder/'closed_loop.localization.jsonl',
+        [dict(r, header_stamp_ns=r['image_stamp_ns'], z_m=0.) for r in loc])
+
+    def odom(ns, frame, x):
+        return dict(stamp_ns=ns, frame=frame, xyz=[x,0.,0.], xyzw=[0.,0.,0.,1.])
+    log(folder/'closed_loop.ekf.jsonl', [odom(t-d//2+i*d, 'wheel', i*.05) for i in range(3)])
+    log(folder/'closed_loop.vo.jsonl', [odom(t+i*d, 'odom', i*.05) for i in range(2)])
+    log(folder/'closed_loop.commands.jsonl', [dict(stamp_ns=t+d, steering_rad=.31)])
+    data = api.get(URL+RUN).json()
+    a, b = data['ekf']
+    assert [p['x'] for p in data['ekf_path']] == pytest.approx([.05, .1])
+    assert a['steering_rad'] is None and b['steering_rad'] == .31
+    assert a['correction_left_m'] is None and b['correction_left_m'] == pytest.approx(.2)
+    assert b['x'] == pytest.approx(.075) and b['y'] == pytest.approx(0.)
+    assert data['estimates'][1]['y'] == pytest.approx(.2)

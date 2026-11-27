@@ -205,6 +205,9 @@ class CommandMotionTests(unittest.TestCase):
                                "yaw.return_value": math.pi / 2})
             plugin.link = Mock(**{"world_pose.return_value": observed})
             plugin.ground_truth = Mock(**{"get_subscription_count.return_value": 1})
+            plugin.model_speed = Mock(**{"get_subscription_count.return_value": 1})
+            plugin.speed_message = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()),
+                                                   twist=SimpleNamespace(linear=SimpleNamespace()))
             plugin.hold_status = Mock(**{"get_subscription_count.return_value": 1})
             plugin.hold_message = SimpleNamespace(data="")
             plugin.gt_pose = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()),
@@ -213,14 +216,18 @@ class CommandMotionTests(unittest.TestCase):
             info = Mock(paused=False, **{"sim_time.total_seconds.return_value": .033333})
             plugin.plant.receive(30_000_000, 20_000_000, JOINTS, [0., .2, 1.])
             plugin.plant.receive(32_000_000, 20_000_000, JOINTS, [0., .3, 1.])
+            plugin.plant.vehicle.speed = .123
             plugin.post_update(info, None)
+            plugin.model_speed.publish.assert_called_once_with(plugin.speed_message)
+            self.assertEqual(plugin.speed_message.twist.linear.x, .123)
+            self.assertEqual(plugin.speed_message.header.stamp.nanosec, 33_333_000)
             plugin.ground_truth.publish.assert_called_once_with(plugin.gt_pose)
             pose, stamp = plugin.gt_pose.pose, plugin.gt_pose.header.stamp
             sample = json.loads(plugin.trace.read_text())
             self.assertEqual((sample["command_stamp_ns"], sample["command_applied_ns"]), (20_000_000, 30_000_000))
             self.assertEqual(stamp.sec * 10**9 + stamp.nanosec, round(sample["sim_time_s"] * 1e9))
             self.assertEqual(json.loads(plugin.hold_message.data),
-                             dict(held=False, stamp_ns=33_333_000, speed_mps=0.))
+                             dict(held=False, stamp_ns=33_333_000, speed_mps=.123))
             self.assertEqual((pose.position.x, pose.position.y, pose.position.z), (3., -2., REAR_AXLE_HEIGHT_M))
             self.assertAlmostEqual(2 * math.atan2(pose.orientation.z, pose.orientation.w), sample["yaw_rad"])
             # The closed-loop IMU needs every measured pose between the 20 Hz GT samples.

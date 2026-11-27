@@ -44,7 +44,7 @@ usage() {
   --camera-height m   地面から左右光学中心までの高さを指定
   --resolution WxH    左右とも 424x240 / 640x480（既定）/ 848x480 / 1280x720。closed-loop は VGL 地図と同じ解像度
   --camera-hz Hz      左右の撮影周期を 30 / 60 / 90 Hz から選択。既定は closed-loop が30 Hz、他は90 Hz
-  --imu off|200|400   加速度 200 Hz、ジャイロと統合 IMU は指定 Hz で配信（VIO では既定 400、他は off）
+  --imu off|200|400   加速度 200 Hz、ジャイロと統合 IMU は指定 Hz で配信（closed-loop は並列 EKF 用に既定 400、他は off）
   --camera-pitch-deg 度   カメラの下向き角度を指定（既定 0）
   --dry-run           対象イメージ・保存先・実行コマンドを表示
 
@@ -163,6 +163,8 @@ while (( $# )); do
 done
 if [[ "$tracking" = vio ]]; then
     [[ "$imu" != off ]] || fail "--tracking vio には統合 IMU が必要です。--imu 200 または 400 を指定してください"
+    imu="${imu:-400}"
+elif [[ "$action" = closed-loop ]]; then
     imu="${imu:-400}"
 else
     imu="${imu:-off}"

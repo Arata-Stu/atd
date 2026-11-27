@@ -85,7 +85,7 @@ class ClosedLoopMotion:
     def configure(self, entity, sdf, ecm, event_mgr):
         from gz.math import Pose3d
         from gz.sim import Link, Model
-        from geometry_msgs.msg import PoseStamped
+        from geometry_msgs.msg import PoseStamped, TwistStamped
         from rclpy.context import Context
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
@@ -112,6 +112,9 @@ class ClosedLoopMotion:
                                       QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.ground_truth = self.node.create_publisher(PoseStamped, "/atd/gazebo/ground_truth_pose",
                                                        qos_profile_sensor_data)
+        self.model_speed = self.node.create_publisher(TwistStamped, "/atd/gazebo/model_speed", qos_profile_sensor_data)
+        self.speed_message = TwistStamped()
+        self.speed_message.header.frame_id = "base_link"
         self.hold_status = self.node.create_publisher(String, "/atd/gazebo/vehicle_hold", 1)
         self.hold_message = String()
         self.gt_pose = PoseStamped()
@@ -191,6 +194,11 @@ class ClosedLoopMotion:
             msg.pose.orientation.w = math.cos(pose.yaw() * .5)
             self.ground_truth.publish(msg)
         plant, v = self.plant, self.plant.vehicle
+        if self.model_speed.get_subscription_count():
+            msg = self.speed_message
+            msg.header.stamp.sec, msg.header.stamp.nanosec = divmod(round(seconds * 1e9), 10**9)
+            msg.twist.linear.x = v.speed
+            self.model_speed.publish(msg)
         if self.hold_status.get_subscription_count():
             self.hold_message.data = json.dumps(dict(held=plant.state == "held" and v.speed == 0.,
                                                      stamp_ns=round(seconds * 1e9), speed_mps=v.speed), allow_nan=False)

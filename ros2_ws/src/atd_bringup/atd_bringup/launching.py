@@ -58,7 +58,8 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
         tuning = ('min_lookahead_m', 'lookahead_time_s', 'max_lookahead_m')
         controller = LookaheadConfig()
         defaults.update(map_id='', results_root='/data/results', engine_dir='', line='raceline',
-                        map_correction_source='cuvslam', vgl_frequency='1.0')
+                        map_correction_source='cuvslam', vgl_frequency='1.0', rpm_pulses_per_meter='',
+                        rpm_gyro_topic='/camera/camera/gyro/sample')
         defaults.update({key: str(getattr(controller, key)) for key in tuning})
         pid = PIDConfig()
         speed_arguments = {'feedforward_path': DEFAULT_FEEDFORWARD_PATH,
@@ -92,7 +93,8 @@ def description(manual=False, localization=False, camera=True, autonomous=False)
                                          'serial': ParameterValue(arguments['pico_serial'], value_type=str)}]))
     if localization:
         actions.append(include('atd_localization', 'localization.launch.py',
-                               {key: arguments[key] for key in ('map_id', 'results_root', 'engine_dir', 'map_correction_source', 'vgl_frequency')}))
+                               {key: arguments[key] for key in ('map_id', 'results_root', 'engine_dir', 'map_correction_source', 'vgl_frequency',
+                                                               'rpm_pulses_per_meter', 'rpm_gyro_topic')}))
         def planning(context):
             if autonomous:
                 import json

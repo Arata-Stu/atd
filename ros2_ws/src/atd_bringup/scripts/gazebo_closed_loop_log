@@ -51,7 +51,9 @@ def main():
     from isaac_ros_visual_slam_interfaces.msg import VisualSlamStatus
     from rclpy.executors import ExternalShutdownException
     from rclpy.node import Node
-    from rclpy.qos import DurabilityPolicy, QoSProfile
+    from nav_msgs.msg import Odometry
+    from sensor_msgs.msg import JointState
+    from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
     from rclpy.utilities import remove_ros_args
     from std_msgs.msg import String
 
@@ -62,6 +64,9 @@ def main():
     with rclpy.init(), Node('atd_gazebo_closed_loop_log') as node, \
             (folder / 'closed_loop.lines.jsonl').open('x', encoding='utf-8', buffering=1) as lines, \
             (folder / 'closed_loop.localization.jsonl').open('x', encoding='utf-8', buffering=1) as loc, \
+            (folder / 'closed_loop.ekf.jsonl').open('x', buffering=1) as ekf, \
+            (folder / 'closed_loop.vo.jsonl').open('x', buffering=1) as vo, \
+            (folder / 'closed_loop.commands.jsonl').open('x', buffering=1) as commands, \
             (folder / 'closed_loop.vslam.jsonl').open('x', encoding='utf-8', buffering=1) as timing:
         def record_localization(msg):
             write_row(loc, localization_row(msg, node.get_clock().now().nanoseconds, reference))
@@ -75,6 +80,24 @@ def main():
                 return
             write_row(lines, dict(stamp_ns=event['stamp_ns'], line=name))
 
+        def record_odom(msg, stream):
+            p, q = msg.pose.pose.position, msg.pose.pose.orientation
+            if msg.child_frame_id != 'base_link' or not msg.header.frame_id:
+                return
+            xyz, xyzw = [p.x, p.y, p.z], [q.x, q.y, q.z, q.w]
+            if all(map(math.isfinite, xyz)) and math.isclose(math.hypot(*xyzw), 1., abs_tol=.01):
+                write_row(stream, dict(stamp_ns=stamp_ns(msg.header.stamp), frame=msg.header.frame_id,
+                                       xyz=xyz, xyzw=xyzw))
+
+        def record_command(msg):
+            if (msg.header.frame_id == 'base_link' and list(msg.name) == ['steering', 'throttle', 'enable']
+                    and len(msg.position) == 3 and msg.position[2] == 1. and math.isfinite(msg.position[0])):
+                write_row(commands, dict(stamp_ns=stamp_ns(msg.header.stamp), steering_rad=msg.position[0]))
+
+        node.create_subscription(Odometry, '/localization/rpm_imu/odom', lambda m: record_odom(m, ekf), 100)
+        node.create_subscription(Odometry, '/visual_slam/tracking/odometry', lambda m: record_odom(m, vo),
+                                 qos_profile_sensor_data)
+        node.create_subscription(JointState, '/atd/gazebo/actuators', record_command, 100)
         node.create_subscription(String, '/atd/gazebo/reference_line', record_line,
                                  QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         node.create_subscription(LocalizationStatus, '/localization/status', record_localization, 100)

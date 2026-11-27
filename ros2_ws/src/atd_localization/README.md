@@ -69,3 +69,46 @@ atd-shell env ROS_DOMAIN_ID=95 ros2 service call /localization/request_hint std_
 初回の照合は cuVGL が画像を受け取って開始する。既定の構成では、cuVSLAM は候補を受け取って保存地図に照合し、失敗時には `/localization/request_hint` トピックで cuVGL に次の候補を要求する。ATD の監視ノードは候補・診断・TF・オドメトリを観測し、追跡状態を配信する。bag 検証では候補の購読準備を待ってからセンサー再生を開始する。
 
 `state` は `waiting_hint`、`localizing`、`tracking`、`lost`、`stale`。姿勢と車体 x 方向速度 [m/s] は `tracking` 時だけ有効。地図 ID・cuVSLAM 地図と HDMap の SHA-256・セッション ID を同じメッセージに持たせ、別の地図や追跡区間の姿勢を識別する。
+
+## Hobbywing RPM・D455 ジャイロと地図補正の比較
+
+前進走行用の平面 EKF は後輪軸中心の位置・ヨー角・前後速度・ヨー角速度を推定する。
+Hobbywing のパルスには回転方向の情報がない。後退区間は評価から除く。
+滑りの少ない既知距離を低速で直進し、同じ Pico 接続区間の
+`/vehicle/pico/telemetry.rpm_edges` の増分を距離 [m] で割ってパルス数/mを求める。
+この実測値があるときだけ比較を有効にする。
+
+Eigen 開発ヘッダーを含むプロジェクトの Docker 内で `atd-build --packages-up-to atd_bringup` を実行する。
+Jetson ホストで次のように起動し、手動走行を記録する。変数には対象地図と実測値を設定する。
+
+```bash
+scripts/bringup.sh localization "map_id:=${MAP_ID}" "rpm_pulses_per_meter:=${PULSES_PER_M:?実測値が必要}" recording_profile:=calibration
+```
+
+ジャイロの既定入力は `/camera/camera/gyro/sample`。D455 の統合 IMU を使う場合は
+`rpm_gyro_topic:=/camera/camera/imu` を指定する。後輪軸中心から実測した
+カメラ取付 TF とカメラ内部 TF が必要。成分はメッセージのフレームから車体に回転して使う。
+Pico の基板時刻差とエッジ数の差から区間の平均速度を求め、同じ受信時刻区間に対応するジャイロを積分する。
+初回の回転検出後、両入力がそろうごとに `/localization/rpm_imu/odom` を配信する。
+RPM のヘッダーは Jetson の受信時刻なので、画像や IMU との比較には USB 転送の遅延が含まれる。
+空転は車速の過大推定になり、回転検出後のセンサー断線はエッジ数だけでは停止と区別できない。
+計測ノイズと速度変化の分散は初期設定で、車両での同定が必要。
+
+EKF は RPM で速度、ジャイロで旋回速度を更新する。絶対位置・絶対方位の観測がないため走行距離とともにずれが蓄積する。
+比較用の独立した原点を使い、地図 TF と走行指令は既存ノードが担当する。Pico 再接続・入力途絶などで積分できない区間は
+新しいフレーム名で再開する。mapping または calibration で記録した bag を Notebook に転送して次を実行する。
+
+```bash
+ros2 run atd_localization compare_rpm_imu "/data/record/rosbags/${BAG_NAME}" > "/data/results/runs/${BAG_NAME}-rpm-imu.csv"
+```
+
+CSV の1行は VSLAM の画像時刻。区間最初の共通観測で位置・向きを一度合わせ、その変換を固定した
+`aligned_ekf_*`、`aligned_vo_*` と地図補正込みの `map_*` を比較できる。EKF は前後の観測から時刻補間する。
+`correction_left_m` は直前の地図補正で今回の VO を進めた車体を基準に、今回の地図補正によって
+後輪軸中心が左に何 m 動いたかを示す。`correction_forward_m` は前方向、`correction_yaw_deg` は向きの変化（左正）。
+同じ地図で VSLAM が再照合した際も、EKF が連続していれば最初の位置合わせを保持する。
+再照合後の推定差は地図姿勢と EKF の列で確認できる。地図または EKF の原点が変わった場合は EKF を再度位置合わせする。
+追跡区間の先頭や欠測後は、連続観測間の補正量を空欄にする。
+この比較で分かるのは推定同士の差で、地図照合の正誤や実車の絶対位置誤差には別の基準が必要。
+
+実車 CSV の `steering_command_rad` は同じ地図・追跡区間・画像時刻の `/control/status` が報告した計算舵角 [rad]。対応する計算がない行は空欄となる。Gazebo は模擬車両の実速度を同じ EKF に入力し、Web の結果画面で GT と操舵指令を比較できる。[Gazebo の比較手順](../../../docs/gazebo_circuits.md#地図補正と車速ジャイロ-ekf-を比較する)

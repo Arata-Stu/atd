@@ -6,6 +6,7 @@ build-essential
 cmake
 ninja-build
 pkg-config
+libeigen3-dev
 libevdev-dev
 libyaml-cpp-dev
 python3

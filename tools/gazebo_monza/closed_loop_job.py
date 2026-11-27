@@ -219,7 +219,7 @@ def host(args):
     if args.vgl_frequency is not None:
         if args.map_correction_source != 'vgl' or not math.isfinite(args.vgl_frequency) or args.vgl_frequency < 0:
             raise ValueError('--vgl-frequency は補正元 vgl で 0 以上の有限値を指定してください')
-    imu = args.imu or ('400' if args.tracking == 'vio' else 'off')
+    imu = args.imu or '400'
     if args.tracking == 'vio' and imu == 'off':
         raise ValueError('VIO には --imu 200 または 400 が必要です')
     if args.engine_dir and (Path(args.engine_dir).is_absolute() or '..' in Path(args.engine_dir).parts):
@@ -238,8 +238,7 @@ def host(args):
               f'rviz:={str(args.rviz).lower()}', f'run_dir:={remote}']
     if args.vgl_frequency is not None:
         launch.append(f'vgl_frequency:={args.vgl_frequency}')
-    if args.tracking == 'vio':
-        launch.append('imu_frequency:=' + imu)
+    launch.append('imu_frequency:=' + imu)
     if args.engine_dir:
         launch.append('engine_dir:=' + args.engine_dir)
     if args.web:

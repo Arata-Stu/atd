@@ -11,13 +11,17 @@ export type Sample = Pose & {
 export type Estimate = Pose & {
   segment: number; lateral_error_m: number; yaw_error_rad: number; received_delay_ms: number | null;
 };
+export type Ekf = Pose & {
+  lateral_error_m:number; yaw_error_rad:number; steering_rad:number|null;
+  correction_forward_m:number|null; correction_left_m:number|null; correction_yaw_deg:number|null;
+};
 export type Vslam = Timed & {track_ms: number | null; callback_ms: number | null; vo_state: number | null};
 export type GazeboRun = {
   circuit: string; id: string; status: string; reason: string; map_id: string | null; line: string | null;
   started: number | null; laps_completed: number | null; laps_requested: number | null; max_speed_mps: number | null;
 };
 export type ClosedLoopDetail = {
-  run: GazeboRun; samples: Sample[]; estimates: Estimate[]; vslam: Vslam[]; reference: XY[];
+  run: GazeboRun; ekf?: Ekf[]; ekf_path?: Pose[]; samples: Sample[]; estimates: Estimate[]; vslam: Vslam[]; reference: XY[];
   reference_speeds_mps?: number[]; reference_source: 'snapshot' | 'verified_map' | 'current_map' | 'missing';
   line_changes?: {t: number; line: string}[];
   additional_references?: Record<string, {points: XY[]; speeds_mps: number[]}>;
@@ -126,18 +130,28 @@ export function controlObservations(samples: Sample[]) {
 export function chartsFor(run: ClosedLoopDetail): Chart[] {
   const {samples, estimates, vslam} = run;
   const control = controlObservations(samples);
+  const ekf = run.ekf ?? [];
   const teal = '#236a55', orange = '#ad511c', blue = '#1878a0', purple = '#7553a1';
   return [
     {label:'横ずれ', unit:'m', digits:3, hint:'推定誤差は GT 車体の左、ライン偏差はライン進行方向の左が正',
       series:[series(estimates,'推定 − GT',orange,p=>p.lateral_error_m),
-        series(control,'推定 − 選択ライン（制御状態）',teal,p=>p.lateral,'linear',true)]},
+        series(control,'推定 − 選択ライン（制御状態）',teal,p=>p.lateral,'linear',true),
+        ...(ekf.length ? [series(ekf,'EKF − GT',purple,p=>p.lateral_error_m)] : [])]},
     {label:'方位誤差', unit:'°', digits:2, hint:'推定 − GT、反時計回りが正',
-      series:[series(estimates,'推定 − GT',orange,p=>degrees(p.yaw_error_rad),'degrees')]},
+      series:[series(estimates,'推定 − GT',orange,p=>degrees(p.yaw_error_rad),'degrees'),
+        ...(ekf.length ? [series(ekf,'EKF − GT',purple,p=>degrees(p.yaw_error_rad),'degrees')] : [])]},
     {label:'境界余裕', unit:'m', digits:3, hint:'各 GT 姿勢の外形から舗装境界までの非負距離。接触・路外は 0 m。接触判定は観測間の移動も含みます',
       series:[series(samples,'GT 車体外形',teal,p=>p.clearance_m)]},
     {label:'操舵角', unit:'°', digits:1, hint:'Gazebo 車両モデルの実舵角と指令角。左旋回が正',
       series:[series(samples,'実舵角',blue,p=>p.steering_rad === null ? null : degrees(p.steering_rad)),
-        series(samples,'指令角',orange,p=>p.requested_steering_rad === null ? null : degrees(p.requested_steering_rad),'step',true)]},
+        series(samples,'車体で採用中',orange,p=>p.requested_steering_rad === null ? null : degrees(p.requested_steering_rad),'step',true),
+        ...(ekf.length ? [series(ekf,'元画像の操舵指令',purple,p=>p.steering_rad === null ? null : degrees(p.steering_rad),'step')] : [])]},
+    ...(ekf.length ? [
+      {label:'地図補正の移動量',unit:'m',digits:3,hint:'同じ画像の局所 VO に前回と今回の地図補正を適用した差。前方・左方が正',
+        series:[series(ekf,'前後',teal,p=>p.correction_forward_m),series(ekf,'左右',purple,p=>p.correction_left_m)]},
+      {label:'地図補正の方位変化',unit:'°',digits:2,hint:'車体の旋回分を除いた地図補正。左旋回が正',
+        series:[series(ekf,'補正角',purple,p=>p.correction_yaw_deg)]},
+    ] : []),
     {label:'画像からの遅れ',unit:'ms',digits:1,hint:'紫は車体の記録時刻から使用中の指令の元画像時刻を引いた値です。新しい指令に替わるまで増えます。青は画像時刻、紫は車体の記録時刻に表示するため、同じ縦線でも元画像が異なる場合があります。すべてシミュレーション時間です。',
       series:[series(estimates,'画像 → 推定受信',orange,p=>p.received_delay_ms),
         series(control,'画像 → 制御指令生成',blue,p=>p.delay,'linear',true),

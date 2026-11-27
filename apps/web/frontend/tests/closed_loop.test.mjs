@@ -55,3 +55,14 @@ test('制御状態を元画像時刻に一度だけ登録し、GT時刻と指令
   assert.equal(valueAt(timing[2].rows,5,timing[2].get),null);
   assert.equal(valueAt(timing[3].rows,5,timing[3].get),100);
 });
+
+test('地図補正・画像から生成した指令・採用中の操舵は各記録の時刻を使う',()=>{
+  const ekf=[{t:2,segment:1,correction_left_m:.2,correction_forward_m:0,
+    correction_yaw_deg:3,steering_rad:.3}];
+  const charts=chartsFor({ekf,samples:[],estimates:[],vslam:[]});
+  const shift=charts.find(c=>c.label==='地図補正の移動量').series[1];
+  assert.equal(valueAt(shift.rows,2,shift.get),.2);
+  const steering=charts.find(c=>c.label==='操舵角').series;
+  assert.equal(valueAt(steering[1].rows,2,steering[1].get),null);
+  assert.ok(Math.abs(valueAt(steering[2].rows,2,steering[2].get)-.3*180/Math.PI)<1e-9);
+});

@@ -1,6 +1,7 @@
 """Notebook の results に保存した Gazebo 閉ループ試行の読み取り専用 API。"""
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -183,6 +184,81 @@ def references(store, folder, run, identity, selections, comparison, warnings):
     return output, source if output else 'missing'
 
 
+def ekf_review(folder, identity, comparison, truth, contact, warnings):
+    """Use the bag tool's image-time comparison and the existing map-to-world anchor."""
+    if comparison.anchor is None or not artifact(folder, 'closed_loop.ekf.jsonl').is_file():
+        return [], []
+    if not identity.get('map_sha256') or not identity.get('map_id'):
+        warnings.append('EKF と対応させる保存地図を確認できません。')
+        return [], []
+    _core('atd_mapping', 'frames')
+    core = _core('atd_localization', 'rpm_comparison')
+
+    def odometry(name):
+        for row in rows(folder, f'closed_loop.{name}.jsonl', warnings):
+            p = core.RigidPose.checked(row['xyz'], row['xyzw'])
+            if name == 'ekf':
+                yield row['stamp_ns'], (row['frame'], core.planar(p))
+            elif row['frame'] == 'odom':
+                yield row['stamp_ns'], p
+
+    def statuses():
+        for row in rows(folder, 'closed_loop.localization.jsonl', warnings):
+            tracking = (row['session_id'], row['epoch'], identity['map_id'], identity['map_sha256'])
+            p = None
+            if row['state'] == 'tracking':
+                p = core.RigidPose.checked((row['x_m'], row['y_m'], row['z_m']), row['orientation_xyzw'])
+            yield row['header_stamp_ns'], tracking, p
+
+    commands = core.StampCursor((r['stamp_ns'], r['steering_rad'])
+                                for r in rows(folder, 'closed_loop.commands.jsonl', warnings))
+    series = DisplaySeries(contact)
+    peaks = {}
+    anchors = {}
+
+    def save_anchor(frame, ns, tx, ty, angle):
+        anchors[frame] = (ns, tx, ty, angle, len(anchors))
+
+
+    last_key, segment = None, 0
+    for values in core.aligned_stream(odometry('ekf'), odometry('vo'), statuses(), on_anchor=save_anchor):
+        row = dict(zip(core.FIELDS, values, strict=True))
+        ns = row['stamp_ns']
+        gt = truth.at(ns)
+        if gt is None:
+            continue
+        key = row['ekf_frame'], row['vslam_session'], row['epoch']
+        if key != last_key:
+            segment += 1
+            last_key = key
+        x, y = comparison.to_world(row['aligned_ekf_x_m'], row['aligned_ekf_y_m'])
+        yaw = math.remainder(row['aligned_ekf_yaw_rad'] + comparison.anchor[-1], math.tau)
+        item = dict(t=ns/1e9, segment=segment, x=x, y=y, yaw_rad=yaw,
+                    lateral_error_m=-math.sin(gt[2])*(x-gt[0]) + math.cos(gt[2])*(y-gt[1]),
+                    yaw_error_rad=math.remainder(yaw-gt[2], math.tau), steering_rad=commands.exact(ns))
+        for field in ('correction_forward_m', 'correction_left_m', 'correction_yaw_deg'):
+            item[field] = number(row[field])
+            if item[field] is not None and (field not in peaks or abs(item[field]) > abs(peaks[field][field])):
+                peaks[field] = item
+        series.append(item)
+    # Preserve the largest correction on each axis even in long, decimated runs.
+    retained = {item['t']: item for item in series.result()}
+    retained.update((item['t'], item) for item in peaks.values())
+    # The EKF keeps running during visual tracking loss. Use each local origin's
+    # fixed alignment for its full trajectory after the first common observation.
+    path = DisplaySeries(contact)
+    for ns, (frame, (px, py, yaw)) in odometry('ekf'):
+        anchor = anchors.get(frame)
+        if anchor is None or ns < anchor[0]:
+            continue
+        _, tx, ty, angle, segment = anchor
+        dx, dy = core.rotate_xy(px, py, angle)
+        x, y = comparison.to_world(tx+dx, ty+dy)
+        path.append(dict(t=ns/1e9, segment=segment, x=x, y=y,
+                         yaw_rad=math.remainder(yaw+angle+comparison.anchor[-1], math.tau)))
+    return [retained[t] for t in sorted(retained)], path.result()
+
+
 def review(store, circuit, key):
     folder = confined(store.result_root, ROOT / identifier(circuit) / identifier(key))
     meta = metadata(folder) if folder.is_dir() else None
@@ -253,7 +329,10 @@ def review(store, circuit, key):
         warnings.append('画像に対応する cuVSLAM の実行時間は記録されていません。')
     if max(motion.stride, comparison.series.stride, timing.stride) > 1:
         warnings.append('長い記録は全体表示を間引いています。接触判定の前後10秒は記録の各時刻を保持しています。')
-    return dict(run=run, samples=samples, estimates=comparison.series.result(), vslam=timing.result(),
+    ekf, ekf_path = ekf_review(folder, identity, comparison, truth, contact, warnings)
+    if not ekf and artifact(folder, 'closed_loop.ekf.jsonl').is_file():
+        warnings.append('EKF と VSLAM・GT に共通する観測がありません。IMU 設定とセンサー入力を確認してください。')
+    return dict(run=run, samples=samples, ekf=ekf, ekf_path=ekf_path, estimates=comparison.series.result(), vslam=timing.result(),
                 contact_s=contact, anchor_s=comparison.anchor_s, reference=initial.get('points', []),
                 reference_speeds_mps=initial.get('speeds_mps', []), reference_source=source,
                 line_changes=changes, additional_references=lines,

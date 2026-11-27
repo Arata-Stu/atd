@@ -12,6 +12,7 @@
 .cl-window .button[aria-pressed=true] { background: #e0eee6; border-color: #7d9b8c; color: #23593e; }
 .cl-jump { color: #a73532; }
 .cl-course { position: sticky; top: 0; }
+.cl-legend .cl-ekf::before { border-color: #7553a1; border-top-style: dashed; }
 .cl-legend .cl-reference::before { border-color: #577743; border-top-style: dotted; }
 .cl-legend .cl-wall::before { border-color: #8b9990; border-top-width: 2px; }
 .cl-toggle { display: flex; align-items: center; gap: 6px; margin: 8px 0; font-size: 12px; }

@@ -21,12 +21,12 @@ export function ClosedLoopMap({run,span,focus,line,speeds,lineScale,at,select}: 
   at:number; select:(t:number)=>void;
 }) {
   const picture = useMemo(() => {
-    const gt = windowRows(run.samples,span), est = windowRows(run.estimates,span);
+    const gt = windowRows(run.samples,span), est = windowRows(run.estimates,span), ekf = windowRows(run.ekf_path ?? run.ekf ?? [],span);
     let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
     const include = (x:number, y:number) => {
       xmin = Math.min(xmin,x); xmax = Math.max(xmax,x); ymin = Math.min(ymin,y); ymax = Math.max(ymax,y);
     };
-    for (const rows of [gt,est]) for (const p of rows) include(p.x,p.y);
+    for (const rows of [gt,est,ekf]) for (const p of rows) include(p.x,p.y);
     if (!focus || !Number.isFinite(xmin)) {
       for (const rows of [line,run.boundaries.left,run.boundaries.right]) for (const [x,y] of rows) include(x,y);
     }
@@ -40,13 +40,13 @@ export function ClosedLoopMap({run,span,focus,line,speeds,lineScale,at,select}: 
       const newSegment = !last || last.segment !== p.segment || p.t-last.t > maxGap;
       return (newSegment ? 'M' : 'L') + point(x(p.x),y(p.y)) + (newSegment ? 'l0 0' : '');
     }).join(' ');
-    return {x,y,scale,bar:10 ** Math.floor(Math.log10(80/scale)), gt,est, gtPath:trace(gt), estPath:trace(est),
+    return {x,y,scale,bar:10 ** Math.floor(Math.log10(80/scale)), gt,est,ekf, ekfPath:trace(ekf), gtPath:trace(gt), estPath:trace(est),
       line:course(line), linePoints:line.map(([a,b]):XY=>[x(a),y(b)]),
       walls:[course(run.boundaries.left),course(run.boundaries.right)]};
   },[run,span,focus,line]);
 
   if (!picture) return <p className="cl-missing">この範囲に描画できる座標がありません。</p>;
-  const {x,y,scale} = picture, gt = poseAt(run.samples,at), est = poseAt(run.estimates,at);
+  const {x,y,scale} = picture, gt = poseAt(run.samples,at), est = poseAt(run.estimates,at), ekf = poseAt(run.ekf_path ?? run.ekf ?? [],at);
   // Interpolate sine and cosine to preserve heading at ±π.
   const sin = valueAt(run.samples,at,p=>Math.sin(p.yaw_rad)), cos = valueAt(run.samples,at,p=>Math.cos(p.yaw_rad));
   const yaw = sin === null || cos === null ? null : Math.atan2(sin,cos);
@@ -57,7 +57,7 @@ export function ClosedLoopMap({run,span,focus,line,speeds,lineScale,at,select}: 
       const pt = pointer(event);
       if (!pt) return;
       let time:number|undefined, best = Infinity;
-      for (const rows of [picture.gt,picture.est]) for (const p of rows) {
+      for (const rows of [picture.gt,picture.est,picture.ekf]) for (const p of rows) {
         const d = (x(p.x)-pt.x)**2 + (y(p.y)-pt.y)**2;
         if (d < best || (d === best && Math.abs(p.t-at) < Math.abs((time ?? at)-at))) { best = d; time = p.t; }
       }
@@ -71,6 +71,8 @@ export function ClosedLoopMap({run,span,focus,line,speeds,lineScale,at,select}: 
       : <path d={picture.line} fill="none" stroke={reference} strokeWidth="2.3" strokeDasharray="2 4" strokeLinecap="round"/>}
     <path d={picture.gtPath} fill="none" stroke={truth} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"/>
     <path d={picture.estPath} fill="none" stroke={estimate} strokeWidth="2.2" strokeDasharray="7 3" strokeLinecap="round"/>
+    {picture.ekfPath && <path d={picture.ekfPath} fill="none" stroke="#7553a1" strokeWidth="2" strokeDasharray="3 2"/>}
+    {ekf && <circle cx={x(ekf[0])} cy={y(ekf[1])} r="3.5" fill="#7553a1" stroke="white"/>}
     {gt && est && <line x1={x(gt[0])} y1={y(gt[1])} x2={x(est[0])} y2={y(est[1])} stroke="#243b32" strokeWidth="1.5"/>}
     {gt && footprint && yaw !== null && <g transform={'translate('+point(x(gt[0]),y(gt[1]))+') rotate('+(-yaw*180/Math.PI)+')'}>
       <rect x={-footprint.rear_axle_to_rear*scale} y={-footprint.vehicle_width*scale/2} width={footprint.vehicle_length*scale}

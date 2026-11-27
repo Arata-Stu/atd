@@ -96,6 +96,9 @@ class CompositionTests(unittest.TestCase):
                 self.assertEqual(params['allow_sparse_tf'], 'true')
             self.assertEqual(dict(loc.actions[0].launch_arguments)['visualize_landmarks'], 'false')
             self.assertEqual(context['tracking'], 'vo')
+            self.assertEqual(dict(loc.actions[0].launch_arguments)['gazebo_model_speed'], 'true')
+            without = module['setup'](dict(context, imu_frequency='off'))[0]
+            self.assertEqual(dict(without.actions[0].launch_arguments)['gazebo_model_speed'], 'false')
             self.assertNotIn('gazebo_imu_frequency', dict(loc.actions[0].launch_arguments))
             for frequency in ('200', '400'):
                 vio_loc = module['setup'](dict(context, tracking='vio', imu_frequency=frequency))[0]
@@ -195,6 +198,13 @@ class CompositionTests(unittest.TestCase):
                         self.assertEqual(dict(slam.remappings)['visual_slam/imu'], '/camera/camera/imu')
                     else:
                         self.assertNotIn('visual_slam/imu', dict(slam.remappings))
+            _, parallel = launch['setup'](dict(defaults, map_id='odaiba', rpm_pulses_per_meter='125.5'))
+            slam, vgl, ekf = parallel.composable_node_descriptions
+            self.assertEqual(slam.parameters[0]['tracking_mode'], 0)
+            self.assertEqual(ekf.plugin, 'atd_localization::RpmImuOdometry')
+            self.assertEqual(ekf.parameters[0]['pulses_per_meter'], 125.5)
+            with self.assertRaises(ValueError):
+                launch['setup'](dict(defaults, map_id='odaiba', rpm_pulses_per_meter='nan'))
             _, replay = launch['setup'](dict(defaults, map_id='odaiba', use_sim_time='true',
                                             replay_bag='/record/test', replay_rate='0.5'))
             slam, vgl, source = replay.composable_node_descriptions
@@ -394,7 +404,8 @@ class CompositionTests(unittest.TestCase):
             '/share/atd_planning/launch/planning.launch.py', '/share/atd_control/launch/control.launch.py'])
         self.assertEqual(dict(included[0].launch_arguments)['target_container'], '/atd_localization_container')
         self.assertEqual({k: v.name for k, v in included[-3].launch_arguments},
-                         {k: k for k in ('map_id', 'results_root', 'engine_dir', 'map_correction_source', 'vgl_frequency')})
+                         {k: k for k in ('map_id', 'results_root', 'engine_dir', 'map_correction_source', 'vgl_frequency',
+                                         'rpm_pulses_per_meter', 'rpm_gyro_topic')})
         self.assertEqual({k: v.name for k, v in included[-2].launch_arguments if k != 'horizon_m'},
                          {k: k for k in ('map_id', 'results_root', 'line')})
         self.assertEqual({k: v.name for k, v in included[-1].launch_arguments}, {

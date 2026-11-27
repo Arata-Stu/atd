@@ -89,7 +89,10 @@ def setup(context):
                   allow_sparse_tf='true')
     localization = dict(common, engine_dir=arg('engine_dir'), visualize_landmarks=arg('rviz'),
                         map_correction_source=arg('map_correction_source'), vgl_frequency=arg('vgl_frequency'))
+    localization['gazebo_model_speed'] = 'false' if arg('imu_frequency') == 'off' else 'true'
     if arg('tracking') == 'vio':
+        if arg('imu_frequency') == 'off':
+            raise ValueError('VIO には IMU が必要です')
         localization['gazebo_imu_frequency'] = arg('imu_frequency')
     control = {k: ParameterValue(metadata[k], value_type=str) for k in ('map_id', 'map_sha256', 'hdmap_sha256')}
     control.update(line=ParameterValue(line, value_type=str), available_lines=available,
@@ -164,7 +167,7 @@ def generate_launch_description():
         DeclareLaunchArgument('map_correction_source', default_value='cuvslam', choices=['cuvslam', 'vgl']),
         DeclareLaunchArgument('vgl_frequency', default_value='1.0'),
         DeclareLaunchArgument('tracking', default_value='vo', choices=['vo', 'vio']),
-        DeclareLaunchArgument('imu_frequency', default_value='400', choices=['200', '400']),
+        DeclareLaunchArgument('imu_frequency', default_value='400', choices=['off', '200', '400']),
         DeclareLaunchArgument('rviz', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('web', default_value='false', choices=['true', 'false']),
         *(DeclareLaunchArgument(k, default_value=str(v)) for k, v in defaults.items()),

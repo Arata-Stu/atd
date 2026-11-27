@@ -182,7 +182,7 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
         with tempfile.TemporaryDirectory() as tmp:
             env = {**os.environ, "ATD_RESULT_DIR": tmp}
             for options, tracking, imu in [
-                ([], "vo", "off"), (["--tracking", "vio"], "vio", "400"),
+                ([], "vo", "400"), (["--imu", "off"], "vo", "off"), (["--tracking", "vio"], "vio", "400"),
                 (["--tracking", "vio", "--imu", "200"], "vio", "200"),
                 (["--imu", "200", "--tracking", "vo"], "vo", "200"),
             ]:
@@ -192,11 +192,7 @@ mkdir "$ATD_RECORD_DIR/rosbags/${2##*/}"
                     self.assertEqual(gazebo.count("--imu"), 1)
                     self.assertEqual(gazebo[gazebo.index("--imu") + 1], imu)
                     self.assertIn(f"tracking:={tracking}", ros)
-                    if tracking == "vio":
-                        hz = next(arg.split(":=")[1] for arg in ros if arg.startswith("imu_frequency:="))
-                        self.assertEqual(float(hz), float(imu))
-                    else:
-                        self.assertFalse(any(arg.startswith("imu_frequency:=") for arg in ros))
+                    self.assertIn(f"imu_frequency:={imu}", ros)
 
     def test_invalid_drive_settings_fail_before_start_and_diagnostics_accept_speed(self):
         command = ["bash", str(ROOT / "scripts/gazebo.sh")]

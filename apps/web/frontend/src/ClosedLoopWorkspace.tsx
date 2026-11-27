@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import { around, chartsFor, controlLineAt, poseAt, referenceAt, runKey, statuses, timeBounds, valueAt } from './closed_loop';
-import type { ClosedLoopDetail, GazeboRun, XY } from './closed_loop';
+import type { ClosedLoopDetail, Ekf, GazeboRun, XY } from './closed_loop';
 import { ClosedLoopMap, TimelinePlot } from './ClosedLoopPlots';
 import { SpeedLegend } from './SpeedLegend';
 import { speedScale } from './raceline_speed';
@@ -23,20 +23,23 @@ function RunTimeline({data}: {data:ClosedLoopDetail}) {
   const full = useMemo(()=>timeBounds(data),[data]);
   const charts = useMemo(()=>chartsFor(data),[data]);
   const [focus,setFocus] = useState(data.contact_s !== null);
+  const [correctionTime,setCorrectionTime] = useState<number|null>(null);
   const [cursor,setCursor] = useState<number|null>(null);
   const [showCurrent,setShowCurrent] = useState(false);
-  const event = data.contact_s ?? full?.[1] ?? 0;
+  const event = correctionTime ?? data.contact_s ?? full?.[1] ?? 0;
   const span = useMemo(()=>full && focus ? around(event,full) : full,[full,focus,event]);
   const at = span ? Math.min(span[1],Math.max(span[0],cursor ?? data.contact_s ?? data.anchor_s ?? span[0])) : 0;
   const line = referenceAt(data,at);
   const lineScale = useMemo(()=>line.name === 'raceline' ? speedScale(line.speeds,line.points.length) : null,
     [line.name,line.speeds,line.points.length]);
+  const peak = useMemo(() => data.ekf?.reduce<Ekf | undefined>((best, p) =>
+    p.correction_left_m !== null && Math.abs(p.correction_left_m) > Math.abs(best?.correction_left_m ?? 0) ? p : best, undefined), [data.ekf]);
   if (!span) return <p className="cl-missing" role="status">この試行には時刻付きの走行データがありません。</p>;
   const lineAvailable = line.points.length > 0;
   const currentMap = data.reference_source === 'current_map';
   const showLine = lineAvailable && (!currentMap || showCurrent);
   const isContact = data.contact_s !== null;
-  const eventLabel = isContact ? '接触前後 3 秒' : '記録終了前 3 秒';
+  const eventLabel = correctionTime !== null ? '補正前後 3 秒' : isContact ? '接触前後 3 秒' : '記録終了前 3 秒';
   function changeWindow(local:boolean) {
     setFocus(local);
     if (local) setCursor(event);
@@ -51,14 +54,16 @@ function RunTimeline({data}: {data:ClosedLoopDetail}) {
         <button className="button small" aria-pressed={!focus} onClick={()=>changeWindow(false)}>全走行</button>
         <button className="button small" aria-pressed={focus} onClick={()=>changeWindow(true)}>{eventLabel}</button>
       </div>
-      {isContact && <button className="bench-link cl-jump" onClick={()=>setCursor(event)}>
-        × 接触時刻 {event.toFixed(3)} s へ</button>}
+      {peak && <button className="bench-link" onClick={()=>{setCorrectionTime(peak.t);setFocus(true);setCursor(peak.t);}}>最大横補正 {peak.correction_left_m?.toFixed(3)} m へ</button>}
+      {isContact && <button className="bench-link cl-jump" onClick={()=>{setCorrectionTime(null);setCursor(data.contact_s);}}>
+        × 接触時刻 {data.contact_s?.toFixed(3)} s へ</button>}
     </div>
     <div className="replay-panes cl-panes">
       <section className="replay-card cl-course">
         <header><h3>走行軌跡</h3><span>Gazebo world · 後輪軸</span></header>
         <div className="replay-legend cl-legend">
-          <span className="replay-truth">Gazebo GT</span><span className="replay-estimate">推定軌跡</span>
+          <span className="replay-truth">Gazebo GT</span><span className="replay-estimate">VSLAM</span>
+          {!!data.ekf?.length && <span className="cl-ekf">車速＋IMU EKF</span>}
           {showLine && !lineScale && <span className="cl-reference">{line.name ?? '選択ライン'}{currentMap && '（現在の地図）'}</span>}
           {data.boundaries.left.length>0 && <span className="cl-wall">舗装境界</span>}
         </div>
@@ -76,6 +81,7 @@ function RunTimeline({data}: {data:ClosedLoopDetail}) {
         <dl className="cl-state">
           <dt>GT 位置 (x, y)</dt><dd>{xyText(gt)}</dd>
           <dt>推定位置 (x, y)</dt><dd>{xyText(est)}</dd>
+          {!!data.ekf?.length && <><dt>EKF 位置 (x, y)</dt><dd>{xyText(poseAt(data.ekf_path ?? data.ekf,at))}</dd></>}
           <dt>GT 速度</dt><dd>{speed===null ? '—' : speed.toFixed(2)+' m/s'}</dd>
           <dt>制御が参照した画像時刻</dt><dd>{controlImage===null ? '—' : controlImage.toFixed(3)+' s'}</dd>
           {!!data.line_changes?.length && <><dt>選択中のライン</dt><dd>{line.name}</dd>

@@ -1,5 +1,6 @@
 """Shared ATD stereo localization for a live camera or isolated bag clock."""
 import atexit
+import math
 from pathlib import Path
 import tempfile
 
@@ -59,6 +60,23 @@ def setup(context):
         nodes.append(ComposableNode(package=package, plugin=plugin, name=name,
                                     parameters=[tracking['parameters'][kind]], remappings=tracking['remaps'][kind],
                                     extra_arguments=[{'use_intra_process_comms': True}]))
+    scale = value('rpm_pulses_per_meter')
+    model_speed = value('gazebo_model_speed') == 'true'
+    if model_speed and (scale or not sim_time):
+        raise ValueError('Gazebo 車速は模擬時刻で使用し、実車 RPM と同時指定できません')
+    if scale or model_speed:
+        params = dict(gyro_topic=value('rpm_gyro_topic'), use_sim_time=sim_time)
+    if scale:
+        pulses = float(scale)
+        if not math.isfinite(pulses) or pulses <= 0:
+            raise ValueError('rpm_pulses_per_meter には実測した正のパルス数/mを指定してください')
+        params['pulses_per_meter'] = pulses
+    if model_speed:
+        params['model_speed_topic'] = '/atd/gazebo/model_speed'
+    if scale or model_speed:
+        nodes.append(ComposableNode(package='atd_localization', plugin='atd_localization::RpmImuOdometry',
+                                    name='rpm_imu_ekf', parameters=[params],
+                                    extra_arguments=[{'use_intra_process_comms': True}]))
     if bag:
         nodes.append(stereo_bag_input(bag, value('replay_rate'), value('replay_player_name'), workflow,
                                      imu_topic='/camera/camera/imu' if gazebo_imu_frequency else '',
@@ -90,6 +108,9 @@ def generate_launch_description():
         DeclareLaunchArgument('engine_dir', default_value=''), DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('map_correction_source', default_value='cuvslam', choices=['cuvslam', 'vgl']),
         DeclareLaunchArgument('vgl_frequency', default_value='1.0'),
+        DeclareLaunchArgument('rpm_pulses_per_meter', default_value=''),
+        DeclareLaunchArgument('gazebo_model_speed', default_value='false', choices=['true','false']),
+        DeclareLaunchArgument('rpm_gyro_topic', default_value='/camera/camera/gyro/sample'),
         DeclareLaunchArgument('replay_bag', default_value=''),
         DeclareLaunchArgument('replay_rate', default_value='1.0'),
         DeclareLaunchArgument('replay_player_name', default_value='atd_validation_player'),

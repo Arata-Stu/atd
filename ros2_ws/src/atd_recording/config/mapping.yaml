@@ -24,6 +24,8 @@
       - /teleop/status
       - /vehicle/joy_drive/status
       - /localization/status
+      - /localization/rpm_imu/odom
+      - /visual_slam/tracking/odometry
       - /planning/status
       - /control/status
       - /control/speed_status
@@ -46,6 +48,7 @@
       - sensor_msgs/msg/CameraInfo
       - tf2_msgs/msg/TFMessage
     best_effort_topics:
+      - /visual_slam/tracking/odometry
       - /camera/camera/infra1/image_rect_raw
       - /camera/camera/infra2/image_rect_raw
       - /camera/camera/infra1/camera_info

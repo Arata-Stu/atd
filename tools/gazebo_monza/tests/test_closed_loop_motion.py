@@ -199,6 +199,7 @@ class CommandMotionTests(unittest.TestCase):
             plugin = ClosedLoopMotion()
             plugin.plant = CommandPlant((0., 0., 0.), .3)
             plugin.imu = plugin.control_state = None
+            plugin.ftg_visualization = Mock()
             plugin.trace = Path(tmp) / "rig_motion.jsonl"
             plugin.next_trace_s, plugin.trace_interval_s = 0., .05
             observed = Mock(**{"x.return_value": 3., "y.return_value": -2., "z.return_value": 0.,
@@ -218,6 +219,7 @@ class CommandMotionTests(unittest.TestCase):
             plugin.plant.receive(32_000_000, 20_000_000, JOINTS, [0., .3, 1.])
             plugin.plant.vehicle.speed = .123
             plugin.post_update(info, None)
+            plugin.ftg_visualization.publish.assert_called_once_with(33_333_000, observed, .123, None)
             plugin.model_speed.publish.assert_called_once_with(plugin.speed_message)
             self.assertEqual(plugin.speed_message.twist.linear.x, .123)
             self.assertEqual(plugin.speed_message.header.stamp.nanosec, 33_333_000)

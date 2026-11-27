@@ -30,6 +30,22 @@ class GazeboHostTests(unittest.TestCase):
         self.assertNotIn("--map", container)
         self.assertNotIn("Isaac", result)
 
+    def test_depth_ftg_rviz_dry_run_forwards_display_and_read_only_xauthority(self):
+        command = ["bash", str(ROOT / "scripts/gazebo.sh"), "closed-loop", "--controller", "ftg-3d",
+                   "--laps", "1", "--rviz", "--dry-run"]
+        with tempfile.TemporaryDirectory() as temporary:
+            xauthority = Path(temporary) / "desktop authority"
+            xauthority.touch()
+            env = {**os.environ, "DISPLAY": ":7", "XAUTHORITY": str(xauthority), "ATD_RESULT_DIR": temporary}
+            result = subprocess.check_output(command, env=env, text=True)
+        lines = [shlex.split(line) for line in result.splitlines() if line.startswith("docker ")]
+        container, = lines
+        self.assertIn("--rviz", container)
+        self.assertIn("DISPLAY=:7", container)
+        self.assertIn("XAUTHORITY=/run/atd-xauthority", container)
+        self.assertIn(f"type=bind,src={xauthority},dst=/run/atd-xauthority,readonly", container)
+        self.assertIn("type=bind,src=/tmp/.X11-unix,dst=/tmp/.X11-unix,readonly", container)
+
     def test_bag_uses_configured_record_mount_and_runs_one_simulator(self):
         command = ["bash", str(ROOT / "scripts/gazebo.sh"), "bag", "--dry-run"]
         with tempfile.TemporaryDirectory() as tmp:

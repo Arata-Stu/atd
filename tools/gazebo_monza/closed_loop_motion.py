@@ -109,6 +109,7 @@ class ClosedLoopMotion:
         self.executor.add_node(self.node)
         self.actuator_topic = drive["topic"]
         self.depth_controller = None
+        self.ftg_visualization = None
         if "depth" in scene:
             from depth_ftg import COMMAND_AGE_NS, DepthController, GapPlanner
 
@@ -117,6 +118,10 @@ class ClosedLoopMotion:
             planner = GapPlanner(WHEELBASE_M, STEERING_LIMIT, scene["depth"]["speed_limit_mps"],
                                  SPEED_TAU_S, DECEL_MPS2)
             self.depth_controller = DepthController(scene["course"], scene["camera"], planner)
+            if scene["depth"].get("visualize"):
+                from ftg_visualization import FTGVisualization
+
+                self.ftg_visualization = FTGVisualization(self.node, self.depth_controller.projection, planner)
         else:
             self.node.create_subscription(JointState, self.actuator_topic, self.on_command, 1)
             self.node.create_subscription(String, "/atd/gazebo/control_state", self.on_control_state,
@@ -184,7 +189,8 @@ class ClosedLoopMotion:
             self.next_spin_ns = self.now_ns + 5_000_000
         v = self.plant.vehicle
         if self.depth_controller is not None:
-            decision = self.depth_controller.update(self.now_ns, v.speed, v.steering)
+            observe = self.ftg_visualization.observe if self.ftg_visualization else None
+            decision = self.depth_controller.update(self.now_ns, v.speed, v.steering, observe)
             if decision is not None:
                 stamp, steering, speed, self.control_state = decision
                 self.apply_command(stamp, JOINTS, (steering, speed / v.full_throttle_speed_mps, 1.))
@@ -216,6 +222,8 @@ class ClosedLoopMotion:
             msg.pose.orientation.w = math.cos(pose.yaw() * .5)
             self.ground_truth.publish(msg)
         plant, v = self.plant, self.plant.vehicle
+        if self.ftg_visualization is not None:
+            self.ftg_visualization.publish(round(seconds * 1e9), pose, v.speed, self.control_state)
         if self.model_speed.get_subscription_count():
             msg = self.speed_message
             msg.header.stamp.sec, msg.header.stamp.nanosec = divmod(round(seconds * 1e9), 10**9)

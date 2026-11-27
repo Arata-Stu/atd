@@ -175,7 +175,7 @@ class DepthController:
             if self.pending is None or stamp >= self.pending[0]:
                 self.pending = stamp, data
 
-    def update(self, now_ns, speed, steering):
+    def update(self, now_ns, speed, steering, observe=None):
         with self.lock:
             frame = self.pending
         if frame is None or frame[0] > now_ns or frame[0] <= self.last_stamp:
@@ -188,4 +188,6 @@ class DepthController:
         obstacles = self.projection.obstacles(image)
         angle, target, report = self.planner.plan(
             obstacles, lambda x, y, z: self.projection.visible(image, x, y, z), speed, steering)
+        if observe is not None:
+            observe(stamp, data, obstacles, angle, target, report)
         return stamp, angle, target, dict(report, obstacle_voxels=len(obstacles))

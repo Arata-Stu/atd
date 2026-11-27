@@ -161,7 +161,7 @@ def depth_camera(link, camera, circuit):
 def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
           circuit="odaiba", route=None, wait_for_capture=False, speed_mps=None, laps=1, record_ground_truth=False,
           resolution="640x480", imu_hz=0, camera_hz=DEFAULT_CAMERA_HZ, command_driven=False,
-          full_throttle_speed_mps=None, sensor_ingress=False, ftg_speed=None):
+          full_throttle_speed_mps=None, sensor_ingress=False, ftg_speed=None, ftg_visualize=False):
     if resolution not in RESOLUTIONS:
         raise ValueError("unsupported stereo resolution: " + str(resolution))
     if type(camera_hz) is not int or camera_hz not in CAMERA_RATES:
@@ -236,7 +236,7 @@ def build(output, height=.12, pitch_deg=0, travel_seconds=None, repeat=False, *,
         if not command_driven or not isfinite(ftg_speed) or not .2 <= ftg_speed <= full_throttle_speed_mps:
             raise ValueError("3D FTG には車両モデルの範囲内で 0.2 m/s 以上の速度上限が必要です")
         scene["depth"] = dict(topic=topic(circuit), optical_frame=OPTICAL_FRAME, encoding="R_FLOAT32",
-                              body_height_m=BODY_HEIGHT_M, speed_limit_mps=ftg_speed)
+                              body_height_m=BODY_HEIGHT_M, speed_limit_mps=ftg_speed, visualize=ftg_visualize)
     if command_driven:
         from closed_loop_eval import FOOTPRINT
         scene["course_evaluation"] = {"frame": "gazebo_world", **source, "footprint": FOOTPRINT.copy()}

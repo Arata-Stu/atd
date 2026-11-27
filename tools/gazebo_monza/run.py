@@ -336,6 +336,7 @@ def run(args, report):
     scene_dir = out / "scene"
     closed_loop = mode == "closed-loop"
     ftg = closed_loop and getattr(args, "controller", "map") == "ftg-3d"
+    ftg_rviz = ftg and getattr(args, "rviz", False)
     sensor_ingress = (closed_loop and not ftg) or mode == "map" or (mode == "serve" and args.wait_for_stereo)
     lap_video = mode == "video"
     finite_serve = mode == "serve" and args.laps not in (None, 0)
@@ -355,7 +356,7 @@ def run(args, report):
                         record_ground_truth=mode == "bag", resolution=args.resolution,
                         camera_hz=args.camera_hz, imu_hz=imu_hz, command_driven=closed_loop, sensor_ingress=sensor_ingress,
                         full_throttle_speed_mps=args.full_throttle_speed if closed_loop else None,
-                        ftg_speed=args.speed if ftg else None)
+                        ftg_speed=args.speed if ftg else None, ftg_visualize=ftg_rviz)
     trajectory = scene["trajectory"]
     total_seconds = trajectory["total_travel_seconds"]
     duration = total_seconds if finite_run else args.duration
@@ -368,7 +369,7 @@ def run(args, report):
         report["full_throttle_speed_mps"] = full_speed
         report["controller"] = "ftg-3d" if ftg else "map"
         if ftg:
-            report["speed_limit_mps"] = args.speed
+            report.update(speed_limit_mps=args.speed, rviz=ftg_rviz)
         goal = f"{trajectory['laps']}周" if trajectory["laps"] else "無制限周回（Ctrl+C で結果を保存）"
         print(f"{args.circuit} / {args.route}  操舵・スロットル指令で {goal}を評価"
               f"  車両モデルの全開時 {full_speed:g} m/s", flush=True)
@@ -407,11 +408,12 @@ def run(args, report):
     with ExitStack() as stack:
         children = {}
 
-        def start(name, command):
+        def start(name, command, *, monitor=True):
             log = stack.enter_context((out / f"{name}.log").open("w"))
             proc = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             stack.callback(stop_group, proc)
-            children[name] = proc
+            if monitor:
+                children[name] = proc
             return proc
 
         clock_param = "use_sim_time:=true" if mode in ("bag", "map", "serve", "closed-loop") else "use_sim_time:=false"
@@ -426,6 +428,15 @@ def run(args, report):
                                   "--x", str(x), "--y", str(y), "--z", str(z),
                                   "--roll", str(roll), "--pitch", str(pitch), "--yaw", str(yaw),
                                   "--ros-args", "-p", clock_param])
+        if ftg_rviz:
+            viewer = start("rviz", ["ros2", "run", "rviz2", "rviz2", "-d", str(HERE / "ftg_3d.rviz"),
+                                    "--ros-args", "-p", clock_param], monitor=False)
+            try:
+                status = viewer.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                print("RViz を起動しました。ログ: rviz.log", flush=True)
+            else:
+                raise RuntimeError(f"RViz の起動に失敗しました（終了コード {status}）。rviz.log を確認してください")
         if closed_loop:
             from closed_loop_trial import run_trial
             return run_trial(children, out, scene, report, stream, wait_for, check_children)
@@ -539,6 +550,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mode", choices=("benchmark", "video", "diagnose", "serve", "map", "bag", "closed-loop"), required=True)
     parser.add_argument("--controller", choices=("map", "ftg-3d"), default="map")
+    parser.add_argument("--rviz", action="store_true")
     parser.add_argument("--bag-output", type=Path, help="bag の確定保存先（rosbags/直下の新規ディレクトリ）")
     parser.add_argument("--circuit", "--course", choices=world.circuits.circuit_ids(), default="odaiba")
     parser.add_argument("--route", choices=("lap",), default="lap")
@@ -553,6 +565,8 @@ def main():
     parser.add_argument("--camera-hz", type=int, choices=CAMERA_RATES, default=DEFAULT_CAMERA_HZ)
     parser.add_argument("--imu", choices=IMU_MODES, default="off", help="ジャイロ・統合IMUのHz。加速度は200 Hz")
     args = parser.parse_args()
+    if args.rviz and (args.mode != "closed-loop" or args.controller != "ftg-3d"):
+        parser.error("--rviz は --mode closed-loop --controller ftg-3d で指定してください")
     if args.controller == "ftg-3d" and args.mode != "closed-loop":
         parser.error("--controller ftg-3d は closed-loop で指定してください")
     if args.mode == "closed-loop":

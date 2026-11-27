@@ -33,7 +33,7 @@ usage() {
   --vgl-frequency Hz  vgl が地図を照合する頻度。既定 1、0 で初回成功後は手動要求を待つ
   --engine-dir 相対パス  closed-loop の VGL engine を明示する場合の results からの相対パス
   --min-lookahead m   closed-loop の Pure Pursuit 最短先読み距離を指定
-  --rviz / --no-rviz  closed-loop の走行ライン・GT・推定軌跡・cuVSLAM の特徴点を RViz で表示するか選択（既定 OFF）
+  --rviz / --no-rviz  closed-loop を RViz で表示（既定 OFF）。ftg-3d は Depth・障害物・選択軌道を表示
   --web               closed-loop を Notebook の Web UI「ライブ」から観測・調整する
   --laps N            全周を N 周走行。closed-loop と serve は 0 で無制限（Ctrl+C で終了）
                       動画・bag・地図作成は1以上。run では動画が対象
@@ -133,7 +133,6 @@ while (( $# )); do
             esac
             shift 2 ;;
         --rviz|--no-rviz)
-            map_only_option="$1"
             [[ "$action" = closed-loop ]] || fail "$1 は closed-loop で指定してください"
             if [[ "$1" = --rviz ]]; then rviz=true; else rviz=false; fi
             shift ;;
@@ -244,6 +243,9 @@ if ! $dry_run; then
     command -v docker >/dev/null || fail "docker が見つかりません"
     endpoint="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}"
     [[ "$endpoint" = unix://* ]] || fail "バインドマウントとディスク計測には Notebook のローカル Docker を使用してください"
+    if [[ "$controller" = ftg-3d && "$rviz" = true && -z "${DISPLAY:-}" ]]; then
+        fail "--rviz には Notebook のグラフィカルセッション（DISPLAY）が必要です"
+    fi
     mkdir -p -- "$results"
 fi
 
@@ -321,16 +323,30 @@ run_mode() {
         [[ -c "$gpu_device" ]] || continue
         command+=(--device "$gpu_device" --group-add "$(stat -c %g "$gpu_device")")
     done
+    local driver_capabilities=graphics,utility,compute
+    if [[ "$controller" = ftg-3d ]] && $rviz; then driver_capabilities+=,display; fi
     command+=(--tmpfs "/home/simulator:uid=$(id -u),gid=$(id -g),mode=0700"
         --env HOME=/home/simulator --env XDG_RUNTIME_DIR=/home/simulator
         --env GZ_SIM_SYSTEM_PLUGIN_PATH=/workspaces/atd/tools/gazebo_monza
         --env "FASTDDS_DEFAULT_PROFILES_FILE=$profile"
-        --env NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute
+        --env "NVIDIA_DRIVER_CAPABILITIES=$driver_capabilities"
         --env "ROS_DOMAIN_ID=$domain" --env "GZ_PARTITION=atd_${circuit}_${out##*/}"
         --mount "type=bind,src=$project,dst=/workspaces/atd,readonly"
         --mount "type=bind,src=$out,dst=/output")
     if [[ "$mode" = bag ]]; then
         command+=(--mount "type=bind,src=$record,dst=/data/record")
+    fi
+    if [[ "$controller" = ftg-3d ]] && $rviz; then
+        command+=(--env "DISPLAY=${DISPLAY:-:0}" --env QT_QPA_PLATFORM=xcb --env QT_X11_NO_MITSHM=1)
+        if $dry_run || [[ -d /tmp/.X11-unix ]]; then
+            command+=(--mount type=bind,src=/tmp/.X11-unix,dst=/tmp/.X11-unix,readonly)
+        fi
+        local xauth_file="${XAUTHORITY:-$HOME/.Xauthority}"
+        if [[ -r "$xauth_file" && -f "$xauth_file" ]]; then
+            case "$xauth_file" in *','*|*'"'*|*$'\n'*) fail "XAUTHORITY のパスを Docker に渡せません";; esac
+            command+=(--hostname "$(hostname)" --env XAUTHORITY=/run/atd-xauthority
+                --mount "type=bind,src=$xauth_file,dst=/run/atd-xauthority,readonly")
+        fi
     fi
     command+=("$image" python3 /workspaces/atd/tools/gazebo_monza/run.py --mode "$mode" --output /output --circuit "$circuit")
     if (( ${#sim_args[@]} )); then command+=("${sim_args[@]}"); fi
@@ -338,6 +354,7 @@ run_mode() {
     if [[ "$mode" != closed-loop || "$controller" = ftg-3d ]]; then command+=(--imu "$imu"); fi
     if [[ "$controller" = ftg-3d ]]; then
         command+=(--controller ftg-3d --speed "$speed")
+        if $rviz; then command+=(--rviz); fi
         if [[ -n "$full_throttle_speed" ]]; then command+=(--full-throttle-speed "$full_throttle_speed"); fi
     fi
     if [[ -n "$laps" && "$mode" != benchmark ]]; then command+=(--laps "$laps"); fi

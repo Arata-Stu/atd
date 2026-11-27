@@ -6,6 +6,7 @@ import sys
 import tempfile
 from threading import Lock
 from types import SimpleNamespace
+from unittest.mock import Mock
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -67,7 +68,11 @@ class DepthFTGTests(unittest.TestCase):
                                 pixel_format_type=1, width=424, height=240, step=424 * 4,
                                 data=self.clear.tobytes())
         controller.receive(frame)
-        stamp, angle, speed, report = controller.update(10**9, 0., 0.)
+        observer = Mock()
+        stamp, angle, speed, report = controller.update(10**9, 0., 0., observer)
+        observer.assert_called_once()
+        self.assertIs(observer.call_args.args[1], frame.data)
+        self.assertEqual(observer.call_args.args[3:5], (angle, speed))
         self.assertEqual(report["state"], "tracking_gap")
         plant = CommandPlant((0., 0., 0.), .30)
         plant.receive(stamp, stamp, JOINTS, (angle, speed / plant.vehicle.full_throttle_speed_mps, 1.))
@@ -80,7 +85,8 @@ class DepthFTGTests(unittest.TestCase):
 
     def test_world_adds_native_depth_in_ftg_mode(self):
         with tempfile.TemporaryDirectory() as temp:
-            scene = world.build(temp, command_driven=True, resolution="424x240", camera_hz=30, ftg_speed=.5)
+            scene = world.build(temp, command_driven=True, resolution="424x240", camera_hz=30, ftg_speed=.5, ftg_visualize=True)
+            self.assertTrue(scene["depth"]["visualize"])
             sdf = ET.parse(Path(temp) / "world.sdf")
             camera, = sdf.findall(".//model[@name='d455_rig']/link/sensor")
             self.assertEqual(camera.attrib["type"], "depth_camera")

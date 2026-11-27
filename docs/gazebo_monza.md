@@ -149,6 +149,16 @@ atd gazebo closed-loop --controller ftg-3d --course odaiba --laps 1
 
 `closed_loop.result.json` で走行結果を、`scene/rig_motion.jsonl` の `control_state` で選択に使った空き距離と操舵角区間を確認できる。
 
+### 走行を RViz で見る
+
+Notebook のデスクトップから次を実行する。RViz 追加前の専用イメージを使っている場合は、先に `atd gazebo prepare` で更新する。
+
+```bash
+atd gazebo closed-loop --controller ftg-3d --course odaiba --laps 1 --rviz
+```
+
+視点は車体に追従する。青い箱は車体、青い線は走行履歴、緑の線は選択された軌道、赤い点は FTG の判定に使った障害物ボクセル。Depth画像は別パネルに表示される。RViz の起動エラーは走行結果ディレクトリの `rviz.log` を確認する。
+
 ## Gazebo の時刻で cuVSLAM を起動する
 
 **1周を記録して後から地図を作る場合**は、Notebook ホストで `atd gazebo bag --course odaiba --speed 3` を実行し、完了後に Notebook の Web UI「地図とライン」で bag を選ぶ。走行中に地図を作りたい場合は `atd gazebo map --course odaiba --speed 3` を使う。以下の `serve` と `bringup gazebo` は連続走行中のステレオ VO を観測する操作。[記録とオフライン地図作成の手順・保存容量](gazebo_circuits.md#1周でcuvslam地図を作る)

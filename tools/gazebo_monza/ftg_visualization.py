@@ -93,7 +93,7 @@ class FTGVisualization:
 
         snapshot = self.snapshot
         if snapshot is None or not 0 <= stamp - snapshot[0] <= COMMAND_AGE_NS or state.get("state") in (
-            "invalid_or_stale_depth", "stale_depth"
+            "invalid_or_stale_depth", "stale_depth", "waiting_input"
         ):
             snapshot = None
         if snapshot:

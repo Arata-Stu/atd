@@ -143,7 +143,7 @@ Notebook ホストの `atd gazebo` メニューで「Depthで地図なしの閉�
 atd gazebo closed-loop --controller ftg-3d --course odaiba --laps 1
 ```
 
-既定は Depth 424×240・30 Hz、速度上限 0.5 m/s。速度は `--speed`、撮影設定は `--resolution` と `--camera-hz` で指定する。Gazebo 内の native Depth トピック `/odaiba/depth/image` の最新フレームを使い、既存の後軸基準の車両モデルへ操舵とスロットルを渡す。保存地図、走行ライン、Isaac ROS コンテナは不要。コース境界・周回数は既存の評価器が真値で計測する。
+既定は Depth 424×240・30 Hz、速度上限 0.5 m/s。速度は `--speed`、撮影設定は `--resolution` と `--camera-hz` で指定する。Gazebo の native Depth を ROS 2 の `/depth_ftg/depth` として配信する。closed-loop は `atd_ftg` のROS 2ノードを同じコンテナ内で自動起動し、ノードが出す `/depth_ftg/target_twist` から既存の車両モデルへ操舵とスロットルを渡す。ノードのログは `ftg.log` に保存する。保存地図、走行ライン、Isaac ROS コンテナは不要。コース境界・周回数は既存の評価器が真値で計測する。投影と通過判定は ROS 2 の [atd_ftg](../ros2_ws/src/atd_ftg/README.md) と共通。
 
 平坦な路面を前提とし、Depth を車体座標の3D点に変換する。複数の操舵角について円弧上の車体箱（車高はシミュレーション仮定の 0.17 m）と点の干渉を調べる。車体前端の左右と中央を高さ2段で観測し、停止に必要な距離を確保できる操舵角が連続する区間から操舵を選ぶ。入力が古い場合や通過できる候補がない場合はスロットルをゼロにする。カメラ取付位置による車体直近の死角と、円弧・箱形状で近似した通過判定が初版の制約となる。
 

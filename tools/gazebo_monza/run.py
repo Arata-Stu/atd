@@ -41,6 +41,31 @@ def bridge_topics(circuit="odaiba", imu_hz=0):
     return topics
 
 
+def ftg_command(scene, clock_param, visualize):
+    package = HERE.parents[1] / "ros2_ws/src/atd_ftg"
+    from closed_loop_motion import DECEL_MPS2, SPEED_TAU_S, STEERING_LIMIT, WHEELBASE_M
+
+    footprint = scene["course_evaluation"]["footprint"]
+    parameters = {
+        "speed_limit": scene["depth"]["speed_limit_mps"],
+        "planning_hz": float(scene["camera"]["rate_hz"]),
+        "rear_axle_height": REAR_AXLE_HEIGHT_M,
+        "wheelbase": WHEELBASE_M,
+        "steering_limit": STEERING_LIMIT,
+        "speed_tau": SPEED_TAU_S,
+        "deceleration": DECEL_MPS2,
+        "body_height": scene["depth"]["body_height_m"],
+        **{key: footprint[key] for key in ("vehicle_length", "vehicle_width", "rear_axle_to_rear")},
+        "allow_far_clip": "true",
+        "publish_obstacles": str(visualize).lower(),
+    }
+    command = [sys.executable, str(package / "scripts/depth_ftg"), "--ros-args", "-p", clock_param]
+    for key, value in parameters.items():
+        command.extend(("-p", f"{key}:={value}"))
+    inherited = os.environ.get("PYTHONPATH")
+    return command, {**os.environ, "PYTHONPATH": str(package) + (os.pathsep + inherited if inherited else "")}
+
+
 def stop_group(process):
     # ros2 run / gz sim が起動した子プロセスも一緒に終了する。
     try:
@@ -86,7 +111,7 @@ def unpause(circuit):
     return reply.returncode == 0 and "data: true" in reply.stdout
 
 
-def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=None, *, imu_hz=0, ingress_ready=None, clock_only=False):
+def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=None, *, imu_hz=0, ingress_ready=None, ftg=False):
     import rclpy
     from rclpy.parameter import Parameter
     from rclpy.qos import QoSCompatibility, qos_check_compatible
@@ -100,15 +125,23 @@ def start_stream(children, wait_for_stereo, circuit="odaiba", check_external=Non
             clocks = node.count_publishers("/clock")
             if clocks > 1:
                 raise RuntimeError("同じ ROS ドメインに /clock の発行元が複数あります")
-            if clock_only:
-                return clocks == 1
+            if ftg:
+                from depth_ftg import FTG_NAMESPACE
+
+                commands = node.count_publishers(f"{FTG_NAMESPACE}/target_twist")
+                if commands > 1:
+                    raise RuntimeError("同じ ROS ドメインに FTG 目標の発行元が複数あります")
+                return (clocks == commands == 1
+                        and node.count_publishers(f"{FTG_NAMESPACE}/depth") == 1
+                        and node.count_subscribers(f"{FTG_NAMESPACE}/depth") >= 1)
             if ingress_ready is not None:
                 # The mapping / closed-loop worker starts after Gazebo signals readiness.
                 # Its ROS sensor publishers appear once it connects to the native sender.
                 return ingress_ready.is_file() and clocks == 1
             return all(node.count_publishers(t["ros_topic_name"]) for t in topics)
 
-        wait_for(bridge_ready, children, 60, "ROS の /clock と選択したセンサーの publisher", check_external)
+        readiness = "ROS の /clock・Depth・atd_ftg" if ftg else "ROS の /clock と選択したセンサーの publisher"
+        wait_for(bridge_ready, children, 60, readiness, check_external)
         if wait_for_stereo:
             last_missing = None
 
@@ -394,10 +427,10 @@ def run(args, report):
         topics = [t for t in topics if t["ros_topic_name"] == "/clock"]
     config.write_text(json.dumps(topics, indent=2) + "\n")
     stream = partial(start_stream, ingress_ready=scene_dir / "sensor_ingress.ready") if sensor_ingress else start_stream
-    report["sensor_transport"] = ("gazebo_native_depth" if ftg else
+    report["sensor_transport"] = ("gazebo_native_to_ros_depth" if ftg else
                                   "gazebo_memfd_intra_process" if sensor_ingress else "ros_gz_bridge")
     if ftg:
-        stream = partial(start_stream, clock_only=True)
+        stream = partial(start_stream, ftg=True)
     report.update(ros_domain_id=os.environ.get("ROS_DOMAIN_ID", "0"),
                   dds_profile=os.environ.get("FASTDDS_DEFAULT_PROFILES_FILE"), scene="scene/scene.json",
                   simulated_rear_axle_height_m=REAR_AXLE_HEIGHT_M)
@@ -408,9 +441,10 @@ def run(args, report):
     with ExitStack() as stack:
         children = {}
 
-        def start(name, command, *, monitor=True):
+        def start(name, command, *, monitor=True, env=None):
             log = stack.enter_context((out / f"{name}.log").open("w"))
-            proc = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            options = {"env": env} if env is not None else {}
+            proc = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, **options)
             stack.callback(stop_group, proc)
             if monitor:
                 children[name] = proc
@@ -428,6 +462,9 @@ def run(args, report):
                                   "--x", str(x), "--y", str(y), "--z", str(z),
                                   "--roll", str(roll), "--pitch", str(pitch), "--yaw", str(yaw),
                                   "--ros-args", "-p", clock_param])
+        if ftg:
+            command, env = ftg_command(scene, clock_param, ftg_rviz)
+            start("ftg", command, env=env)
         if ftg_rviz:
             viewer = start("rviz", ["ros2", "run", "rviz2", "rviz2", "-d", str(HERE / "ftg_3d.rviz"),
                                     "--ros-args", "-p", clock_param], monitor=False)

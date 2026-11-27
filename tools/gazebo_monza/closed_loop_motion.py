@@ -1,5 +1,6 @@
 """Gazebo system for the D455 on a command-driven, forward-only RC vehicle."""
 
+from collections import deque
 import json
 import math
 from pathlib import Path
@@ -108,20 +109,27 @@ class ClosedLoopMotion:
         self.executor = SingleThreadedExecutor(context=self.context)
         self.executor.add_node(self.node)
         self.actuator_topic = drive["topic"]
-        self.depth_controller = None
+        self.depth_source = None
         self.ftg_visualization = None
         if "depth" in scene:
-            from depth_ftg import COMMAND_AGE_NS, DepthController, GapPlanner
+            from depth_ftg import COMMAND_AGE_NS, FTG_NAMESPACE, DepthPublisher, GapPlanner
 
             self.depth_age_ns = COMMAND_AGE_NS
 
-            planner = GapPlanner(WHEELBASE_M, STEERING_LIMIT, scene["depth"]["speed_limit_mps"],
-                                 SPEED_TAU_S, DECEL_MPS2)
-            self.depth_controller = DepthController(scene["course"], scene["camera"], planner)
+            self.depth_source = DepthPublisher(scene["course"], scene["camera"], self.node, WHEELBASE_M)
+            self.ftg_command_topic = f"{FTG_NAMESPACE}/target_twist"
+            self.ftg_frames = deque(maxlen=12)
+            self.node.create_subscription(TwistStamped, self.ftg_command_topic, self.on_ftg_command, 1)
+            self.node.create_subscription(String, f"{FTG_NAMESPACE}/status", self.on_ftg_status, 1)
             if scene["depth"].get("visualize"):
                 from ftg_visualization import FTGVisualization
 
-                self.ftg_visualization = FTGVisualization(self.node, self.depth_controller.projection, planner)
+                footprint = scene["course_evaluation"]["footprint"]
+                geometry = GapPlanner(WHEELBASE_M, STEERING_LIMIT, scene["depth"]["speed_limit_mps"],
+                                      SPEED_TAU_S, DECEL_MPS2, vehicle_length=footprint["vehicle_length"],
+                                      vehicle_width=footprint["vehicle_width"],
+                                      rear_axle_to_rear=footprint["rear_axle_to_rear"])
+                self.ftg_visualization = FTGVisualization(self.node, self.depth_source.projection, geometry)
         else:
             self.node.create_subscription(JointState, self.actuator_topic, self.on_command, 1)
             self.node.create_subscription(String, "/atd/gazebo/control_state", self.on_control_state,
@@ -135,7 +143,7 @@ class ClosedLoopMotion:
         self.hold_message = String()
         self.gt_pose = PoseStamped()
         self.gt_pose.header.frame_id = "gazebo_world"
-        self.control_state = {"state": "waiting_depth"} if self.depth_controller else None
+        self.control_state = {"state": "waiting_depth"} if self.depth_source else None
         self.active_file = scene_file.with_name("closed_loop.active")
         self.prestart_pause_file = scene_file.with_name("closed_loop.paused")
         self.trace = scene_file.with_name("rig_motion.jsonl")
@@ -154,6 +162,45 @@ class ClosedLoopMotion:
             return
         stamp = msg.header.stamp
         self.apply_command(stamp.sec * 10**9 + stamp.nanosec, msg.name, msg.position)
+
+    def on_ftg_command(self, msg):
+        from depth_ftg import actuator_values
+
+        publisher_count = self.node.count_publishers(self.ftg_command_topic)
+        if publisher_count != 1:
+            if publisher_count > 1:
+                self.plant.stop("multiple_actuator_publishers", before_start=True)
+            return
+        header = msg.header.stamp
+        stamp = header.sec * 10**9 + header.nanosec
+        if msg.header.frame_id != "base_link" or not 0 <= self.now_ns - stamp <= self.depth_age_ns:
+            return
+        if self.plant.first_active_ns is None and not any(stamp == frame[0] for frame in self.ftg_frames):
+            return  # Initial zero commands without a camera frame do not start the trial.
+        vehicle = self.plant.vehicle
+        values = actuator_values(msg.twist.linear.x, msg.twist.angular.z, vehicle.steering,
+                                 WHEELBASE_M, STEERING_LIMIT, vehicle.full_throttle_speed_mps)
+        if values is None:
+            self.plant.stop("invalid_ftg_command", before_start=True)
+        else:
+            self.apply_command(stamp, JOINTS, values)
+
+    def on_ftg_status(self, msg):
+        try:
+            report = json.loads(msg.data)
+        except ValueError:
+            return
+        if not isinstance(report, dict):
+            return
+        points = report.pop("obstacles", [])
+        self.control_state = report
+        if self.ftg_visualization is None:
+            return
+        for stamp, data in reversed(self.ftg_frames):
+            if data is not None and stamp == report.get("stamp_ns") and "clearance_m" in report:
+                self.ftg_visualization.observe(stamp, data, points, report["steering_rad"],
+                                               report["target_speed_mps"], report)
+                break
 
     def apply_command(self, stamp_ns, names, values):
         initially_active = self.plant.first_active_ns is not None
@@ -188,13 +235,13 @@ class ClosedLoopMotion:
             self.executor.spin_once(timeout_sec=0.)
             self.next_spin_ns = self.now_ns + 5_000_000
         v = self.plant.vehicle
-        if self.depth_controller is not None:
-            observe = self.ftg_visualization.observe if self.ftg_visualization else None
-            decision = self.depth_controller.update(self.now_ns, v.speed, v.steering, observe)
-            if decision is not None:
-                stamp, steering, speed, self.control_state = decision
-                self.apply_command(stamp, JOINTS, (steering, speed / v.full_throttle_speed_mps, 1.))
-            if self.plant.command_stamp_ns is not None and self.now_ns - self.plant.command_stamp_ns > self.depth_age_ns:
+        if self.depth_source is not None:
+            frame = self.depth_source.publish(self.now_ns, v)
+            if frame is not None:
+                stamp, data = frame
+                self.ftg_frames.append((stamp, data if self.ftg_visualization else None))
+            if (self.plant.command_stamp_ns is not None
+                    and self.now_ns - self.plant.command_stamp_ns > self.depth_age_ns):
                 self.plant.stop("depth_timeout", wait_for_command=True)
                 self.control_state = {"state": "stale_depth"}
         self.plant.advance(self.now_ns, max(0, self.now_ns - previous_ns) * 1e-9)

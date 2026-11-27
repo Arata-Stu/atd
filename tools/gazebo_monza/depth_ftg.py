@@ -1,170 +1,86 @@
-"""Gazebo の最新 Depth から車体が通過できる操舵角を探す。"""
+"""Gazebo native Depth を atd_ftg の ROS 入力へ渡す。"""
+from array import array
 import math
+from pathlib import Path
+import sys
 from threading import Lock
 
-from closed_loop_eval import FOOTPRINT
+# The Gazebo image mounts the checkout without a ROS workspace overlay.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros2_ws/src/atd_ftg"))
+from atd_ftg.planner import BODY_HEIGHT_M, COMMAND_AGE_NS, FAR_M, NEAR_M, DepthProjection, GapPlanner
+from sensor_profile import REAR_AXLE_HEIGHT_M
 
 OPTICAL_FRAME = "camera_depth_optical_frame"
-NEAR_M = .025
-FAR_M = 5.
-VOXEL_M = .025
-BODY_HEIGHT_M = .17
-GROUND_TOLERANCE_M = .012
-LOOKAHEAD_M = 1.25
-STEP_M = .035
-COMMAND_AGE_NS = 150_000_000
-NEAR_FIELD_M = .21
-VERTICAL_PADDING_M = .025
+FTG_NAMESPACE = "/depth_ftg"
 
 
 def topic(course):
     return f"/{course}/depth/image"
 
 
-class DepthProjection:
-    def __init__(self, width, height, hfov, forward, height_above_floor, pitch):
-        self.width, self.height = width, height
-        self.focal = width / (2 * math.tan(hfov / 2))
-        self.cx, self.cy = (width - 1) / 2, (height - 1) / 2
-        self.forward, self.z = forward, height_above_floor
-        self.c, self.s = math.cos(pitch), math.sin(pitch)
-        self.horizontal = [(self.cx - u) / self.focal for u in range(width)]
-
-    def obstacles(self, image):
-        voxels = set()
-        for v in range(0, self.height, 2):
-            up = (self.cy - v) / self.focal
-            x_scale = self.c + self.s * up
-            z_scale = -self.s + self.c * up
-            row = v * self.width
-            for u in range(0, self.width, 2):
-                d = image[row + u]
-                if not NEAR_M <= d < FAR_M:
-                    continue
-                z = self.z + d * z_scale
-                if not GROUND_TOLERANCE_M < z <= BODY_HEIGHT_M + VERTICAL_PADDING_M + VOXEL_M / 2:
-                    continue
-                x = self.forward + d * x_scale
-                y = d * self.horizontal[u]
-                if x <= LOOKAHEAD_M + .4 and abs(y) <= LOOKAHEAD_M + .4:
-                    voxels.add(tuple(math.floor(value / VOXEL_M) for value in (x, y, z)))
-        return [tuple((axis + .5) * VOXEL_M for axis in cell) for cell in voxels]
-
-    def visible(self, image, x, y, z):
-        dx, dz = x - self.forward, z - self.z
-        d = self.c * dx - self.s * dz
-        if d < NEAR_M:
-            return False
-        u = round(self.cx - self.focal * y / d)
-        v = round(self.cy - self.focal * (self.s * dx + self.c * dz) / d)
-        if not (0 <= u < self.width and 0 <= v < self.height):
-            return False
-        # Gazebo's +Inf denotes a ray beyond the far clip. NaN and -Inf supply no clearance.
-        return d + VOXEL_M <= min(image[v * self.width + u], FAR_M)
+def optical_rotation(pitch):
+    """Quaternion for the fixed optical axes followed by camera pitch about base Y."""
+    c, s = math.cos(pitch / 2), math.sin(pitch / 2)
+    return (-(c + s) / 2, (c + s) / 2, (s - c) / 2, (c - s) / 2)
 
 
-class GapPlanner:
-    def __init__(self, wheelbase, steering_limit, speed_limit, speed_tau, deceleration):
-        self.wheelbase = wheelbase
-        self.steering_limit = steering_limit
-        self.speed_limit = speed_limit
-        self.speed_tau = speed_tau
-        self.deceleration = deceleration
-        self.rear = FOOTPRINT["rear_axle_to_rear"]
-        self.front = FOOTPRINT["vehicle_length"] - self.rear
-        self.half_width = FOOTPRINT["vehicle_width"] / 2
-        # Cover the displacement between sampled poses and the depth voxel quantization.
-        self.padding = .055
-        self.angles = [steering_limit * index / 10 for index in range(-10, 11)]
-        self.arcs = [tuple(self.arc(angle)) for angle in self.angles]
-
-    def arc(self, steering):
-        curvature = math.tan(steering) / self.wheelbase
-        for i in range(1, math.floor(LOOKAHEAD_M / STEP_M) + 1):
-            distance = i * STEP_M
-            yaw = distance * curvature
-            s, c = math.sin(yaw), math.cos(yaw)
-            x = s / curvature if curvature else distance
-            y = (1 - c) / curvature if curvature else 0.
-            yield distance, x, y, c, s
-
-    def clearance(self, arc, obstacles, visible):
-        clear = 0.
-        for distance, x, y, c, s in arc:
-            for ox, oy, oz in obstacles:
-                dx, dy = ox - x, oy - y
-                if (oz <= BODY_HEIGHT_M + VERTICAL_PADDING_M
-                        and -self.rear - self.padding <= c * dx + s * dy <= self.front + self.padding
-                        and abs(-s * dx + c * dy) <= self.half_width + self.padding):
-                    return clear
-            # Check forward visibility across the vehicle's leading edge. The camera
-            # cannot see the underside and rear of the vehicle from its mount.
-            if distance < NEAR_FIELD_M:
-                continue
-            front_x, front_y = x + c * self.front, y + s * self.front
-            if not all(visible(front_x - s * side, front_y + c * side, height)
-                       for side in (-self.half_width, 0., self.half_width)
-                       for height in (.05, .15)):
-                return clear
-            clear = distance
-        return clear
-
-    def stopping_distance(self, speed):
-        # Integrate the existing model's saturated deceleration and exponential tail.
-        transition = self.deceleration * self.speed_tau
-        tail_speed = min(speed, transition)
-        braking = (speed**2 - tail_speed**2) / (2 * self.deceleration)
-        return .04 + speed * (COMMAND_AGE_NS / 1e9) + braking + tail_speed * self.speed_tau
-
-    def plan(self, obstacles, visible, speed, steering):
-        required = self.stopping_distance(speed)
-        distances = [self.clearance(arc, obstacles, visible) for arc in self.arcs]
-        gaps = []
-        for i, distance in enumerate(distances):
-            if distance <= required:
-                continue
-            if not gaps or gaps[-1][-1] != i - 1:
-                gaps.append([])
-            gaps[-1].append(i)
-        if not gaps:
-            return steering, 0., {"state": "blocked", "clearance_m": max(distances), "gaps": []}
-
-        def score(i, gap):
-            edge = min(i - gap[0], gap[-1] - i)
-            return (distances[i] + .025 * edge - .12 * abs(self.angles[i] - steering) / self.steering_limit
-                    - .06 * abs(self.angles[i]) / self.steering_limit)
-
-        index = max(((i, gap) for gap in gaps for i in gap), key=lambda item: score(*item))[0]
-        clearance = distances[index]
-        angle = self.angles[index]
-        speed_limit = self.speed_limit * (1 - .35 * abs(angle) / self.steering_limit)
-        low, high = 0., speed_limit
-        for _ in range(10):
-            candidate = (low + high) / 2
-            if self.stopping_distance(candidate) <= clearance:
-                low = candidate
-            else:
-                high = candidate
-        return angle, low, {"state": "tracking_gap", "clearance_m": clearance,
-                            "gaps": [[self.angles[gap[0]], self.angles[gap[-1]]] for gap in gaps]}
+def actuator_values(speed, yaw_rate, current_steering, wheelbase, steering_limit, full_speed):
+    if not (math.isfinite(speed) and math.isfinite(yaw_rate) and 0. <= speed <= full_speed):
+        return None
+    if speed == 0.:
+        return (current_steering, 0., 1.) if yaw_rate == 0. else None
+    angle = math.atan(wheelbase * yaw_rate / speed)
+    if abs(angle) > steering_limit + 1e-7:
+        return None
+    return angle, speed / full_speed, 1.
 
 
-class DepthController:
-    def __init__(self, course, camera, planner):
+class DepthPublisher:
+    def __init__(self, course, camera, ros_node, wheelbase):
         from gz.msgs.image_pb2 import Image, R_FLOAT32
         from gz.transport import Node
+        from geometry_msgs.msg import TransformStamped
+        from nav_msgs.msg import Odometry
+        from rclpy.qos import qos_profile_sensor_data
+        from sensor_msgs.msg import CameraInfo, Image as RosImage
+        from tf2_ros import StaticTransformBroadcaster
 
-        self.projection = DepthProjection(camera["width"], camera["height"], math.radians(camera["horizontal_fov_deg"]),
-                                          camera["midpoint_forward_from_rear_axle_m"], camera["height_above_floor_m"],
-                                          math.radians(camera["pitch_down_deg"]))
-        self.planner = planner
+        pitch = math.radians(camera["pitch_down_deg"])
+        self.projection = DepthProjection.simulated(
+            camera["width"], camera["height"], math.radians(camera["horizontal_fov_deg"]),
+            camera["midpoint_forward_from_rear_axle_m"], camera["height_above_floor_m"], pitch)
+        p = self.projection
         self.float32 = R_FLOAT32
         self.lock = Lock()
         self.pending = None
         self.last_stamp = 0
+        self.wheelbase = wheelbase
         self.node = Node()
         if not self.node.subscribe(Image, topic(course), self.receive):
             raise RuntimeError("Gazebo Depth の購読を開始できません")
+        self.image = RosImage(width=p.width, height=p.height, encoding="32FC1", step=p.width * 4,
+                              is_bigendian=int(sys.byteorder == "big"))
+        self.image.header.frame_id = OPTICAL_FRAME
+        self.info = CameraInfo(width=p.width, height=p.height)
+        self.info.header.frame_id = OPTICAL_FRAME
+        self.info.k = [p.fx, 0., p.cx, 0., p.fy, p.cy, 0., 0., 1.]
+        self.info.p = [p.fx, 0., p.cx, 0., 0., p.fy, p.cy, 0., 0., 0., 1., 0.]
+        self.info.r = [1., 0., 0., 0., 1., 0., 0., 0., 1.]
+        self.odom = Odometry(child_frame_id="base_link")
+        self.odom.header.frame_id = "gazebo_world"
+        self.odom.pose.pose.orientation.w = 1.
+        self.image_pub = ros_node.create_publisher(RosImage, f"{FTG_NAMESPACE}/depth", qos_profile_sensor_data)
+        self.info_pub = ros_node.create_publisher(CameraInfo, f"{FTG_NAMESPACE}/camera_info", qos_profile_sensor_data)
+        self.odom_pub = ros_node.create_publisher(Odometry, f"{FTG_NAMESPACE}/odometry", qos_profile_sensor_data)
+        transform = TransformStamped(child_frame_id=OPTICAL_FRAME)
+        transform.header.frame_id = "base_link"
+        translation = transform.transform.translation
+        translation.x, translation.y, translation.z = p.origin
+        translation.z -= REAR_AXLE_HEIGHT_M
+        rotation = transform.transform.rotation
+        rotation.x, rotation.y, rotation.z, rotation.w = optical_rotation(pitch)
+        self.tf = StaticTransformBroadcaster(ros_node)
+        self.tf.sendTransform(transform)
 
     def receive(self, msg):
         stamp = msg.header.stamp.sec * 10**9 + msg.header.stamp.nsec
@@ -175,7 +91,7 @@ class DepthController:
             if self.pending is None or stamp >= self.pending[0]:
                 self.pending = stamp, data
 
-    def update(self, now_ns, speed, steering, observe=None):
+    def take(self, now_ns):
         with self.lock:
             frame = self.pending
         if frame is None or frame[0] > now_ns or frame[0] <= self.last_stamp:
@@ -183,11 +99,23 @@ class DepthController:
         stamp, data = frame
         self.last_stamp = stamp
         if now_ns - stamp > COMMAND_AGE_NS or len(data) != self.projection.width * self.projection.height * 4:
-            return stamp, steering, 0., {"state": "invalid_or_stale_depth"}
-        image = memoryview(data).cast("f")
-        obstacles = self.projection.obstacles(image)
-        angle, target, report = self.planner.plan(
-            obstacles, lambda x, y, z: self.projection.visible(image, x, y, z), speed, steering)
-        if observe is not None:
-            observe(stamp, data, obstacles, angle, target, report)
-        return stamp, angle, target, dict(report, obstacle_voxels=len(obstacles))
+            return None
+        return frame
+
+    def publish(self, now_ns, vehicle):
+        frame = self.take(now_ns)
+        if frame is None:
+            return None
+        stamp, data = frame
+        for message in (self.info, self.odom, self.image):
+            message.header.stamp.sec, message.header.stamp.nanosec = divmod(stamp, 10**9)
+        pose = self.odom.pose.pose
+        pose.position.x, pose.position.y, pose.position.z = vehicle.x, vehicle.y, REAR_AXLE_HEIGHT_M
+        pose.orientation.z, pose.orientation.w = math.sin(vehicle.yaw / 2), math.cos(vehicle.yaw / 2)
+        self.odom.twist.twist.linear.x = vehicle.speed
+        self.odom.twist.twist.angular.z = vehicle.speed * math.tan(vehicle.steering) / self.wheelbase
+        self.image.data = array("B", data)
+        self.info_pub.publish(self.info)
+        self.odom_pub.publish(self.odom)
+        self.image_pub.publish(self.image)
+        return frame

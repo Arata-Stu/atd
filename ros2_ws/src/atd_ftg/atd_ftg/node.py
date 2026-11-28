@@ -13,7 +13,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from .planner import BODY_HEIGHT_M, COMMAND_AGE_NS, GapPlanner
+from .planner import BODY_HEIGHT_M, COMMAND_AGE_NS, GapPlanner, RecentCorridorWidth
 from .ros_input import depth_metres, projection
 
 
@@ -46,6 +46,7 @@ class DepthFTGNode(Node):
             raise ValueError("FTG の車体寸法・操舵・速度設定が不正です")
         self.rear_axle_height = settings.pop("rear_axle_height")
         self.planner = GapPlanner(**settings)
+        self.corridor_width = RecentCorridorWidth()
         self.transforms = Buffer(node=self)
         self.listener = TransformListener(self.transforms, self)
         self.depth = self.calibration = self.odometry = None
@@ -125,8 +126,12 @@ class DepthFTGNode(Node):
             limit = self.planner.steering_limit
             self.steering = max(-limit, min(limit, math.atan(self.planner.wheelbase * yaw_rate / speed)))
         obstacles = self.camera.obstacles(pixels)
+        depth_stamp = stamp_ns(depth.header)
         self.steering, target, report = self.planner.plan(
-            obstacles, lambda x, y, z: self.camera.visible(pixels, x, y, z), max(speed, 0.), self.steering)
+            obstacles, lambda x, y, z: self.camera.visible(pixels, x, y, z), max(speed, 0.), self.steering,
+            recent_width=self.corridor_width.get(depth_stamp))
+        if "observed_corridor_width_m" in report:
+            self.corridor_width.observe(depth_stamp, report["observed_corridor_width_m"])
         self.last_planned = depth
         self.publish(Time.from_msg(depth.header.stamp), self.steering, target, report, obstacles)
 

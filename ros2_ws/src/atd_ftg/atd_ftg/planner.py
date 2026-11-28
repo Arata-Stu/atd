@@ -1,5 +1,7 @@
 """Depth から車体が通過できる操舵角を求める、ROS 非依存の処理。"""
 import math
+from statistics import median
+from typing import NamedTuple
 
 NEAR_M = .025
 FAR_M = 5.
@@ -15,7 +17,41 @@ CENTER_SLICE_M = .15
 CENTER_FIRST_X_M = .45
 CENTER_SLICE_COUNT = 10
 CENTER_MAX_EXTRAPOLATION_M = .55
-CENTER_WEIGHT = 2.
+CENTER_WEIGHT = 3.
+WALL_MARGIN_M = .35
+CORRIDOR_WIDTH_HOLD_NS = 1_000_000_000
+
+
+class CorridorLine(NamedTuple):
+    first_x: float
+    last_x: float
+    mean_x: float
+    mean_y: float
+    slope: float
+    width: float | None
+    side: int
+
+    def lateral(self, x):
+        return self.mean_y + self.slope * (x - self.mean_x)
+
+
+class RecentCorridorWidth:
+    def __init__(self):
+        self.sample = None
+
+    def get(self, now_ns):
+        if self.sample is not None:
+            stamp, width = self.sample
+            if 0 <= now_ns - stamp <= CORRIDOR_WIDTH_HOLD_NS:
+                return width
+            self.sample = None
+        return None
+
+    def observe(self, now_ns, width):
+        previous = self.get(now_ns)
+        if previous is not None and abs(previous - width) <= .25:
+            width = .75 * previous + .25 * width
+        self.sample = now_ns, width
 
 
 class DepthProjection:
@@ -130,8 +166,7 @@ class GapPlanner:
         braking = (speed**2 - tail_speed**2) / (2 * self.deceleration)
         return .04 + speed * (COMMAND_AGE_NS / 1e9) + braking + tail_speed * self.speed_tau
 
-    def corridor_target(self, obstacles):
-        # Use the inner observed surface on either side of each forward slice.
+    def corridor_line(self, obstacles):
         slices = [[None, None] for _ in range(CENTER_SLICE_COUNT)]
         for x, y, z in obstacles:
             if x < CENTER_FIRST_X_M or not GROUND_TOLERANCE_M < z <= self.body_height + VERTICAL_PADDING_M:
@@ -144,32 +179,39 @@ class GapPlanner:
             if current is None or abs(y) < abs(current):
                 slices[index][side] = y
 
-        # Require both observed boundaries to continue through adjacent slices.
-        runs = []
-        current = []
-        minimum_width = 2 * (self.half_width + self.padding)
-        for index, (left, right) in enumerate(slices):
-            if left is None or right is None or left - right < minimum_width:
-                current = []
-                continue
-            x = CENTER_FIRST_X_M + (index + .5) * CENTER_SLICE_M
-            if not current or max(abs(left - current[-1][1]), abs(right - current[-1][2])) > 2 * CENTER_SLICE_M:
-                current = []
-                runs.append(current)
-            current.append((x, left, right))
-        corridor = max(runs, key=len, default=[])
-        if len(corridor) < 3:
-            return None
-        first_x = corridor[0][0]
-        preferred_x = max(.95, first_x - CENTER_MAX_EXTRAPOLATION_M + CENTER_SLICE_M / 2)
-        target_x = min(corridor[-1][0], preferred_x, 1.10)
-        if first_x - target_x > CENTER_MAX_EXTRAPOLATION_M:
-            return None
-        mean_x = sum(x for x, _, _ in corridor) / len(corridor)
-        mean_y = sum((left + right) / 2 for _, left, right in corridor) / len(corridor)
-        slope = sum((x - mean_x) * ((left + right) / 2 - mean_y) for x, left, right in corridor)
-        slope /= sum((x - mean_x)**2 for x, _, _ in corridor)
-        return target_x, mean_y + slope * (target_x - mean_x)
+        def longest_run(side):
+            longest, current = [], []
+            for index, (left, right) in enumerate(slices):
+                values = (left, right) if side == 0 else (left if side > 0 else right,)
+                if None in values or (side == 0 and left - right < 2 * (self.half_width + self.padding)):
+                    current = []
+                    continue
+                if current and any(abs(a - b) > 2 * CENTER_SLICE_M for a, b in zip(values, current[-1][1])):
+                    current = []
+                x = CENTER_FIRST_X_M + (index + .5) * CENTER_SLICE_M
+                current.append((x, values))
+                if len(current) > len(longest):
+                    longest = current
+            return longest
+
+        side = 0
+        samples = longest_run(side)
+        if len(samples) < 3:
+            left, right = longest_run(1), longest_run(-1)
+            if (len(left) >= 3) == (len(right) >= 3):
+                return None
+            side = 1 if len(left) >= 3 else -1
+            samples = left if side == 1 else right
+
+        line = [(x, sum(values) / len(values)) for x, values in samples]
+        mean_x = sum(x for x, _ in line) / len(line)
+        mean_y = sum(y for _, y in line) / len(line)
+        slope = sum((x - mean_x) * (y - mean_y) for x, y in line)
+        slope /= sum((x - mean_x)**2 for x, _ in line)
+        width = None
+        if side == 0:
+            width = median(left - right for _, (left, right) in samples) / math.hypot(1., slope)
+        return CorridorLine(line[0][0], line[-1][0], mean_x, mean_y, slope, width, side)
 
     def lateral_at(self, angle, forward, clearance):
         curvature = math.tan(angle) / self.wheelbase
@@ -181,7 +223,7 @@ class GapPlanner:
             return None
         return forward * offset / (1 + math.sqrt(1 - offset**2))
 
-    def plan(self, obstacles, visible, speed, steering):
+    def plan(self, obstacles, visible, speed, steering, *, recent_width=None):
         required = self.stopping_distance(speed)
         collision_points = [point for point in obstacles if point[0] <= LOOKAHEAD_M + .4]
         distances = [self.clearance(arc, collision_points, visible) for arc in self.arcs]
@@ -195,20 +237,39 @@ class GapPlanner:
         if not gaps:
             return steering, 0., {"state": "blocked", "clearance_m": max(distances), "gaps": []}
 
-        target = self.corridor_target(obstacles)
+        corridor = self.corridor_line(obstacles)
         center_errors = {}
-        if target is not None:
-            for gap in gaps:
-                for i in gap:
-                    y = self.lateral_at(self.angles[i], target[0], distances[i])
-                    if y is not None:
-                        center_errors[i] = abs(y - target[1])
+        target = mode = None
+        if corridor is not None:
+            preferred = max(.95, corridor.first_x - CENTER_MAX_EXTRAPOLATION_M + CENTER_SLICE_M / 2)
+            far_x = min(corridor.last_x, preferred, 1.10)
+            for x in (far_x, far_x - .15, far_x - .30):
+                if x < .55 or x < corridor.first_x - CENTER_MAX_EXTRAPOLATION_M:
+                    continue
+                y = corridor.lateral(x)
+                mode = "both_walls"
+                if corridor.side:
+                    mode = "recent_width" if recent_width is not None else "wall_margin"
+                    normal_offset = recent_width / 2 if recent_width is not None else self.half_width + WALL_MARGIN_M
+                    y -= corridor.side * normal_offset * math.hypot(1., corridor.slope)
+                for gap in gaps:
+                    for i in gap:
+                        lateral = self.lateral_at(self.angles[i], x, distances[i])
+                        if lateral is not None:
+                            error = (max(0., corridor.side * (lateral - y)) if mode == "wall_margin"
+                                     else abs(lateral - y))
+                            center_errors[i] = error
+                if center_errors:
+                    target = x, y
+                    break
 
         def score(i, gap):
             edge = min(i - gap[0], gap[-1] - i)
             progress = distances[i]
             if center_errors:
-                progress = min(progress, target[0] + .15) - CENTER_WEIGHT * center_errors[i]
+                if mode != "wall_margin":
+                    progress = min(progress, target[0] + .10)
+                progress -= CENTER_WEIGHT * center_errors[i]
             return (progress + .025 * edge - .12 * abs(self.angles[i] - steering) / self.steering_limit
                     - .06 * abs(self.angles[i]) / self.steering_limit)
 
@@ -225,7 +286,13 @@ class GapPlanner:
             else:
                 high = candidate
         report = {"state": "tracking_gap", "clearance_m": clearance,
-                  "gaps": [[self.angles[gap[0]], self.angles[gap[-1]]] for gap in gaps]}
+                  "gaps": [[self.angles[gap[0]], self.angles[gap[-1]]] for gap in gaps],
+                  "center_mode": mode if center_errors else "gap_only"}
+        if corridor is not None and corridor.width is not None:
+            report["observed_corridor_width_m"] = corridor.width
         if center_errors:
-            report.update(center_target_m=target, center_error_m=center_errors[index])
+            if mode == "wall_margin":
+                report["wall_margin_deficit_m"] = center_errors[index]
+            else:
+                report.update(center_target_m=target, center_error_m=center_errors[index])
         return angle, low, report

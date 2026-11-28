@@ -11,6 +11,11 @@ STEP_M = .035
 COMMAND_AGE_NS = 150_000_000
 NEAR_FIELD_M = .21
 VERTICAL_PADDING_M = .025
+CENTER_SLICE_M = .15
+CENTER_FIRST_X_M = .45
+CENTER_SLICE_COUNT = 10
+CENTER_MAX_EXTRAPOLATION_M = .55
+CENTER_WEIGHT = 2.
 
 
 class DepthProjection:
@@ -49,7 +54,7 @@ class DepthProjection:
                     continue
                 x = x0 + d * (row_x + col_x)
                 y = y0 + d * (row_y + col_y)
-                if x <= LOOKAHEAD_M + .4 and abs(y) <= LOOKAHEAD_M + .4:
+                if x < CENTER_FIRST_X_M + CENTER_SLICE_COUNT * CENTER_SLICE_M and abs(y) <= LOOKAHEAD_M + .4:
                     voxels.add(tuple(math.floor(value / VOXEL_M) for value in (x, y, z)))
         return [tuple((axis + .5) * VOXEL_M for axis in cell) for cell in voxels]
 
@@ -125,9 +130,61 @@ class GapPlanner:
         braking = (speed**2 - tail_speed**2) / (2 * self.deceleration)
         return .04 + speed * (COMMAND_AGE_NS / 1e9) + braking + tail_speed * self.speed_tau
 
+    def corridor_target(self, obstacles):
+        # Use the inner observed surface on either side of each forward slice.
+        slices = [[None, None] for _ in range(CENTER_SLICE_COUNT)]
+        for x, y, z in obstacles:
+            if x < CENTER_FIRST_X_M or not GROUND_TOLERANCE_M < z <= self.body_height + VERTICAL_PADDING_M:
+                continue
+            index = int((x - CENTER_FIRST_X_M) / CENTER_SLICE_M)
+            if index >= len(slices) or abs(y) <= self.half_width:
+                continue
+            side = int(y < 0.)
+            current = slices[index][side]
+            if current is None or abs(y) < abs(current):
+                slices[index][side] = y
+
+        # Require both observed boundaries to continue through adjacent slices.
+        runs = []
+        current = []
+        minimum_width = 2 * (self.half_width + self.padding)
+        for index, (left, right) in enumerate(slices):
+            if left is None or right is None or left - right < minimum_width:
+                current = []
+                continue
+            x = CENTER_FIRST_X_M + (index + .5) * CENTER_SLICE_M
+            if not current or max(abs(left - current[-1][1]), abs(right - current[-1][2])) > 2 * CENTER_SLICE_M:
+                current = []
+                runs.append(current)
+            current.append((x, left, right))
+        corridor = max(runs, key=len, default=[])
+        if len(corridor) < 3:
+            return None
+        first_x = corridor[0][0]
+        preferred_x = max(.95, first_x - CENTER_MAX_EXTRAPOLATION_M + CENTER_SLICE_M / 2)
+        target_x = min(corridor[-1][0], preferred_x, 1.10)
+        if first_x - target_x > CENTER_MAX_EXTRAPOLATION_M:
+            return None
+        mean_x = sum(x for x, _, _ in corridor) / len(corridor)
+        mean_y = sum((left + right) / 2 for _, left, right in corridor) / len(corridor)
+        slope = sum((x - mean_x) * ((left + right) / 2 - mean_y) for x, left, right in corridor)
+        slope /= sum((x - mean_x)**2 for x, _, _ in corridor)
+        return target_x, mean_y + slope * (target_x - mean_x)
+
+    def lateral_at(self, angle, forward, clearance):
+        curvature = math.tan(angle) / self.wheelbase
+        offset = curvature * forward
+        if abs(offset) >= 1.:
+            return None
+        travel = math.asin(offset) / curvature if curvature else forward
+        if travel > clearance:
+            return None
+        return forward * offset / (1 + math.sqrt(1 - offset**2))
+
     def plan(self, obstacles, visible, speed, steering):
         required = self.stopping_distance(speed)
-        distances = [self.clearance(arc, obstacles, visible) for arc in self.arcs]
+        collision_points = [point for point in obstacles if point[0] <= LOOKAHEAD_M + .4]
+        distances = [self.clearance(arc, collision_points, visible) for arc in self.arcs]
         gaps = []
         for i, distance in enumerate(distances):
             if distance <= required:
@@ -138,12 +195,25 @@ class GapPlanner:
         if not gaps:
             return steering, 0., {"state": "blocked", "clearance_m": max(distances), "gaps": []}
 
+        target = self.corridor_target(obstacles)
+        center_errors = {}
+        if target is not None:
+            for gap in gaps:
+                for i in gap:
+                    y = self.lateral_at(self.angles[i], target[0], distances[i])
+                    if y is not None:
+                        center_errors[i] = abs(y - target[1])
+
         def score(i, gap):
             edge = min(i - gap[0], gap[-1] - i)
-            return (distances[i] + .025 * edge - .12 * abs(self.angles[i] - steering) / self.steering_limit
+            progress = distances[i]
+            if center_errors:
+                progress = min(progress, target[0] + .15) - CENTER_WEIGHT * center_errors[i]
+            return (progress + .025 * edge - .12 * abs(self.angles[i] - steering) / self.steering_limit
                     - .06 * abs(self.angles[i]) / self.steering_limit)
 
-        index = max(((i, gap) for gap in gaps for i in gap), key=lambda item: score(*item))[0]
+        candidates = ((i, gap) for gap in gaps for i in gap if not center_errors or i in center_errors)
+        index = max(candidates, key=lambda item: score(*item))[0]
         clearance = distances[index]
         angle = self.angles[index]
         speed_limit = self.speed_limit * (1 - .35 * abs(angle) / self.steering_limit)
@@ -154,5 +224,8 @@ class GapPlanner:
                 low = candidate
             else:
                 high = candidate
-        return angle, low, {"state": "tracking_gap", "clearance_m": clearance,
-                            "gaps": [[self.angles[gap[0]], self.angles[gap[-1]]] for gap in gaps]}
+        report = {"state": "tracking_gap", "clearance_m": clearance,
+                  "gaps": [[self.angles[gap[0]], self.angles[gap[-1]]] for gap in gaps]}
+        if center_errors:
+            report.update(center_target_m=target, center_error_m=center_errors[index])
+        return angle, low, report
